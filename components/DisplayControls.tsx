@@ -140,7 +140,7 @@ export function DisplayControls({ variant }: { variant: "inline" | "panel" }) {
     >
       <div className={`display-control-group display-control-group-${variant}`} role="group" aria-label="Chat width">
         <span className="display-control-label" title="Chat width">
-          {variant === "inline" ? "W" : "Width"}
+          Width
         </span>
         <button
           type="button"

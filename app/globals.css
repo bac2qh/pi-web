@@ -632,6 +632,12 @@ span.linenumber {
   gap: 2px;
 }
 
+.display-controls-inline .display-control-group + .display-control-group {
+  margin-left: 5px;
+  padding-left: 7px;
+  border-left: 1px solid var(--border);
+}
+
 .display-control-group-panel {
   display: grid;
   grid-template-columns: minmax(78px, 1fr) 26px minmax(68px, auto) 26px;

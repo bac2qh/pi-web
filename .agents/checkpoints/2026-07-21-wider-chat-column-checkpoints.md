@@ -152,10 +152,19 @@ Implement the approved live display controls: browser-local Width (70% default, 
 - Worktree dev preview remains at `http://localhost:30142`. Local `main` still has no task source changes.
 - Commit `59f4698` (`feat: add responsive live display controls`) records the complete control UI, Width/Transcript/Menu integration, Mermaid handling, broad chrome scaling, and final scrutiny evidence.
 
+### 2026-07-22 — User preview accepted with one visual refinement
+
+- The user reported that the implemented behavior looks good.
+- Before final acceptance, they requested clearer grouping in the wide inline controls: change the compact `W` label to `Width` and add vertical separators so the groups read visually as `Width | T | UI`.
+- This is a presentation-only refinement inside the approved control design; bounds, persistence, narrow Display panel labels, and preference behavior remain unchanged.
+- Implemented the full `Width` inline label and 1px vertical borders between each adjacent inline group; panel labels remain `Width`, `Transcript`, and `Menu`.
+- Repeated the seven-scenario privacy-safe Playwright suite after a clean dev-server restart. The final pass had zero failures and zero browser error events; at a 1001px center pane with Menu 24, computed labels were exactly `Width|T|UI`, both separator widths were 1px, and the top bar did not overflow.
+- `node_modules/.bin/tsc --noEmit`, `npm run lint`, and `git diff --check` pass for the refinement.
+
 ## Current Phase
 
-Implementation and automated scrutiny are committed in the task worktree. User behavior confirmation remains required before merge or closeout.
+Core behavior passed user preview and the requested inline separator refinement is implemented and validated. The refinement/checkpoint commit and final user confirmation remain before merge or closeout.
 
 ## Immediate Next Step
 
-Hand the running preview to the user for normal-display testing of Width, Transcript, Menu, mobile/narrow handoff, and a Mermaid-heavy conversation. Record their result before any local-main merge or closeout.
+Commit the `Width | T | UI` refinement and checkpoint evidence, then return the refreshed preview for final confirmation. Do not merge to local `main` before that confirmation.
