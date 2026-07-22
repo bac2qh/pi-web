@@ -108,10 +108,18 @@ Implement the approved responsive chat-column default: 90% of the actual center 
 - Recorded Width 70% default/50–100 range/5-point step/reset, Transcript 16px/10–32 range, Menu 14px/10–24 range, independent browser-local persistence, direct font inputs, responsive inline/popover controls, proportional menu hierarchy, file-content exclusion, and Mermaid re-render semantics.
 - Expanded design, tests, privacy/debuggability, risks, and validation assertions before any amended source mutation.
 
+### 2026-07-21 — Preference core implemented
+
+- Added `lib/display-preferences.ts` with approved defaults, storage keys, ranges, step/clamp/parsing helpers, CSS-variable derivation, and proportional font-size helpers.
+- Added four focused Node tests covering malformed/default values, clamping/snapping, bounded stepping, and CSS-variable output without font-family mutation.
+- Added `DisplayPreferencesProvider`/hook with SSR-safe defaults, guarded browser-local reads/writes, immediate CSS-variable application, independent updates, and Width reset.
+- Wrapped `AppShell` in the provider at `app/page.tsx`.
+- Focused preference tests passed (4/4) and TypeScript passed before UI integration.
+
 ## Current Phase
 
-Approved amended implementation may resume in the existing task worktree.
+Preference core complete; top-bar controls and variable-driven width are next.
 
 ## Immediate Next Step
 
-Commit the approved scope amendment, then add pure preference helpers/tests, the context/provider and controls, CSS-variable width/font behavior, proportional chrome scaling, and Mermaid size integration in bounded milestones.
+Commit the preference-core milestone, then implement accessible responsive Display controls in AppShell and switch chat geometry from fixed 90% to the stored 70% default/variable.
