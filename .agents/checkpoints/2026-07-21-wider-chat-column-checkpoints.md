@@ -35,7 +35,7 @@ Implement the approved live display controls: browser-local Width (70% default, 
 | A-VC-005 menu proportional scaling | scrutiny passed; user-testing pending | Browser evidence verifies 14px default and proportional Explorer 11→18.86, sidebar control 12→20.57, tab 12→20.57, and modal heading 15→25.71 at Menu 24. Open source stayed 13px and Markdown preview stayed 14px. No document/top-bar overflow occurred. |
 | A-VC-006 accessible responsive controls | scrutiny passed; user-testing pending | Browser checks verify disabled min/max actions, keyboard stepping, visible 2px focus outline, names/groups, expanded/controlled popover region, wide inline controls, narrow/mobile panel access, hidden stale panel after crossing to 1001px, and no mobile overflow. |
 | A-VC-007 static/regression | passed | Final source passes 84 Node tests, `tsc --noEmit`, lint, and `git diff --check`. Source audit finds only four intentional fixed opened-file source/diff content sizes; no server API, shared config, or font-family setting was added. |
-| A-VC-008 amended checkpoint completeness | active | Scope reversal, decisions, backtracks, implementation commits, privacy-safe final evidence, and remaining user/closeout gates are recorded; milestone commit hash, user result, and closeout remain. |
+| A-VC-008 amended checkpoint completeness | active | Scope reversal, decisions, backtracks, implementation commits (including `59f4698`), privacy-safe final evidence, and remaining user/closeout gates are recorded; user result and closeout remain. |
 
 ## Execution Log
 
@@ -150,11 +150,12 @@ Implement the approved live display controls: browser-local Width (70% default, 
 - Final report: `/Users/xin/Documents/repos/pi-web/.agents/runtime/wider-chat-column/artifacts/display-preferences/validation.json`.
 - Privacy-safe mobile artifact: `/Users/xin/Documents/repos/pi-web/.agents/runtime/wider-chat-column/artifacts/display-preferences/mobile-display-popover.png`.
 - Worktree dev preview remains at `http://localhost:30142`. Local `main` still has no task source changes.
+- Commit `59f4698` (`feat: add responsive live display controls`) records the complete control UI, Width/Transcript/Menu integration, Mermaid handling, broad chrome scaling, and final scrutiny evidence.
 
 ## Current Phase
 
-Automated scrutiny is complete. The implementation/checkpoint milestone is ready to commit in the task worktree; user behavior confirmation remains required before merge or closeout.
+Implementation and automated scrutiny are committed in the task worktree. User behavior confirmation remains required before merge or closeout.
 
 ## Immediate Next Step
 
-Commit the coherent display-controls milestone, then hand the running preview to the user for normal-display testing of Width, Transcript, Menu, mobile/narrow handoff, and a Mermaid-heavy conversation. Do not merge to local `main` before that confirmation.
+Hand the running preview to the user for normal-display testing of Width, Transcript, Menu, mobile/narrow handoff, and a Mermaid-heavy conversation. Record their result before any local-main merge or closeout.
