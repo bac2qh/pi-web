@@ -1,5 +1,6 @@
 "use client";
 
+import { scaledMenuFontSize } from "@/lib/display-preferences";
 import { useEffect, useLayoutEffect, useState, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
 import type { SessionInfo } from "@/lib/types";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
@@ -308,7 +309,7 @@ function PiAgentTitle() {
       onClick={handleClick}
       style={{
         background: "none", border: "none", padding: 0, cursor: "default",
-        fontWeight: 700, fontSize: 15, letterSpacing: "-0.01em",
+        fontWeight: 700, fontSize: scaledMenuFontSize(15), letterSpacing: "-0.01em",
         color: showVersion ? "var(--accent)" : "var(--text)",
         fontFamily: "var(--font-mono)",
         minWidth: "6ch",
@@ -798,7 +799,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 paddingLeft: 10,
                 paddingRight: 12,
                 borderRadius: 7,
-                fontSize: 12,
+                fontSize: scaledMenuFontSize(12),
                 fontWeight: 500,
                 letterSpacing: "-0.01em",
                 flexShrink: 0,
@@ -879,7 +880,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               border: selectedCwd ? "1px solid var(--border)" : "1px solid rgba(37,99,235,0.4)",
               borderRadius: 7,
               cursor: "pointer",
-              fontSize: 12,
+              fontSize: scaledMenuFontSize(12),
               color: "var(--text)",
               textAlign: "left",
               transition: "border-color 0.15s, background 0.15s",
@@ -891,7 +892,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 style={{
                   flex: 1,
                   fontFamily: "var(--font-mono)",
-                  fontSize: 11,
+                  fontSize: scaledMenuFontSize(11),
                   color: "var(--text)",
                 }}
               />
@@ -903,7 +904,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                   textOverflow: "ellipsis",
                   whiteSpace: "nowrap",
                   fontFamily: "var(--font-mono)",
-                  fontSize: 11,
+                  fontSize: scaledMenuFontSize(11),
                   color: "var(--text-dim)",
                 }}
               >
@@ -942,7 +943,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     autoFocus
                     style={{
                       width: "100%",
-                      fontSize: 11,
+                      fontSize: scaledMenuFontSize(11),
                       fontFamily: "var(--font-mono)",
                       padding: "5px 8px",
                       border: "1px solid var(--border)",
@@ -979,7 +980,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                       color: project === selectedProject ? "var(--text)" : "var(--text-muted)",
                       cursor: "pointer",
                       textAlign: "left",
-                      fontSize: 11,
+                      fontSize: scaledMenuFontSize(11),
                       fontFamily: "var(--font-mono)",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
@@ -997,7 +998,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                   </button>
                 ))}
                 {visibleProjects.length === 0 && projectFilter.trim() && (
-                  <div style={{ padding: "8px 10px", fontSize: 11, color: "var(--text-dim)" }}>No matching projects</div>
+                  <div style={{ padding: "8px 10px", fontSize: scaledMenuFontSize(11), color: "var(--text-dim)" }}>No matching projects</div>
                 )}
               </div>
 
@@ -1017,7 +1018,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     color: "var(--text-muted)",
                     cursor: "pointer",
                     textAlign: "left",
-                    fontSize: 11,
+                    fontSize: scaledMenuFontSize(11),
                   }}
                 >
                   <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
@@ -1045,7 +1046,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     color: "var(--text-muted)",
                     cursor: "pointer",
                     textAlign: "left",
-                    fontSize: 11,
+                    fontSize: scaledMenuFontSize(11),
                   }}
                 >
                   <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" style={{ flexShrink: 0 }}>
@@ -1077,7 +1078,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     placeholder="/path/to/project"
                     style={{
                       width: "100%",
-                      fontSize: 11,
+                      fontSize: scaledMenuFontSize(11),
                       fontFamily: "var(--font-mono)",
                       padding: "5px 8px",
                       border: "1px solid var(--accent)",
@@ -1092,7 +1093,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     <div style={{
                       marginTop: 5,
                       color: "#dc2626",
-                      fontSize: 11,
+                      fontSize: scaledMenuFontSize(11),
                       lineHeight: 1.35,
                       overflowWrap: "anywhere",
                     }}>
@@ -1110,7 +1111,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                         border: "none",
                         borderRadius: 5,
                         color: "#fff",
-                        fontSize: 11,
+                        fontSize: scaledMenuFontSize(11),
                         fontWeight: 600,
                         cursor: customPathValidating || !customPathValue.trim() ? "not-allowed" : "pointer",
                         opacity: customPathValidating || !customPathValue.trim() ? 0.65 : 1,
@@ -1127,7 +1128,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                         border: "1px solid var(--border)",
                         borderRadius: 5,
                         color: "var(--text-muted)",
-                        fontSize: 11,
+                        fontSize: scaledMenuFontSize(11),
                         cursor: "pointer",
                       }}
                     >
@@ -1167,7 +1168,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                   border: "1px solid var(--border)",
                   borderRadius: 7,
                   cursor: "pointer",
-                  fontSize: 11,
+                  fontSize: scaledMenuFontSize(11),
                   lineHeight: 1.35,
                   color: "var(--text-muted)",
                   textAlign: "left",
@@ -1184,10 +1185,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                   style={{ flex: 1, fontFamily: "var(--font-mono)", color: "var(--text)" }}
                 />
                 {currentWt?.isMain && (
-                  <span style={{ flexShrink: 0, color: "var(--text-dim)", fontSize: 10 }}>main</span>
+                  <span style={{ flexShrink: 0, color: "var(--text-dim)", fontSize: scaledMenuFontSize(10) }}>main</span>
                 )}
                 {worktreeState.worktrees.length > 1 && (
-                  <span style={{ flexShrink: 0, color: "var(--text-dim)", fontSize: 10 }}>
+                  <span style={{ flexShrink: 0, color: "var(--text-dim)", fontSize: scaledMenuFontSize(10) }}>
                     {worktreeState.worktrees.length}
                   </span>
                 )}
@@ -1217,19 +1218,19 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                       if (wtConfirmRemove === wt.path) {
                         return (
                           <div key={wt.path} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 10px", borderBottom: "1px solid var(--border)", background: "rgba(239,68,68,0.06)" }}>
-                            <span style={{ flex: 1, fontSize: 11, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            <span style={{ flex: 1, fontSize: scaledMenuFontSize(11), color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                               Uncommitted changes. Force remove checkout?
                             </span>
                             <button
                               onClick={() => void handleRemoveWorktree(wt.path, true)}
                               disabled={wtBusy}
-                              style={{ padding: "3px 9px", background: "#ef4444", border: "none", borderRadius: 5, color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}
+                              style={{ padding: "3px 9px", background: "#ef4444", border: "none", borderRadius: 5, color: "#fff", fontSize: scaledMenuFontSize(11), fontWeight: 600, cursor: "pointer", flexShrink: 0 }}
                             >
                               Force
                             </button>
                             <button
                               onClick={() => setWtConfirmRemove(null)}
-                              style={{ padding: "3px 9px", background: "var(--bg-hover)", border: "1px solid var(--border)", borderRadius: 5, color: "var(--text-muted)", fontSize: 11, cursor: "pointer", flexShrink: 0 }}
+                              style={{ padding: "3px 9px", background: "var(--bg-hover)", border: "1px solid var(--border)", borderRadius: 5, color: "var(--text-muted)", fontSize: scaledMenuFontSize(11), cursor: "pointer", flexShrink: 0 }}
                             >
                               Cancel
                             </button>
@@ -1261,7 +1262,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                               color: isCurrent ? "var(--text)" : "var(--text-muted)",
                               cursor: "pointer",
                               textAlign: "left",
-                              fontSize: 11,
+                              fontSize: scaledMenuFontSize(11),
                               fontFamily: "var(--font-mono)",
                             }}
                           >
@@ -1273,7 +1274,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                               <span style={{ width: 10, flexShrink: 0 }} />
                             )}
                             <PathLabel text={wt.branch ?? displayCwd(wt.path, homeDir)} style={{ flex: 1 }} />
-                            {wt.isMain && <span style={{ flexShrink: 0, color: "var(--text-dim)", fontSize: 10 }}>main</span>}
+                            {wt.isMain && <span style={{ flexShrink: 0, color: "var(--text-dim)", fontSize: scaledMenuFontSize(10) }}>main</span>}
                           </button>
                           {!wt.isMain && (
                             <button
@@ -1324,7 +1325,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                         color: "var(--text-muted)",
                         cursor: "pointer",
                         textAlign: "left",
-                        fontSize: 11,
+                        fontSize: scaledMenuFontSize(11),
                       }}
                     >
                       <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" style={{ flexShrink: 0 }}>
@@ -1356,7 +1357,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                         placeholder="branch name"
                         style={{
                           width: "100%",
-                          fontSize: 11,
+                          fontSize: scaledMenuFontSize(11),
                           fontFamily: "var(--font-mono)",
                           padding: "5px 8px",
                           border: "1px solid var(--accent)",
@@ -1378,7 +1379,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                             border: "none",
                             borderRadius: 5,
                             color: "#fff",
-                            fontSize: 11,
+                            fontSize: scaledMenuFontSize(11),
                             fontWeight: 600,
                             cursor: wtBusy || !wtNewBranch.trim() ? "not-allowed" : "pointer",
                             opacity: wtBusy || !wtNewBranch.trim() ? 0.65 : 1,
@@ -1395,7 +1396,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                             border: "1px solid var(--border)",
                             borderRadius: 5,
                             color: "var(--text-muted)",
-                            fontSize: 11,
+                            fontSize: scaledMenuFontSize(11),
                             cursor: "pointer",
                           }}
                         >
@@ -1408,7 +1409,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     <div style={{
                       padding: "5px 10px 8px",
                       color: "#dc2626",
-                      fontSize: 11,
+                      fontSize: scaledMenuFontSize(11),
                       lineHeight: 1.35,
                       overflowWrap: "anywhere",
                     }}>
@@ -1438,7 +1439,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               borderRadius: 7,
               background: "var(--bg-hover)",
               color: "var(--text-dim)",
-              fontSize: 11,
+              fontSize: scaledMenuFontSize(11),
               lineHeight: 1.35,
               whiteSpace: "nowrap",
               textAlign: "left",
@@ -1460,17 +1461,17 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       {/* Session list */}
       <div style={{ flex: explorerOpen && (selectedCwdProp || selectedCwd) ? "1 1 0" : "1 1 auto", overflowY: "auto", padding: "0", minHeight: 80 }}>
         {loading && (
-          <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
+          <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: scaledMenuFontSize(12) }}>
             Loading...
           </div>
         )}
         {error && (
-          <div style={{ padding: "12px 14px", color: "#f87171", fontSize: 12 }}>
+          <div style={{ padding: "12px 14px", color: "#f87171", fontSize: scaledMenuFontSize(12) }}>
             {error}
           </div>
         )}
         {!loading && !error && filteredSessions.length === 0 && (
-          <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
+          <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: scaledMenuFontSize(12) }}>
             No sessions found
           </div>
         )}
@@ -1517,7 +1518,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 border: "none",
                 color: "var(--text-muted)",
                 cursor: "pointer",
-                fontSize: 11,
+                fontSize: scaledMenuFontSize(11),
                 fontWeight: 600,
                 letterSpacing: "0.05em",
                 textTransform: "uppercase",
@@ -1857,7 +1858,7 @@ function SessionItem({
       {confirmDelete ? (
         /* ── Delete confirmation: same height, two flat buttons ── */
         <>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <div style={{ flex: 1, minWidth: 0, fontSize: scaledMenuFontSize(12), color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             Delete <span style={{ fontWeight: 600 }}>&ldquo;{title.slice(0, 22)}{title.length > 22 ? "…" : ""}&rdquo;</span>?
           </div>
           <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
@@ -1868,7 +1869,7 @@ function SessionItem({
                 height: 30, padding: "0 11px",
                 background: "#ef4444", border: "none",
                 borderRadius: 6, color: "#fff",
-                cursor: "pointer", fontSize: 12, fontWeight: 600,
+                cursor: "pointer", fontSize: scaledMenuFontSize(12), fontWeight: 600,
                 whiteSpace: "nowrap",
               }}
             >
@@ -1887,7 +1888,7 @@ function SessionItem({
                 height: 30, padding: "0 11px",
                 background: "var(--bg)", border: "1px solid var(--border)",
                 borderRadius: 6, color: "var(--text-muted)",
-                cursor: "pointer", fontSize: 12, fontWeight: 500,
+                cursor: "pointer", fontSize: scaledMenuFontSize(12), fontWeight: 500,
                 whiteSpace: "nowrap",
               }}
             >
@@ -1909,7 +1910,7 @@ function SessionItem({
           autoFocus
           style={{
             flex: 1,
-            fontSize: 12,
+            fontSize: scaledMenuFontSize(12),
             padding: "5px 8px",
             border: "1px solid var(--accent)",
             borderRadius: 5,
@@ -1938,7 +1939,7 @@ function SessionItem({
                 alignItems: "center",
                 gap: 5,
                 minWidth: 0,
-                fontSize: 12,
+                fontSize: scaledMenuFontSize(12),
                 fontWeight: isSelected ? 500 : 400,
                 lineHeight: 1.4,
                 color: "var(--text)",
@@ -1950,7 +1951,7 @@ function SessionItem({
                 {title}
               </span>
             </div>
-            <div style={{ marginTop: 2, display: "flex", gap: 8, color: "var(--text-dim)", fontSize: 11, minWidth: 0 }}>
+            <div style={{ marginTop: 2, display: "flex", gap: 8, color: "var(--text-dim)", fontSize: scaledMenuFontSize(11), minWidth: 0 }}>
               <span title={session.modified}>{formatRelativeTime(session.modified)}</span>
               <span>{session.messageCount} msgs</span>
               {session.worktreeBranch && (

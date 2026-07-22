@@ -4,10 +4,10 @@ import { DisplayPreferencesProvider } from "@/hooks/useDisplayPreferences";
 
 export default function Home() {
   return (
-    <DisplayPreferencesProvider>
-      <Suspense>
+    <Suspense>
+      <DisplayPreferencesProvider>
         <AppShell />
-      </Suspense>
-    </DisplayPreferencesProvider>
+      </DisplayPreferencesProvider>
+    </Suspense>
   );
 }

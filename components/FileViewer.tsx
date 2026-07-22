@@ -1,5 +1,6 @@
 "use client";
 
+import { scaledMenuFontSize } from "@/lib/display-preferences";
 import { useEffect, useState, useRef, useCallback, type MouseEvent } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vs } from "react-syntax-highlighter/dist/cjs/styles/prism";
@@ -163,7 +164,7 @@ function DiffView({ oldContent, newContent }: { oldContent: string; newContent: 
   const hasChanges = diff.some((l) => l.type !== "unchanged");
   if (!hasChanges) {
     return (
-      <div style={{ padding: "12px 16px", fontSize: 12, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
+      <div style={{ padding: "12px 16px", fontSize: scaledMenuFontSize(12), color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
         No changes
       </div>
     );
@@ -365,7 +366,7 @@ function ImageViewer({ filePath, cwd, sourceSessionId }: Props) {
           gap: 12,
           padding: "4px 16px",
           borderBottom: "1px solid var(--border)",
-          fontSize: 11,
+          fontSize: scaledMenuFontSize(11),
           color: "var(--text-dim)",
           background: "var(--bg)",
           flexShrink: 0,
@@ -411,7 +412,7 @@ function ImageViewer({ filePath, cwd, sourceSessionId }: Props) {
         }}
       >
         {error ? (
-          <div style={{ color: "#f87171", fontSize: 13 }}>{error}</div>
+          <div style={{ color: "#f87171", fontSize: scaledMenuFontSize(13) }}>{error}</div>
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -498,7 +499,7 @@ function AudioViewer({ filePath, cwd, sourceSessionId }: Props) {
           gap: 12,
           padding: "4px 16px",
           borderBottom: "1px solid var(--border)",
-          fontSize: 11,
+          fontSize: scaledMenuFontSize(11),
           color: "var(--text-dim)",
           background: "var(--bg)",
           flexShrink: 0,
@@ -540,7 +541,7 @@ function AudioViewer({ filePath, cwd, sourceSessionId }: Props) {
       >
         <div style={{ width: "min(680px, 100%)" }}>
           {error && (
-            <div style={{ color: "#f87171", fontSize: 13, marginBottom: 12, textAlign: "center" }}>
+            <div style={{ color: "#f87171", fontSize: scaledMenuFontSize(13), marginBottom: 12, textAlign: "center" }}>
               {error}
             </div>
           )}
@@ -632,7 +633,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
           gap: 12,
           padding: "4px 16px",
           borderBottom: "1px solid var(--border)",
-          fontSize: 11,
+          fontSize: scaledMenuFontSize(11),
           color: "var(--text-dim)",
           background: "var(--bg)",
           flexShrink: 0,
@@ -663,7 +664,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
       </div>
       <div style={{ flex: 1, minHeight: 0, background: "var(--bg-panel)" }}>
         {error ? (
-          <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, color: "#f87171", fontSize: 13, textAlign: "center" }}>
+          <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, color: "#f87171", fontSize: scaledMenuFontSize(13), textAlign: "center" }}>
             {error}
           </div>
         ) : (
@@ -780,7 +781,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
 
   if (loading) {
     return (
-      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 13 }}>
+      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: scaledMenuFontSize(13) }}>
         Loading...
       </div>
     );
@@ -788,7 +789,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
 
   if (error) {
     return (
-      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#f87171", fontSize: 13 }}>
+      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#f87171", fontSize: scaledMenuFontSize(13) }}>
         {error}
       </div>
     );
@@ -812,7 +813,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
           gap: 12,
           padding: "4px 16px",
           borderBottom: "1px solid var(--border)",
-          fontSize: 11,
+          fontSize: scaledMenuFontSize(11),
           color: "var(--text-dim)",
           background: "var(--bg)",
           flexShrink: 0,
@@ -849,7 +850,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
             <button
               onClick={() => setViewMode("source")}
               style={{
-                padding: "2px 8px", fontSize: 11, border: "none", cursor: "pointer",
+                padding: "2px 8px", fontSize: scaledMenuFontSize(11), border: "none", cursor: "pointer",
                 background: viewMode === "source" ? "var(--bg-selected)" : "var(--bg-hover)",
                 color: viewMode === "source" ? "var(--text)" : "var(--text-muted)",
                 fontWeight: viewMode === "source" ? 600 : 400,
@@ -860,7 +861,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
             <button
               onClick={() => setViewMode("diff")}
               style={{
-                padding: "2px 8px", fontSize: 11, border: "none", borderLeft: "1px solid var(--border)", cursor: "pointer",
+                padding: "2px 8px", fontSize: scaledMenuFontSize(11), border: "none", borderLeft: "1px solid var(--border)", cursor: "pointer",
                 background: viewMode === "diff" ? "var(--bg-selected)" : "var(--bg-hover)",
                 color: viewMode === "diff" ? "var(--text)" : "var(--text-muted)",
                 fontWeight: viewMode === "diff" ? 600 : 400,
@@ -877,7 +878,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
             onClick={() => setWrapLines((v) => !v)}
             title={wrapLines ? "Disable word wrap" : "Enable word wrap"}
             style={{
-              padding: "2px 8px", fontSize: 11, cursor: "pointer",
+              padding: "2px 8px", fontSize: scaledMenuFontSize(11), cursor: "pointer",
               background: wrapLines ? "var(--bg-selected)" : "var(--bg-hover)",
               color: wrapLines ? "var(--text)" : "var(--text-muted)",
               border: "1px solid var(--border)", borderRadius: 5,
@@ -894,7 +895,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
             <button
               onClick={() => setPreviewMode(false)}
               style={{
-                padding: "2px 8px", fontSize: 11, border: "none", cursor: "pointer",
+                padding: "2px 8px", fontSize: scaledMenuFontSize(11), border: "none", cursor: "pointer",
                 background: !previewMode ? "var(--bg-selected)" : "var(--bg-hover)",
                 color: !previewMode ? "var(--text)" : "var(--text-muted)",
                 fontWeight: !previewMode ? 600 : 400,
@@ -905,7 +906,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
             <button
               onClick={() => setPreviewMode(true)}
               style={{
-                padding: "2px 8px", fontSize: 11, border: "none", borderLeft: "1px solid var(--border)", cursor: "pointer",
+                padding: "2px 8px", fontSize: scaledMenuFontSize(11), border: "none", borderLeft: "1px solid var(--border)", cursor: "pointer",
                 background: previewMode ? "var(--bg-selected)" : "var(--bg-hover)",
                 color: previewMode ? "var(--text)" : "var(--text-muted)",
                 fontWeight: previewMode ? 600 : 400,
@@ -922,7 +923,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
             <button
               onClick={() => setPreviewMode(true)}
               style={{
-                padding: "2px 8px", fontSize: 11, border: "none", cursor: "pointer",
+                padding: "2px 8px", fontSize: scaledMenuFontSize(11), border: "none", cursor: "pointer",
                 background: previewMode ? "var(--bg-selected)" : "var(--bg-hover)",
                 color: previewMode ? "var(--text)" : "var(--text-muted)",
                 fontWeight: previewMode ? 600 : 400,
@@ -933,7 +934,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
             <button
               onClick={() => setPreviewMode(false)}
               style={{
-                padding: "2px 8px", fontSize: 11, border: "none", borderLeft: "1px solid var(--border)", cursor: "pointer",
+                padding: "2px 8px", fontSize: scaledMenuFontSize(11), border: "none", borderLeft: "1px solid var(--border)", cursor: "pointer",
                 background: !previewMode ? "var(--bg-selected)" : "var(--bg-hover)",
                 color: !previewMode ? "var(--text)" : "var(--text-muted)",
                 fontWeight: !previewMode ? 600 : 400,

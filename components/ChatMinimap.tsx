@@ -1,5 +1,6 @@
 "use client";
 
+import { scaledMenuFontSize } from "@/lib/display-preferences";
 import { useEffect, useRef, useState, useCallback, useMemo, RefObject } from "react";
 import type { AgentMessage, AssistantMessage, TextContent } from "@/lib/types";
 
@@ -380,7 +381,7 @@ export function ChatMinimap({ messages, streamingMessage, scrollContainer, messa
           >
             <div
               style={{
-                fontSize: 11,
+                fontSize: scaledMenuFontSize(11),
                 color: isNearest ? "var(--text)" : "var(--text-muted)",
                 lineHeight: 1.4,
                 whiteSpace: "nowrap",
