@@ -173,10 +173,17 @@ Implement the approved live display controls: browser-local Width (70% default, 
 - Source-plan reconciliation proof: the current untracked main source plan hashes to `15175d96…`, exactly matching the immutable plan blob first committed in `eb80c3d`; the opening checkpoint records that this approved source was copied before source mutation. The amended task plan hashes to `5428a03d…`. This proves the source copy remained unchanged and can be removed during guarded main closeout while the amended plan is preserved in the archive. No unrelated `.agents/plans` file will be changed.
 - Documentation/current-state wiki and durable memory remain not applicable: the repository has no maintained wiki or memory index, and the execution plan/checkpoint contain the feature design and evidence.
 
+### 2026-07-22 — Local merge, archive, and source-plan reconciliation completed
+
+- Archived the approved amended plan at `.agents/plans/archive/2026-07-21-wider-chat-column.md`; this repository does not use an archive index or paired HTML report, so neither required an update.
+- Under the recorded no-race exception, reverified main at `c23c2e5`, task head at `7e62c62`, a clean task checkout, exact source-plan hash `15175d96…`, and main-ancestor fast-forward eligibility immediately before mutation.
+- Temporarily moved only the proven unchanged source plan, fast-forwarded local `main` from `c23c2e5` to `7e62c62`, verified the archived amended plan, then removed the temporary source copy. No merge commit was created and no push occurred.
+- The unrelated untracked clone-session, pinned-sessions, voice-input, and evaluate-beautiful-mermaid plans remain untouched. The unrelated `tmp` branch/worktree and the user's port 30141 server remain untouched.
+
 ## Current Phase
 
-Closeout is authorized. Validation, acceptance, short-lived cleanup evidence, main fast-forward eligibility, no-race exception, and exact source-plan reconciliation proof are recorded.
+Implementation, validation, acceptance, archive, source-plan reconciliation, and local fast-forward merge are complete. Standard worktree/branch/runtime cleanup and final main-state verification remain.
 
 ## Immediate Next Step
 
-Add the plan closeout note, archive the plan in the task branch, and commit closeout preparation. Then fast-forward local `main`, reconcile only the proven unchanged source-plan copy, finalize archive/checkpoint evidence, remove the task worktree and branch, and verify the resulting main checkout without touching unrelated drafts or the `tmp` worktree.
+Commit this merge evidence on local `main`, remove the clean short-lived task worktree, delete `task/wider-chat-column`, remove only this task's runtime artifacts, then record and commit final cleanup evidence.
