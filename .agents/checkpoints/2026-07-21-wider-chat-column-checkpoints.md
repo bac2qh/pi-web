@@ -61,6 +61,11 @@ Implement the approved responsive chat-column default: 90% of the actual center 
   - `/Users/xin/Documents/repos/pi-web/.agents/runtime/wider-chat-column/artifacts/mobile-390.png`
 - `npm ci --include=dev` reported nine dependency-audit findings from the existing lockfile (1 low, 4 moderate, 4 high). No dependency changes were attempted because they are unrelated to this layout task.
 
+### 2026-07-21 — Implementation milestone committed
+
+- Commit `eb80c3d` (`feat: widen the chat column responsively`) contains the approved plan, active checkpoint, shared CSS rule, and aligned component changes.
+- The privacy-safe worktree dev server remains available at `http://localhost:30142` for user testing; PID/log state lives under `/Users/xin/Documents/repos/pi-web/.agents/runtime/wider-chat-column/`.
+
 ## Current Phase
 
 Implementation and automated scrutiny are complete. P0/P1 user-testing on the user's normal 4K/MacBook browser remains pending before closeout.
