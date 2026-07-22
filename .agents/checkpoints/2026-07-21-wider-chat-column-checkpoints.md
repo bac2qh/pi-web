@@ -160,11 +160,12 @@ Implement the approved live display controls: browser-local Width (70% default, 
 - Implemented the full `Width` inline label and 1px vertical borders between each adjacent inline group; panel labels remain `Width`, `Transcript`, and `Menu`.
 - Repeated the seven-scenario privacy-safe Playwright suite after a clean dev-server restart. The final pass had zero failures and zero browser error events; at a 1001px center pane with Menu 24, computed labels were exactly `Width|T|UI`, both separator widths were 1px, and the top bar did not overflow.
 - `node_modules/.bin/tsc --noEmit`, `npm run lint`, and `git diff --check` pass for the refinement.
+- Commit `51bc2fc` (`style: separate inline display controls`) records the `Width | T | UI` refinement and its validation evidence.
 
 ## Current Phase
 
-Core behavior passed user preview and the requested inline separator refinement is implemented and validated. The refinement/checkpoint commit and final user confirmation remain before merge or closeout.
+Core behavior passed user preview, and the requested inline separator refinement is committed and validated. Final user confirmation remains before merge or closeout.
 
 ## Immediate Next Step
 
-Commit the `Width | T | UI` refinement and checkpoint evidence, then return the refreshed preview for final confirmation. Do not merge to local `main` before that confirmation.
+Return the refreshed preview for final confirmation. Do not merge to local `main` before that confirmation.
