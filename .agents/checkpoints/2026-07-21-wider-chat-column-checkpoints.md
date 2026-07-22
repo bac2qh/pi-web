@@ -15,14 +15,27 @@ Implement the approved responsive chat-column default: 90% of the actual center 
 
 | ID | State | Evidence / blocker |
 |---|---|---|
-| VC-001 wide desktop geometry | scrutiny passed; user-testing pending | Playwright Chromium measured exact 90% widths at center panes of 1180, 1440, 1660, 1920, and 1113.61px; screenshots saved under the runtime artifact path. User confirmation on the normal 4K/MacBook browser remains required. |
+| VC-001 wide desktop geometry | passed | Playwright Chromium measured exact 90% widths at center panes of 1180, 1440, 1660, 1920, and 1113.61px; the user confirmed on 2026-07-21 that the layout works on their normal display. |
 | VC-002 narrow threshold | passed | At 1001px the measured columns were 900.89px; at 1000px they filled the 932px safe parent. A desktop center pane narrowed to 853.61px by both panels filled its 785.61px safe parent. |
 | VC-003 aligned surfaces | passed | Existing-session geometry reported four aligned 1296px wrappers at a 1440px center pane; new-session header and composer also matched. Source search confirms one shared class covers notices, extension wrappers, queue/retry/attachments, and composer. |
 | VC-004 panel interaction | passed | Automated sidebar/file-panel open/close scenarios crossed wide/full modes with no clipping, browser errors, or horizontal overflow. |
 | VC-005 mobile | scrutiny passed; user-testing pending | At 390×844, both new-session columns measured 358px inside symmetric 16px padding, minimap remained hidden, and document overflow was false. User confirmation remains required. |
 | VC-006 static/code quality | passed | 77 Node tests passed; `tsc --noEmit`, lint, and `git diff --check` passed; in-scope 820px search count is zero and unrelated Models modal width remains. |
 | VC-007 no docs/config/telemetry expansion | passed | Diff contains only CSS/component layout plus plan/checkpoint state; no setting, persistence, docs, or telemetry behavior was introduced. |
-| VC-008 checkpoint completeness | active | Implementation and scrutiny evidence are recorded; user-testing and closeout evidence remain. |
+| VC-008 checkpoint completeness | active | Implementation and scrutiny evidence are recorded; amended implementation, user-testing, and closeout evidence remain. |
+
+### Amendment Validation Tracking
+
+| ID | State | Evidence / blocker |
+|---|---|---|
+| A-VC-001 defaults/live persistence | pending | Requires helper tests and browser reload evidence. |
+| A-VC-002 adjustable responsive width | pending | Requires live/reset/bounds/threshold geometry. |
+| A-VC-003 transcript typography | pending | Requires message/composer/code computed styles and typed-input checks. |
+| A-VC-004 Mermaid scaling | pending | Requires config/render-key tests and safe visual evidence or user validation. |
+| A-VC-005 menu proportional scaling | pending | Requires representative chrome ratios and unchanged file-content evidence. |
+| A-VC-006 accessible responsive controls | pending | Requires wide/narrow/mobile pointer and keyboard checks. |
+| A-VC-007 static/regression | pending | Requires new helper tests plus full checks. |
+| A-VC-008 amended checkpoint completeness | active | Scope reversal and user decisions are recorded; implementation/closeout remain. |
 
 ## Execution Log
 
@@ -66,10 +79,39 @@ Implement the approved responsive chat-column default: 90% of the actual center 
 - Commit `eb80c3d` (`feat: widen the chat column responsively`) contains the approved plan, active checkpoint, shared CSS rule, and aligned component changes.
 - The privacy-safe worktree dev server remains available at `http://localhost:30142` for user testing; PID/log state lives under `/Users/xin/Documents/repos/pi-web/.agents/runtime/wider-chat-column/`.
 
+### 2026-07-21 — Wide-layout user testing passed; scope reopened
+
+- The user confirmed the implemented responsive width works on their normal display and prefers it to the former 820px cap, satisfying the wide-layout user-testing gate.
+- Before closeout, the user requested a new top-bar percentage minus/plus control. This contradicts approved decision D-002 (one fixed default, no preference) and materially adds preference scope, persistence, top-bar/mobile behavior, and validation work.
+- User clarification: minus/plus changes must resize the chat immediately on the fly, without reload or session restart.
+- User decision: persist the selected percentage browser-locally across reloads.
+- User decision: change the default wide-pane width from 90% to 70%.
+- User decision: at 1000 CSS pixels of actual center-pane width or below, continue using full safe width regardless of the saved percentage.
+- User decision: adjust in 5-percentage-point steps, clamped from 50% through 100% inclusive.
+- User decision: clicking the displayed width percentage resets it to the 70% default.
+- User requested font-size controls adjacent to the width control. Font family/type must not change.
+- User split font sizing into two independent domains:
+  - **Transcript font:** default 16px; controls conversation text and composer text, and code must use the same selected size while retaining its monospace family.
+  - **Menu font:** default 14px; controls all application chrome outside the transcript—sidebar, Explorer, session rows, top bar, tabs, dropdowns, and modal controls—while opened file/source/document contents retain their existing sizing.
+- Each font control uses minus/plus steps of exactly 1px and a directly editable numeric value so sizes such as 17px or 22px can be typed.
+- User decision: persist transcript and menu font sizes independently in browser-local storage.
+- User decision: transcript font accepts 10–32px; menu font accepts 10–24px. Typed valid values apply immediately, out-of-range values clamp, and empty/invalid drafts revert on blur or Enter.
+- User decision: when the actual center pane is wider than 1000px, show compact inline Width, Transcript, and Menu controls in the top bar. At 1000px or below (including mobile), collapse them into one Display button/popover; the saved wide-pane percentage remains editable but does not override full-width narrow mode.
+- User decision: Menu size scales existing UI typography proportionally from the 14px baseline so headings, normal labels, and metadata retain their current hierarchy; it does not flatten every UI string to one exact pixel size.
+- User decision: Mermaid follows the Transcript size by re-rendering with the selected Mermaid font size, allowing labels, node geometry, and spacing to grow naturally. Diagrams are not stretched merely to fill column width; the existing horizontal scrolling remains available for wide graphs.
+- All width/font-domain, default, persistence, validation, responsive-placement, menu-scaling, and Mermaid decisions are resolved; source implementation remains paused until the approved plan amendment is complete. No adjustable-width code will be added until the scope amendment is decision-complete and recorded in the approved plan/checkpoint.
+
+### 2026-07-21 — Display-control scope amendment approved and recorded
+
+- Updated the same approved plan with a decision-complete `Approved Scope Amendment — Live Display Controls` section.
+- The amendment explicitly supersedes the fixed 90%/no-preference decisions while retaining actual-center-pane measurement, full safe width at/below 1000px, side-panel behavior, and no fixed upper cap.
+- Recorded Width 70% default/50–100 range/5-point step/reset, Transcript 16px/10–32 range, Menu 14px/10–24 range, independent browser-local persistence, direct font inputs, responsive inline/popover controls, proportional menu hierarchy, file-content exclusion, and Mermaid re-render semantics.
+- Expanded design, tests, privacy/debuggability, risks, and validation assertions before any amended source mutation.
+
 ## Current Phase
 
-Implementation and automated scrutiny are complete. P0/P1 user-testing on the user's normal 4K/MacBook browser remains pending before closeout.
+Approved amended implementation may resume in the existing task worktree.
 
 ## Immediate Next Step
 
-Commit the implementation milestone, ask the user to inspect `http://localhost:30142`, and after confirmation complete checkpoint evidence, merge to local `main`, archive the plan, and clean up the task worktree/branch.
+Commit the approved scope amendment, then add pure preference helpers/tests, the context/provider and controls, CSS-variable width/font behavior, proportional chrome scaling, and Mermaid size integration in bounded milestones.
