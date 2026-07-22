@@ -544,6 +544,30 @@ span.linenumber {
   to   { stroke-dashoffset: 0;  opacity: 1; }
 }
 
+/* Size chat content from the actual center pane, after side panels take space. */
+.chat-width-container {
+  container-name: chat-width;
+  container-type: inline-size;
+}
+
+.chat-column {
+  width: 90%;
+  max-width: none;
+  margin-inline: auto;
+}
+
+@supports (width: 1cqi) {
+  .chat-column {
+    width: min(100%, 90cqi);
+  }
+}
+
+@container chat-width (max-width: 1000px) {
+  .chat-column {
+    width: 100%;
+  }
+}
+
 /* Desktop sidebar: animate width */
 @media (min-width: 641px) {
   .sidebar-overlay-backdrop {
@@ -596,6 +620,11 @@ span.linenumber {
 
 /* Mobile sidebar: slide in/out as overlay */
 @media (max-width: 640px) {
+  /* Fallback for browsers without container queries; safe padding remains on
+     the surrounding message/composer wrappers. */
+  .chat-column {
+    width: 100%;
+  }
   .chat-stats-center {
     display: none !important;
   }
