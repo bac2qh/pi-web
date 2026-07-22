@@ -2,7 +2,7 @@
 
 Status: active
 Date: 2026-07-21
-Plan: `.agents/plans/2026-07-21-wider-chat-column.md`
+Plan: `.agents/plans/archive/2026-07-21-wider-chat-column.md`
 Worktree: `/Users/xin/Documents/repos/pi-web/.agents/worktrees/wider-chat-column`
 Branch: `task/wider-chat-column`
 Base: `c23c2e50797c30026239929e99d590a0affc66e0` (`main` at implementation open)
@@ -19,7 +19,7 @@ Implement the approved live display controls: browser-local Width (70% default, 
 | VC-002 narrow threshold | passed | At 1001px the measured columns were 900.89px; at 1000px they filled the 932px safe parent. A desktop center pane narrowed to 853.61px by both panels filled its 785.61px safe parent. |
 | VC-003 aligned surfaces | passed | Existing-session geometry reported four aligned 1296px wrappers at a 1440px center pane; new-session header and composer also matched. Source search confirms one shared class covers notices, extension wrappers, queue/retry/attachments, and composer. |
 | VC-004 panel interaction | passed | Automated sidebar/file-panel open/close scenarios crossed wide/full modes with no clipping, browser errors, or horizontal overflow. |
-| VC-005 mobile | scrutiny passed; user-testing pending | At 390×844, both new-session columns measured 358px inside symmetric 16px padding, minimap remained hidden, and document overflow was false. User confirmation remains required. |
+| VC-005 mobile | passed | At 390×844, both new-session columns measured 358px inside symmetric 16px padding, minimap remained hidden, and document overflow was false. The user accepted the completed display behavior and explicitly requested closeout on 2026-07-22. |
 | VC-006 static/code quality | passed | 77 Node tests passed; `tsc --noEmit`, lint, and `git diff --check` passed; in-scope 820px search count is zero and unrelated Models modal width remains. |
 | VC-007 no docs/config/telemetry expansion | passed | Diff contains only CSS/component layout plus plan/checkpoint state; no setting, persistence, docs, or telemetry behavior was introduced. |
 | VC-008 checkpoint completeness | active | Implementation and scrutiny evidence are recorded; amended implementation, user-testing, and closeout evidence remain. |
@@ -28,12 +28,12 @@ Implement the approved live display controls: browser-local Width (70% default, 
 
 | ID | State | Evidence / blocker |
 |---|---|---|
-| A-VC-001 defaults/live persistence | scrutiny passed; user-testing pending | Four preference-helper tests and the final Playwright pass verify 70/16/14 defaults, immediate independent changes, clamping/reversion, bounded numeric localStorage values, and reload persistence with no hydration errors. |
-| A-VC-002 adjustable responsive width | scrutiny passed; user-testing pending | Final Playwright evidence verifies 70% default, 75% live change, reset to 70%, persisted 75%, full safe width at 1000px despite saved 50%, and saved 55% applying at 1001px. |
-| A-VC-003 transcript typography | scrutiny passed; user-testing pending | Existing-session browser evidence verifies message, composer, and rendered code moving from 16px to 22px with font-family preservation. Source routing covers tables, thinking/tool/process output, custom messages, and compaction content. |
-| A-VC-004 Mermaid scaling | scrutiny passed; user-testing pending | Three helper tests verify bounded configuration, size-sensitive keys, and serialized operations. A real safe Mermaid preview re-rendered from 16px to 22px: natural SVG geometry grew from 982×1128.78 to 2037×2354, and horizontal scroll width grew to 2061px without forced fill. |
-| A-VC-005 menu proportional scaling | scrutiny passed; user-testing pending | Browser evidence verifies 14px default and proportional Explorer 11→18.86, sidebar control 12→20.57, tab 12→20.57, and modal heading 15→25.71 at Menu 24. Open source stayed 13px and Markdown preview stayed 14px. No document/top-bar overflow occurred. |
-| A-VC-006 accessible responsive controls | scrutiny passed; user-testing pending | Browser checks verify disabled min/max actions, keyboard stepping, visible 2px focus outline, names/groups, expanded/controlled popover region, wide inline controls, narrow/mobile panel access, hidden stale panel after crossing to 1001px, and no mobile overflow. |
+| A-VC-001 defaults/live persistence | passed | Four preference-helper tests and the final Playwright pass verify 70/16/14 defaults, immediate independent changes, clamping/reversion, bounded numeric localStorage values, and reload persistence with no hydration errors; the user accepted the completed behavior. |
+| A-VC-002 adjustable responsive width | passed | Final Playwright evidence verifies 70% default, 75% live change, reset to 70%, persisted 75%, full safe width at 1000px despite saved 50%, and saved 55% applying at 1001px; the user accepted the completed behavior. |
+| A-VC-003 transcript typography | passed | Existing-session browser evidence verifies message, composer, and rendered code moving from 16px to 22px with font-family preservation. Source routing covers tables, thinking/tool/process output, custom messages, and compaction content; the user accepted the completed behavior. |
+| A-VC-004 Mermaid scaling | passed | Three helper tests verify bounded configuration, size-sensitive keys, and serialized operations. A real safe Mermaid preview re-rendered from 16px to 22px: natural SVG geometry grew from 982×1128.78 to 2037×2354, and horizontal scroll width grew to 2061px without forced fill; the user accepted the completed behavior. |
+| A-VC-005 menu proportional scaling | passed | Browser evidence verifies 14px default and proportional Explorer 11→18.86, sidebar control 12→20.57, tab 12→20.57, and modal heading 15→25.71 at Menu 24. Open source stayed 13px and Markdown preview stayed 14px. No document/top-bar overflow occurred; the user accepted the completed behavior. |
+| A-VC-006 accessible responsive controls | passed | Browser checks verify disabled min/max actions, keyboard stepping, visible 2px focus outline, names/groups, expanded/controlled popover region, wide inline controls, narrow/mobile panel access, hidden stale panel after crossing to 1001px, and no mobile overflow. The user accepted the final `Width | T | UI` refinement. |
 | A-VC-007 static/regression | passed | Final source passes 84 Node tests, `tsc --noEmit`, lint, and `git diff --check`. Source audit finds only four intentional fixed opened-file source/diff content sizes; no server API, shared config, or font-family setting was added. |
 | A-VC-008 amended checkpoint completeness | active | Scope reversal, decisions, backtracks, implementation commits (including `59f4698`), privacy-safe final evidence, and remaining user/closeout gates are recorded; user result and closeout remain. |
 
@@ -162,10 +162,21 @@ Implement the approved live display controls: browser-local Width (70% default, 
 - `node_modules/.bin/tsc --noEmit`, `npm run lint`, and `git diff --check` pass for the refinement.
 - Commit `51bc2fc` (`style: separate inline display controls`) records the `Width | T | UI` refinement and its validation evidence.
 
+### 2026-07-22 — Closeout authorized and preconditions verified
+
+- The user explicitly instructed Pi to close this implementation out properly, which records final acceptance of the validated behavior and `Width | T | UI` refinement.
+- Final checks on committed source pass: 84 Node tests, `node_modules/.bin/tsc --noEmit`, `npm run lint`, and `git diff --check`. The final seven-scenario Playwright report remains green with zero failures and zero browser error events.
+- The worktree preview server on port 30142 is stopped. The user's independent main-checkout server on port 30141 is not part of this task and will not be touched.
+- `branch.task/wider-chat-column.pi-long-lived` is unset, matching a standard short-lived implementation; cleanup requires worktree removal and local branch deletion after merge.
+- Local `main` remains at opening base `c23c2e5`, is an ancestor of task head, and has no tracked changes. Its untracked unrelated plans and the unrelated `tmp` branch/worktree will be preserved.
+- No `.agents/scripts/main-branch-lock.sh` exists. No competing local-main writer is present, main's reflog has not moved since clone, and the user previously confirmed no other implementation is active; closeout will use a recorded no-race exception rather than inventing a mutex mid-task.
+- Source-plan reconciliation proof: the current untracked main source plan hashes to `15175d96…`, exactly matching the immutable plan blob first committed in `eb80c3d`; the opening checkpoint records that this approved source was copied before source mutation. The amended task plan hashes to `5428a03d…`. This proves the source copy remained unchanged and can be removed during guarded main closeout while the amended plan is preserved in the archive. No unrelated `.agents/plans` file will be changed.
+- Documentation/current-state wiki and durable memory remain not applicable: the repository has no maintained wiki or memory index, and the execution plan/checkpoint contain the feature design and evidence.
+
 ## Current Phase
 
-Core behavior passed user preview, and the requested inline separator refinement is committed and validated. Final user confirmation remains before merge or closeout.
+Closeout is authorized. Validation, acceptance, short-lived cleanup evidence, main fast-forward eligibility, no-race exception, and exact source-plan reconciliation proof are recorded.
 
 ## Immediate Next Step
 
-Return the refreshed preview for final confirmation. Do not merge to local `main` before that confirmation.
+Add the plan closeout note, archive the plan in the task branch, and commit closeout preparation. Then fast-forward local `main`, reconcile only the proven unchanged source-plan copy, finalize archive/checkpoint evidence, remove the task worktree and branch, and verify the resulting main checkout without touching unrelated drafts or the `tmp` worktree.
