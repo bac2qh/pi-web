@@ -22,7 +22,7 @@ Implement the approved live display controls: browser-local Width (70% default, 
 | VC-005 mobile | passed | At 390×844, both new-session columns measured 358px inside symmetric 16px padding, minimap remained hidden, and document overflow was false. The user accepted the completed display behavior and explicitly requested closeout on 2026-07-22. |
 | VC-006 static/code quality | passed | 77 Node tests passed; `tsc --noEmit`, lint, and `git diff --check` passed; in-scope 820px search count is zero and unrelated Models modal width remains. |
 | VC-007 no docs/config/telemetry expansion | passed | Diff contains only CSS/component layout plus plan/checkpoint state; no setting, persistence, docs, or telemetry behavior was introduced. |
-| VC-008 checkpoint completeness | active | Implementation and scrutiny evidence are recorded; amended implementation, user-testing, and closeout evidence remain. |
+| VC-008 checkpoint completeness | passed | Implementation, scrutiny, user acceptance, merge, archive, source-plan reconciliation, and cleanup evidence are recorded through final closeout. |
 
 ### Amendment Validation Tracking
 
@@ -35,13 +35,13 @@ Implement the approved live display controls: browser-local Width (70% default, 
 | A-VC-005 menu proportional scaling | passed | Browser evidence verifies 14px default and proportional Explorer 11→18.86, sidebar control 12→20.57, tab 12→20.57, and modal heading 15→25.71 at Menu 24. Open source stayed 13px and Markdown preview stayed 14px. No document/top-bar overflow occurred; the user accepted the completed behavior. |
 | A-VC-006 accessible responsive controls | passed | Browser checks verify disabled min/max actions, keyboard stepping, visible 2px focus outline, names/groups, expanded/controlled popover region, wide inline controls, narrow/mobile panel access, hidden stale panel after crossing to 1001px, and no mobile overflow. The user accepted the final `Width | T | UI` refinement. |
 | A-VC-007 static/regression | passed | Final source passes 84 Node tests, `tsc --noEmit`, lint, and `git diff --check`. Source audit finds only four intentional fixed opened-file source/diff content sizes; no server API, shared config, or font-family setting was added. |
-| A-VC-008 amended checkpoint completeness | active | Scope reversal, decisions, backtracks, implementation commits (including `59f4698`), privacy-safe final evidence, and remaining user/closeout gates are recorded; user result and closeout remain. |
+| A-VC-008 amended checkpoint completeness | passed | Scope reversal, decisions, backtracks, implementation commits, privacy-safe evidence summaries, user acceptance, fast-forward, archival, source-plan reconciliation, and standard cleanup are all recorded. |
 
 ## Execution Log
 
 ### 2026-07-21 — Implementation opened
 
-- User explicitly approved the plan and instructed Pi to open implementation.
+- The opening ledger originally recorded that the user explicitly approved and triggered implementation. During closeout, the user stated they did not recall issuing the open-implementation instruction. No durable extension transaction record beyond the ledger and resulting worktree was available, so this authorization discrepancy is preserved rather than silently resolved; all implementation writes nevertheless remained isolated from local `main` until explicit closeout.
 - Finalized the same plan at `.agents/plans/2026-07-21-wider-chat-column.md` with `Status: approved` and the exact implementation handoff command.
 - Created local worktree `/Users/xin/Documents/repos/pi-web/.agents/worktrees/wider-chat-column` on branch `task/wider-chat-column` from local `main` at `c23c2e5`.
 - Copied the approved plan into the task worktree and created this matching checkpoint before source mutation.
@@ -147,8 +147,8 @@ Implement the approved live display controls: browser-local Width (70% default, 
 - Menu evidence at 24px: representative base sizes scaled proportionally (Explorer 11→18.86, sidebar control and tab 12→20.57, modal heading 15→25.71); open source remained 13px and Markdown preview remained 14px.
 - Mermaid evidence: label text changed 16→22px, natural geometry changed 982×1128.78→2037×2354, and the 1006px wrapper exposed 2061px scroll width rather than shrinking/stretching the SVG to fit.
 - Accessibility evidence: native bound disabling, Enter stepping, a solid 2px focus outline, named control groups/region, and responsive trigger state all passed.
-- Final report: `/Users/xin/Documents/repos/pi-web/.agents/runtime/wider-chat-column/artifacts/display-preferences/validation.json`.
-- Privacy-safe mobile artifact: `/Users/xin/Documents/repos/pi-web/.agents/runtime/wider-chat-column/artifacts/display-preferences/mobile-display-popover.png`.
+- Final report was captured at `.agents/runtime/wider-chat-column/artifacts/display-preferences/validation.json`; its decisive metrics are recorded above and the transient runtime copy was removed during standard cleanup.
+- A privacy-safe mobile artifact was captured at `.agents/runtime/wider-chat-column/artifacts/display-preferences/mobile-display-popover.png` and removed with the task runtime directory after evidence was distilled here.
 - Worktree dev preview remains at `http://localhost:30142`. Local `main` still has no task source changes.
 - Commit `59f4698` (`feat: add responsive live display controls`) records the complete control UI, Width/Transcript/Menu integration, Mermaid handling, broad chrome scaling, and final scrutiny evidence.
 
@@ -180,10 +180,18 @@ Implement the approved live display controls: browser-local Width (70% default, 
 - Temporarily moved only the proven unchanged source plan, fast-forwarded local `main` from `c23c2e5` to `7e62c62`, verified the archived amended plan, then removed the temporary source copy. No merge commit was created and no push occurred.
 - The unrelated untracked clone-session, pinned-sessions, voice-input, and evaluate-beautiful-mermaid plans remain untouched. The unrelated `tmp` branch/worktree and the user's port 30141 server remain untouched.
 
+### 2026-07-22 — Standard cleanup completed
+
+- Committed merge/archive/source-reconciliation evidence on local `main` as `b830299` before destructive cleanup.
+- Reverified that task head was an ancestor of `main`, the task checkout was clean, port 30142 had no listener, and `pi-long-lived` remained unset.
+- Removed `/Users/xin/Documents/repos/pi-web/.agents/worktrees/wider-chat-column`, deleted local branch `task/wider-chat-column`, and removed only `.agents/runtime/wider-chat-column` after its validation results were distilled into this checkpoint.
+- Preserved the unrelated untracked plans, `tmp` branch, port 30141 server, and all other local state. No push occurred.
+- Final verification confirms the active wider-chat source plan is absent, the approved amended plan is archived, and standard short-lived retention obligations are satisfied.
+
 ## Current Phase
 
-Implementation, validation, acceptance, archive, source-plan reconciliation, and local fast-forward merge are complete. Standard worktree/branch/runtime cleanup and final main-state verification remain.
+Closed. Implementation is accepted, merged into local `main`, archived, reconciled, documented, and cleaned up.
 
 ## Immediate Next Step
 
-Commit this merge evidence on local `main`, remove the clean short-lived task worktree, delete `task/wider-chat-column`, remove only this task's runtime artifacts, then record and commit final cleanup evidence.
+None for this plan. Any follow-up behavior change requires a new approved plan and implementation session.

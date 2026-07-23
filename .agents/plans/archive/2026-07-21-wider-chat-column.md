@@ -6,7 +6,7 @@
 > - **Implementation commits:** `eb80c3d` (responsive column), `96c4ebe` (preference core), `59f4698` (live controls/typography/Mermaid), and `51bc2fc` (`Width | T | UI` refinement). Supporting plan/checkpoint commits are recorded in the checkpoint.
 > - **Merge:** local `main` fast-forwarded from `c23c2e5` to closeout-preparation commit `7e62c62`; no merge commit was created. Final cleanup evidence is recorded in the checkpoint.
 > - **Verification:** 84 Node tests, TypeScript, lint, `git diff --check`, and seven privacy-safe Playwright scenarios passed with zero browser error events; the user accepted the resulting behavior.
-> - **Cleanup:** standard short-lived worktree/branch cleanup selected (`pi-long-lived` unset); final removal result will be recorded after merge.
+> - **Cleanup:** completed under the standard short-lived policy (`pi-long-lived` unset): task worktree removed, local task branch deleted, task runtime artifacts removed, and unrelated local state preserved.
 > - **Shipped summary:** responsive browser-local Width, Transcript, and Menu controls; full safe width on narrow panes; proportional chrome scaling with file-content exclusion; and natural-size Mermaid re-rendering with horizontal overflow access.
 
 Status: approved
