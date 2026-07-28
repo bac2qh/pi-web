@@ -1,0 +1,56 @@
+# Clone Session Implementation Checkpoints
+
+Plan: `.agents/plans/2026-07-21-clone-session.md`
+
+## Handoff
+
+**Source:** pi-subagents run `5f89d1e8-7c01-4b10-a73e-ea2dedf84aa9`, reviewer child 0 (server/helper correctness); output `/var/folders/_j/ttksft5934g0fj8z6l4rg6_w0000gn/T/pi-subagents-uid-501/async-subagent-runs/5f89d1e8-7c01-4b10-a73e-ea2dedf84aa9/output-0.log`.
+**Purpose:** Independently review native extraction, source isolation, concurrency, cleanup safety, and bounded diagnostics against the approved plan and Pi 0.82.1.
+**Outcome:** Native disposable-manager extraction, verification, cleanup bounds, source isolation, and diagnostics were sound. The reviewer found three correctness gaps: overlapping accepted prompts could clear a shared boolean claim too early; compaction had an await window before native `isCompacting` became true; and a cold command could reopen a deleted path retained in the session-path cache, misclassifying the missing source and leaving transient runtime state.
+**Evidence:** The reviewer traced `lib/rpc-manager.ts` prompt and compaction state transitions against installed `agent-session.js`, reproduced both acceptance windows with deferred probes, and traced the cold path through `resolveSessionPath()`, `app/api/agent/[id]/route.ts`, and Pi's missing-explicit-file behavior. It also confirmed the helper matches native `createBranchedSession()` semantics and logs only bounded stage/error metadata.
+**Uncertainty / gaps:** The cold missing-source fix requires one narrow guard at a surface not originally expected to change; it does not alter the approved clone architecture. Manual browser evidence remains unavailable.
+**Recommended use:** Replace boolean prompt state with per-invocation accounting, add wrapper-level compaction accounting before the native await, reject and evict a missing cold source before creating a wrapper, and add regressions for all three cases.
+
+## Handoff
+
+**Source:** pi-subagents run `5f89d1e8-7c01-4b10-a73e-ea2dedf84aa9`, reviewer child 1 (browser command/UX); output `/var/folders/_j/ttksft5934g0fj8z6l4rg6_w0000gn/T/pi-subagents-uid-501/async-subagent-runs/5f89d1e8-7c01-4b10-a73e-ea2dedf84aa9/output-1.log`.
+**Purpose:** Independently review exact-command routing, streaming controls, draft behavior, coalescing, leaf capture, notices, refresh-only wiring, and fork/branch regressions.
+**Outcome:** Leaf transmission, bounded result mapping, in-flight coalescing, success-only refresh, and source-stable AppShell wiring were correct. Exact `/clone` with an attached image bypassed idle host dispatch and could reach the model; during a run, the attachment guard also suppressed the required busy error. The reviewer additionally noted that a delayed success could clear composer edits made after submission.
+**Evidence:** `components/ChatInput.tsx` gated idle built-ins on zero attachments and returned from `sendQueued()` on attachments before the clone guard. Existing source-level tests checked only ordering before streaming prompt delivery and therefore missed both paths. The callback diff showed no selection, URL, chat-key, or sidebar-open mutation.
+**Uncertainty / gaps:** Actual Enter/button behavior and desktop/mobile notices still require browser user testing. The newer-draft issue is a bounded asynchronous UX race rather than a clone-artifact failure.
+**Recommended use:** Intercept exact `/clone` before attachment handling in both idle and running paths, clear only the unchanged submitted composer state, and strengthen ordering regressions.
+
+## Handoff
+
+**Source:** pi-subagents run `5f89d1e8-7c01-4b10-a73e-ea2dedf84aa9`, reviewer child 2 (tests/docs/validation); output `/var/folders/_j/ttksft5934g0fj8z6l4rg6_w0000gn/T/pi-subagents-uid-501/async-subagent-runs/5f89d1e8-7c01-4b10-a73e-ea2dedf84aa9/output-2.log`.
+**Purpose:** Independently assess validation quality, maintainability, documentation consistency, and VC-001 through VC-008 coverage.
+**Outcome:** The reviewer confirmed helper/wrapper behavior, result mapping, ordinary cache refresh, and mutually consistent English/Chinese/AGENTS documentation, while independently finding the attached-image routing blocker. It also identified parent-owned project-memory work as incomplete and recommended strengthening the native-artifact test to compare copied payloads, not only IDs and parent links.
+**Evidence:** The reviewer reran the 97-test Node suite, lint, TypeScript through `npm exec`, and `git diff --check` successfully. It distinguished structural command/callback tests from behavioral browser proof and found no fork or in-session branch code changes.
+**Uncertainty / gaps:** Manual clone/open, source-stability, active-run controls, empty composer, mobile/sidebar, and fork/branch smoke flows remain pending because no browser harness is available. Focused fork behavior is supported by unchanged code and the full suite, not a new interaction test.
+**Recommended use:** Fix attachment routing, compare copied entry payloads in the native test, complete the planned memory topic/index/log in the parent, record exact validation evidence, and do not claim browser-only assertions as automated proof.
+
+## Handoff
+
+**Source:** pi-subagents run `d1614e10-04fc-46a6-b22d-90b190591514`, reviewer child 0 (final server/concurrency review); output `/var/folders/_j/ttksft5934g0fj8z6l4rg6_w0000gn/T/pi-subagents-uid-501/async-subagent-runs/d1614e10-04fc-46a6-b22d-90b190591514/output-0.log`.
+**Purpose:** Re-review the repaired prompt/compaction acceptance guards, cold missing-source path, clone interleaving boundary, and native source isolation.
+**Outcome:** No production blocker remained. Independent prompt and compaction counters kept clone busy through pre-native awaits, clone extraction remained synchronous after the final guard, cold deleted paths returned 404 and were evicted before wrapper startup, and native extraction remained isolated. The reviewer noted only that the checked-in overlap regression settled prompts in submission order rather than the requested reverse order.
+**Evidence:** The reviewer traced the final counter transitions and ran a separate reverse-settlement probe; focused/full tests and static gates passed. Installed Pi 0.82.1 still confirmed the disposable-manager requirement.
+**Uncertainty / gaps:** The noted test ordering did not invalidate production behavior but left the exact interleaving underrepresented.
+**Recommended use:** Keep production code unchanged and settle the second prompt first in the regression before final validation. The parent applied that test-only correction.
+
+## Handoff
+
+**Source:** pi-subagents run `d1614e10-04fc-46a6-b22d-90b190591514`, reviewer child 1 (final command/UX review); output `/var/folders/_j/ttksft5934g0fj8z6l4rg6_w0000gn/T/pi-subagents-uid-501/async-subagent-runs/d1614e10-04fc-46a6-b22d-90b190591514/output-1.log`.
+**Purpose:** Re-review image-safe exact-command routing, streaming control reachability, draft preservation, result effects, and documentation after the first repair pass.
+**Outcome:** Model/queue routing, unchanged-submission clearing, and source-stable refresh were correct, but Steer and Follow-up buttons were still disabled whenever an image was attached, making their repaired exact-clone guard unreachable. The source-order test did not cover that enablement predicate. Documentation remained consistent; memory remained parent-owned and pending.
+**Evidence:** `canQueueStreamingMessage` required zero images while both buttons used it for `disabled`; actual dispatch code below was correct once reachable. The reviewer reran 101 Node tests and static gates successfully and found no other code fix.
+**Uncertainty / gaps:** Browser-only interaction, notice/sidebar rendering, mobile drawer behavior, URL/source observation, and fork/branch smoke remain unavailable in this environment.
+**Recommended use:** Make exact `/clone` an explicit exception in a testable streaming-composer enablement predicate and add pure regression coverage. The parent applied this bounded fix and retained image rejection for every other streaming message.
+
+## Implementation Summary
+
+**Plan section:** `Design / Implementation Strategy` §§1–4; `Test Strategy`; `Telemetry / Debuggability`; VC-001 through VC-008.
+**Work and outcome:** Implemented exact `/clone` host routing in idle and active-run composers, including image-safe Enter/Steer/Follow-up handling, unchanged-submission clearing, local in-flight coalescing, bounded notices, displayed/live leaf agreement, disposable native branch extraction, materialized-file/new-ID verification, ordinary cache/path registration, and refresh-only AppShell wiring. The source wrapper, selection, chat key, active path, URL, sidebar open state, and file explorer remain unchanged. Prompt and compaction commands now hold independent preflight-safe running claims. A cold resolved path is existence-checked and evicted before wrapper startup. Added focused native/helper/wrapper/route/command tests; updated English/Chinese README, AGENTS, and project memory.
+**Validation / evidence:** Baseline before changes: `node --test components/*.test.mjs lib/*.test.mjs` passed 84/84; `/Users/xin/Documents/repos/pi-web/node_modules/.bin/tsc --noEmit` passed; `npm run lint` passed. Final automated evidence: `node --test components/ChatInput.test.mjs lib/rpc-manager.test.mjs lib/session-clone.test.mjs` passed 19/19; `node --test components/*.test.mjs lib/*.test.mjs` passed 102/102; `/Users/xin/Documents/repos/pi-web/node_modules/.bin/tsc --noEmit` passed; `npm run lint` passed; `git diff --check` passed. Two fresh review rounds found and then cleared concurrency, image-routing, stale-source, draft-preservation, streaming-control reachability, and test-coverage defects. Native tests assert exact copied payloads/metadata, labels, ancestry, sibling exclusion, distinct ID/file, and byte-identical source. Manual browser validation remains blocked because this environment exposes neither a browser interaction tool nor an installed headless browser/DOM harness.
+**Departures from approved obligations:** The generic cold agent route gained a narrow stale-path existence/eviction guard, an implementation surface not anticipated in the estimate but required to satisfy D-012/VC-004 without creating transient runtime state; it adds no route, schema, storage, or discovery mechanism. Desktop/mobile clone flows and manual fork/Edit-from-here smoke are blocked by unavailable browser access, so VC-001/VC-002/VC-003/VC-004/VC-005 user-testing evidence and the manual part of VC-006 remain incomplete. Automated browser/visual coverage remains blocked as planned. `next build` is waived by repository instruction. External provider/LLM execution is not applicable. No other departures.
+**Implementation commit:** Pending.
