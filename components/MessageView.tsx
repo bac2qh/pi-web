@@ -5,7 +5,8 @@ import { memo, useState, useRef, useEffect, useMemo } from "react";
 import { MarkdownBody } from "./MarkdownBody";
 import { copyText } from "@/lib/clipboard";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
-import { isEmptyThinkingBlock } from "@/lib/message-display";
+import { buildAssistantBlockKey, isEmptyThinkingBlock } from "@/lib/message-display";
+import type { MermaidView } from "@/lib/mermaid-display";
 import { parseUnifiedPatch, type SplitDiffCell } from "@/lib/patch";
 import type {
   AgentMessage,
@@ -68,6 +69,9 @@ interface Props {
   showTimestamp?: boolean;
   prevTimestamp?: number;
   sessionId?: string;
+  assistantBlockIndices?: number[];
+  mermaidViewSelections?: ReadonlyMap<string, MermaidView>;
+  onMermaidViewChange?: (key: string, view: MermaidView) => void;
 }
 
 function formatTime(ts?: number): string | null {
@@ -81,6 +85,12 @@ function formatTime(ts?: number): string | null {
   if (isToday) return time;
   const date = d.toLocaleDateString([], { month: "short", day: "numeric", year: d.getFullYear() !== now.getFullYear() ? "numeric" : undefined });
   return `${date} ${time}`;
+}
+
+function haveSameNumberArray(previous: number[] | undefined, next: number[] | undefined): boolean {
+  if (previous === next) return true;
+  if (!previous || !next || previous.length !== next.length) return false;
+  return previous.every((value, index) => value === next[index]);
 }
 
 function haveSameRelevantToolResults(
@@ -97,12 +107,12 @@ function haveSameRelevantToolResults(
   return true;
 }
 
-export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent, showTimestamp, prevTimestamp, sessionId }: Props) {
+export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent, showTimestamp, prevTimestamp, sessionId, assistantBlockIndices, mermaidViewSelections, onMermaidViewChange }: Props) {
   if (message.role === "user") {
     return <UserMessageView message={message as UserMessage} cwd={cwd} onOpenFile={onOpenFile} entryId={entryId} onFork={onFork} forking={forking} onNavigate={onNavigate} prevAssistantEntryId={prevAssistantEntryId} onEditContent={onEditContent} />;
   }
   if (message.role === "assistant") {
-    return <AssistantMessageView message={message as AssistantMessage} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} sessionId={sessionId} entryId={entryId} />;
+    return <AssistantMessageView message={message as AssistantMessage} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} sessionId={sessionId} entryId={entryId} assistantBlockIndices={assistantBlockIndices} mermaidViewSelections={mermaidViewSelections} onMermaidViewChange={onMermaidViewChange} />;
   }
   if (message.role === "toolResult") {
     // Rendered inline under its toolCall — skip standalone rendering if paired
@@ -130,7 +140,10 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
     && prev.onEditContent === next.onEditContent
     && prev.showTimestamp === next.showTimestamp
     && prev.prevTimestamp === next.prevTimestamp
-    && prev.sessionId === next.sessionId;
+    && prev.sessionId === next.sessionId
+    && haveSameNumberArray(prev.assistantBlockIndices, next.assistantBlockIndices)
+    && prev.mermaidViewSelections === next.mermaidViewSelections
+    && prev.onMermaidViewChange === next.onMermaidViewChange;
 });
 
 function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent }: {
@@ -344,6 +357,9 @@ function AssistantMessageView({
   prevTimestamp,
   sessionId,
   entryId,
+  assistantBlockIndices,
+  mermaidViewSelections,
+  onMermaidViewChange,
 }: {
   message: AssistantMessage;
   isStreaming?: boolean;
@@ -355,10 +371,16 @@ function AssistantMessageView({
   prevTimestamp?: number;
   sessionId?: string;
   entryId?: string;
+  assistantBlockIndices?: number[];
+  mermaidViewSelections?: ReadonlyMap<string, MermaidView>;
+  onMermaidViewChange?: (key: string, view: MermaidView) => void;
 }) {
   const time = showTimestamp ? formatTime(message.timestamp) : null;
   const blockItems = (message.content ?? [])
-    .map((block, originalIndex) => ({ block, originalIndex }))
+    .map((block, localIndex) => ({
+      block,
+      originalIndex: assistantBlockIndices?.[localIndex] ?? localIndex,
+    }))
     .filter(({ block }) => !isEmptyThinkingBlock(block, { isStreaming }));
   const blocks = blockItems.map(({ block }) => block);
   const [hovered, setHovered] = useState(false);
@@ -521,9 +543,33 @@ function AssistantMessageView({
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {blockItems.map(({ block, originalIndex }) => (
-          <BlockView key={`${entryId ?? "stream"}-${originalIndex}`} block={block} toolResults={toolResults} isStreaming={isStreaming} streamingDuration={streamingDurations.get(originalIndex) ?? (block.type === "thinking" ? thinkingDurationFromFile : undefined)} toolCallDurations={toolCallDurations} cwd={cwd} onOpenFile={onOpenFile} sessionId={sessionId} entryId={entryId} blockIndex={originalIndex} />
-        ))}
+        {blockItems.map(({ block, originalIndex }) => {
+          const blockIdentity = buildAssistantBlockKey(block.type, {
+            sessionId,
+            entryId,
+            messageTimestamp: message.timestamp,
+            originalIndex,
+            isStreaming,
+          });
+          return (
+            <BlockView
+              key={blockIdentity}
+              block={block}
+              toolResults={toolResults}
+              isStreaming={isStreaming}
+              streamingDuration={streamingDurations.get(originalIndex) ?? (block.type === "thinking" ? thinkingDurationFromFile : undefined)}
+              toolCallDurations={toolCallDurations}
+              cwd={cwd}
+              onOpenFile={onOpenFile}
+              sessionId={sessionId}
+              entryId={entryId}
+              blockIndex={originalIndex}
+              mermaidTextBlockIdentity={block.type === "text" ? blockIdentity : undefined}
+              mermaidViewSelections={mermaidViewSelections}
+              onMermaidViewChange={onMermaidViewChange}
+            />
+          );
+        })}
       </div>
 
       <div style={{
@@ -575,9 +621,47 @@ function AssistantMessageView({
   );
 }
 
-function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCallDurations, cwd, onOpenFile, sessionId, entryId, blockIndex }: { block: AssistantContentBlock; toolResults?: Map<string, ToolResultMessage>; isStreaming?: boolean; streamingDuration?: number; toolCallDurations?: Map<string, number>; cwd?: string; onOpenFile?: (filePath: string) => void; sessionId?: string; entryId?: string; blockIndex: number }) {
+function BlockView({
+  block,
+  toolResults,
+  isStreaming,
+  streamingDuration,
+  toolCallDurations,
+  cwd,
+  onOpenFile,
+  sessionId,
+  entryId,
+  blockIndex,
+  mermaidTextBlockIdentity,
+  mermaidViewSelections,
+  onMermaidViewChange,
+}: {
+  block: AssistantContentBlock;
+  toolResults?: Map<string, ToolResultMessage>;
+  isStreaming?: boolean;
+  streamingDuration?: number;
+  toolCallDurations?: Map<string, number>;
+  cwd?: string;
+  onOpenFile?: (filePath: string) => void;
+  sessionId?: string;
+  entryId?: string;
+  blockIndex: number;
+  mermaidTextBlockIdentity?: string;
+  mermaidViewSelections?: ReadonlyMap<string, MermaidView>;
+  onMermaidViewChange?: (key: string, view: MermaidView) => void;
+}) {
   if (block.type === "text") {
-    return <TextBlock block={block as TextContent} isStreaming={isStreaming} cwd={cwd} onOpenFile={onOpenFile} />;
+    return (
+      <TextBlock
+        block={block as TextContent}
+        isStreaming={isStreaming}
+        cwd={cwd}
+        onOpenFile={onOpenFile}
+        mermaidTextBlockIdentity={mermaidTextBlockIdentity}
+        mermaidViewSelections={mermaidViewSelections}
+        onMermaidViewChange={onMermaidViewChange}
+      />
+    );
   }
   if (block.type === "thinking") {
     return <ThinkingBlock block={block as ThinkingContent} duration={streamingDuration} sessionId={sessionId} entryId={entryId} blockIndex={blockIndex} />;
@@ -591,8 +675,35 @@ function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCal
   return null;
 }
 
-function TextBlock({ block, isStreaming, cwd, onOpenFile }: { block: TextContent; isStreaming?: boolean; cwd?: string; onOpenFile?: (filePath: string) => void }) {
-  return <MarkdownBody isStreaming={isStreaming} cwd={cwd} onOpenFile={onOpenFile}>{block.text}</MarkdownBody>;
+function TextBlock({
+  block,
+  isStreaming,
+  cwd,
+  onOpenFile,
+  mermaidTextBlockIdentity,
+  mermaidViewSelections,
+  onMermaidViewChange,
+}: {
+  block: TextContent;
+  isStreaming?: boolean;
+  cwd?: string;
+  onOpenFile?: (filePath: string) => void;
+  mermaidTextBlockIdentity?: string;
+  mermaidViewSelections?: ReadonlyMap<string, MermaidView>;
+  onMermaidViewChange?: (key: string, view: MermaidView) => void;
+}) {
+  return (
+    <MarkdownBody
+      isStreaming={isStreaming}
+      cwd={cwd}
+      onOpenFile={onOpenFile}
+      mermaidTextBlockIdentity={mermaidTextBlockIdentity}
+      mermaidViewSelections={mermaidViewSelections}
+      onMermaidViewChange={onMermaidViewChange}
+    >
+      {block.text}
+    </MarkdownBody>
+  );
 }
 
 function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex }: {

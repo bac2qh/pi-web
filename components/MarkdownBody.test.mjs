@@ -10,11 +10,12 @@ const jiti = createJiti(import.meta.url, {
 });
 const { MarkdownBody } = await jiti.import("./MarkdownBody.tsx");
 
-function renderMarkdown(markdown) {
+function renderMarkdown(markdown, props = {}) {
   return renderToStaticMarkup(
     React.createElement(MarkdownBody, {
       cwd: "/home/me/project",
       onOpenFile() {},
+      ...props,
     }, markdown),
   );
 }
@@ -34,4 +35,39 @@ test("keeps local file markdown links in the app", () => {
 
   assert.match(html, /<a href="components\/MarkdownBody\.tsx">file<\/a>/);
   assert.doesNotMatch(html, /target=|rel=|\snode=/);
+});
+
+test("renders completed Mermaid blocks as Preview by default", () => {
+  const html = renderMarkdown("```mermaid\nflowchart LR\nA-->B\n```");
+
+  assert.match(html, />Source<\/button>/);
+  assert.match(html, /aria-label="Show Mermaid source"/);
+  assert.match(html, /class="mermaid-block mermaid-block-loading"/);
+  assert.doesNotMatch(html, />Preview<\/button>/);
+});
+
+test("keeps streaming Mermaid as source with Preview unavailable", () => {
+  const html = renderMarkdown("```mermaid\nflowchart LR\nA-->B\n```", { isStreaming: true });
+
+  assert.match(html, /<button[^>]*disabled=""[^>]*>Preview<\/button>/);
+  assert.match(html, /aria-label="Preview available after streaming"/);
+  assert.match(html, /flowchart/);
+  assert.doesNotMatch(html, /class="mermaid-block/);
+});
+
+test("creates an independent default Preview for each completed Mermaid block", () => {
+  const html = renderMarkdown([
+    "```mermaid",
+    "flowchart LR",
+    "A-->B",
+    "```",
+    "",
+    "```mermaid",
+    "sequenceDiagram",
+    "A->>B: Hello",
+    "```",
+  ].join("\n"));
+
+  assert.equal((html.match(/>Source<\/button>/g) ?? []).length, 2);
+  assert.equal((html.match(/class="mermaid-block mermaid-block-loading"/g) ?? []).length, 2);
 });

@@ -10,7 +10,27 @@ import { useDisplayPreferences } from "@/hooks/useDisplayPreferences";
 import { copyText } from "@/lib/clipboard";
 import { resolveLocalFileHref } from "@/lib/file-links";
 import { markdownRehypePlugins, markdownRemarkPlugins } from "@/lib/markdown";
-import { buildMermaidRenderKey, enqueueMermaidOperation, mermaidDisplayConfig } from "@/lib/mermaid-display";
+import {
+  DEFAULT_MERMAID_VIEW,
+  buildMermaidRenderKey,
+  buildMermaidViewStateKey,
+  enqueueMermaidOperation,
+  getMermaidModeState,
+  mermaidDisplayConfig,
+  type MermaidView,
+} from "@/lib/mermaid-display";
+
+const SYNTAX_PRE_SELECTOR = 'pre[class*="language-"]';
+
+function withoutSyntaxBackground(theme: typeof vs): typeof vs {
+  const preStyle = { ...theme[SYNTAX_PRE_SELECTOR] };
+  delete preStyle.background;
+  delete preStyle.backgroundColor;
+  return { ...theme, [SYNTAX_PRE_SELECTOR]: preStyle };
+}
+
+const lightSyntaxStyle = withoutSyntaxBackground(vs);
+const darkSyntaxStyle = withoutSyntaxBackground(vscDarkPlus);
 
 interface MarkdownBodyProps {
   children: string;
@@ -18,18 +38,44 @@ interface MarkdownBodyProps {
   isStreaming?: boolean;
   cwd?: string;
   onOpenFile?: (filePath: string) => void;
+  mermaidTextBlockIdentity?: string;
+  mermaidViewSelections?: ReadonlyMap<string, MermaidView>;
+  onMermaidViewChange?: (key: string, view: MermaidView) => void;
 }
 
-export function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile }: MarkdownBodyProps) {
+export function MarkdownBody({
+  children,
+  className,
+  isStreaming,
+  cwd,
+  onOpenFile,
+  mermaidTextBlockIdentity,
+  mermaidViewSelections,
+  onMermaidViewChange,
+}: MarkdownBodyProps) {
   const normalizedMarkdown = useMemo(() => normalizeDisplayMath(children), [children]);
+  // Read controlled selections through a ref so a mode click does not replace
+  // react-markdown's renderer functions and remount every code block.
+  const mermaidViewSelectionsRef = useRef(mermaidViewSelections);
+  mermaidViewSelectionsRef.current = mermaidViewSelections;
   const markdownComponents = useMemo<Components>(() => ({
-    code({ className, children, ...props }) {
+    code({ className, children, node, ...props }) {
       const lang = className?.replace("language-", "").toLowerCase() ?? "";
       const raw = String(children);
       const isBlock = className?.includes("language-") || raw.includes("\n");
       if (isBlock) {
         if (lang === "mermaid") {
-          return <MermaidBlock code={raw.replace(/\n$/, "")} isStreaming={isStreaming} />;
+          const viewStateKey = buildMermaidViewStateKey(mermaidTextBlockIdentity, node?.position?.start);
+          return (
+            <MermaidBlock
+              code={raw.replace(/\n$/, "")}
+              isStreaming={isStreaming}
+              selectedView={viewStateKey ? mermaidViewSelectionsRef.current?.get(viewStateKey) : undefined}
+              onSelectedViewChange={viewStateKey && onMermaidViewChange
+                ? (view) => onMermaidViewChange(viewStateKey, view)
+                : undefined}
+            />
+          );
         }
         return <CodeBlock code={raw.replace(/\n$/, "")} lang={lang} />;
       }
@@ -80,7 +126,7 @@ export function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile
         </div>
       );
     },
-  }), [cwd, isStreaming, onOpenFile]);
+  }), [cwd, isStreaming, mermaidTextBlockIdentity, onMermaidViewChange, onOpenFile]);
 
   return (
     <div className={["markdown-body", className].filter(Boolean).join(" ")}>
@@ -124,10 +170,24 @@ function normalizeDisplayMath(markdown: string): string {
     .join(lineBreak);
 }
 
-function MermaidBlock({ code, isStreaming }: { code: string; isStreaming?: boolean }) {
+function MermaidBlock({
+  code,
+  isStreaming,
+  selectedView,
+  onSelectedViewChange,
+}: {
+  code: string;
+  isStreaming?: boolean;
+  selectedView?: MermaidView;
+  onSelectedViewChange?: (view: MermaidView) => void;
+}) {
   const { isDark } = useTheme();
   const { transcriptFontSize } = useDisplayPreferences();
-  const [showPreview, setShowPreview] = useState(false);
+  const [localSelectedView, setLocalSelectedView] = useState<MermaidView>(DEFAULT_MERMAID_VIEW);
+  const currentSelectedView = onSelectedViewChange
+    ? selectedView ?? DEFAULT_MERMAID_VIEW
+    : localSelectedView;
+  const { effectiveView, action } = getMermaidModeState(currentSelectedView, isStreaming);
   const [svg, setSvg] = useState<string | null>(null);
   const [renderedKey, setRenderedKey] = useState("");
   const [failedKey, setFailedKey] = useState<string | null>(null);
@@ -150,7 +210,7 @@ function MermaidBlock({ code, isStreaming }: { code: string; isStreaming?: boole
   }, [currentKey, renderedKey, svg]);
 
   useEffect(() => {
-    if (!showPreview || isStreaming) return;
+    if (effectiveView !== "preview") return;
 
     let cancelled = false;
     let failureStage: "load" | "parse" | "render" = "load";
@@ -208,20 +268,25 @@ function MermaidBlock({ code, isStreaming }: { code: string; isStreaming?: boole
     return () => {
       cancelled = true;
     };
-  }, [code, currentKey, isDark, isStreaming, showPreview, transcriptFontSize]);
+  }, [code, currentKey, effectiveView, isDark, transcriptFontSize]);
 
   const previewButton = (
     <button
-      onClick={() => setShowPreview((v) => !v)}
-      disabled={isStreaming}
-      title={isStreaming ? "Preview available after streaming" : (showPreview ? "Show Mermaid source" : "Preview Mermaid diagram")}
-      className={["markdown-code-action", showPreview ? "is-active" : ""].filter(Boolean).join(" ")}
+      type="button"
+      onClick={() => {
+        if (onSelectedViewChange) onSelectedViewChange(action.destination);
+        else setLocalSelectedView(action.destination);
+      }}
+      disabled={action.disabled}
+      title={action.title}
+      aria-label={action.title}
+      className={["markdown-code-action", effectiveView === "preview" ? "is-active" : ""].filter(Boolean).join(" ")}
     >
-      {showPreview ? "Source" : "Preview"}
+      {action.label}
     </button>
   );
 
-  if (!showPreview || isStreaming) {
+  if (effectiveView === "source") {
     return <CodeBlock code={code} lang="mermaid" headerAction={previewButton} />;
   }
 
@@ -286,7 +351,7 @@ function CodeBlock({ code, lang, headerAction }: { code: string; lang: string; h
       </div>
       <SyntaxHighlighter
         language={lang || "text"}
-        style={isDark ? vscDarkPlus : vs}
+        style={isDark ? darkSyntaxStyle : lightSyntaxStyle}
         showLineNumbers
         lineNumberStyle={{ color: "var(--text-dim)", fontStyle: "normal" }}
         customStyle={{
@@ -295,7 +360,7 @@ function CodeBlock({ code, lang, headerAction }: { code: string; lang: string; h
           fontSize: "var(--pi-transcript-font-size, 16px)",
           lineHeight: 1.62,
           borderRadius: 0,
-          background: "color-mix(in srgb, var(--bg) 92%, var(--bg-panel))",
+          backgroundColor: "color-mix(in srgb, var(--bg) 92%, var(--bg-panel))",
         }}
         codeTagProps={{ style: { fontFamily: "var(--font-mono)" } }}
       >
