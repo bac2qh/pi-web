@@ -13,6 +13,9 @@
 # testing
 /coverage
 
+# agent runtime worktrees
+/.agents/worktrees/
+
 # next.js
 /.next/
 /out/
