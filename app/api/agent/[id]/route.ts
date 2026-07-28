@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { resolveSessionPath } from "@/lib/session-reader";
+import { existsSync } from "fs";
+import { invalidateSessionPathCache, resolveSessionPath } from "@/lib/session-reader";
 import { startRpcSession, getRpcSession } from "@/lib/rpc-manager";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
@@ -21,7 +22,8 @@ export async function POST(
     }
 
     const filePath = await resolveSessionPath(id);
-    if (!filePath) {
+    if (!filePath || !existsSync(filePath)) {
+      if (filePath) invalidateSessionPathCache(id);
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 

@@ -2,7 +2,7 @@
 
 import { scaledMenuFontSize } from "@/lib/display-preferences";
 import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
-import type { BuiltinSlashCommandResult, CompactResultInfo, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
+import { isExactCloneCommand, type BuiltinSlashCommandResult, type CompactResultInfo, type QueuedMessages, type SlashCommandInfo } from "@/hooks/useAgentSession";
 import { clearDraft, getDraft, setDraft, type ChatDraftImage } from "@/lib/draft-store";
 import {
   buildEntriesFromFiles, buildAtInsertText, extractAtQuery, filterFileEntries,
@@ -68,6 +68,20 @@ export interface ChatInputHandle {
   addImages: (files: File[]) => void;
 }
 
+export function isSubmittedComposerStateUnchanged(
+  currentValue: string,
+  currentImages: readonly AttachedImage[],
+  submittedValue: string,
+  submittedImages: readonly AttachedImage[],
+): boolean {
+  return currentValue === submittedValue && currentImages === submittedImages;
+}
+
+export function canSubmitStreamingComposer(value: string, imageCount: number): boolean {
+  const message = value.trim();
+  return Boolean(message) && (imageCount === 0 || isExactCloneCommand(message));
+}
+
 const TOOL_PRESETS = ["off", "default", "full"] as const;
 const TOOL_PRESET_MAP: Record<"off" | "default" | "full", "none" | "default" | "full"> = { off: "none", default: "default", full: "full" };
 const COMPOSITION_END_ENTER_GRACE_MS = 100;
@@ -106,6 +120,7 @@ type SlashCommandPaletteItem = SlashCommandInfo | {
 type SlashCommandSource = SlashCommandPaletteItem["source"];
 
 const BUILTIN_SLASH_COMMANDS: SlashCommandPaletteItem[] = [
+  { name: "clone", description: "Duplicate the current active branch", source: "builtin" },
   { name: "compact", description: "Compress context, optionally with instructions", source: "builtin" },
   { name: "reload", description: "Reload extensions, skills, prompts, and tools", source: "builtin" },
   { name: "name", description: "Set the session display name", source: "builtin" },
@@ -395,6 +410,26 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     if (!msg && !attachedImages.length) return;
     if (isStreaming) return;
     onAudioUnlock?.();
+
+    // Exact clone is always a host command, even when images are attached.
+    // Only clear the composer if it still contains the submitted state when
+    // the asynchronous command finishes.
+    if (isExactCloneCommand(msg)) {
+      if (!onBuiltinCommand) return;
+      const submittedValue = value;
+      const submittedImages = attachedImages;
+      const result = await onBuiltinCommand(msg);
+      if (result.handled && !result.error && isSubmittedComposerStateUnchanged(
+        valueRef.current,
+        attachedImagesRef.current,
+        submittedValue,
+        submittedImages,
+      )) {
+        clearInput();
+      }
+      return;
+    }
+
     if (!attachedImages.length && msg.startsWith("/") && onBuiltinCommand) {
       const result = await onBuiltinCommand(msg);
       if (result.handled) {
@@ -443,8 +478,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const slashCommandCountLabel = filteredSlashCommands.length === 1
     ? (slashQuery ? "1 match" : "1 command")
     : `${filteredSlashCommands.length} ${slashQuery ? "matches" : "commands"}`;
-  const hasInputText = Boolean(value.trim());
-  const canQueueStreamingMessage = hasInputText && attachedImages.length === 0;
+  const canQueueStreamingMessage = canSubmitStreamingComposer(value, attachedImages.length);
 
   // ── @ file autocomplete ──────────────────────────────────────────────────
   // Recomputed from the text before the caret on every change/caret move.
@@ -598,11 +632,31 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     });
   }, []);
 
-  const sendQueued = useCallback((mode: "steer" | "followup") => {
+  const sendQueued = useCallback(async (mode: "steer" | "followup") => {
     const msg = value.trim();
     if (!msg && !attachedImages.length) return;
-    if (attachedImages.length) return;
     onAudioUnlock?.();
+
+    // Clone must stay in the web host even while the composer is offering
+    // steer/follow-up delivery controls or images are attached. Errors and
+    // newer composer edits intentionally preserve input.
+    if (isExactCloneCommand(msg)) {
+      if (!onBuiltinCommand) return;
+      const submittedValue = value;
+      const submittedImages = attachedImages;
+      const result = await onBuiltinCommand(msg);
+      if (result.handled && !result.error && isSubmittedComposerStateUnchanged(
+        valueRef.current,
+        attachedImagesRef.current,
+        submittedValue,
+        submittedImages,
+      )) {
+        clearInput();
+      }
+      return;
+    }
+
+    if (attachedImages.length) return;
     const streamingBehavior = mode === "steer" ? "steer" : "followUp";
     if (msg.startsWith("/") && onPromptWithStreamingBehavior) {
       onPromptWithStreamingBehavior(msg, streamingBehavior, attachedImages.length ? attachedImages : undefined);
@@ -615,7 +669,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       onFollowUp(msg, attachedImages.length ? attachedImages : undefined);
     }
     clearInput();
-  }, [value, attachedImages, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock]);
+  }, [value, attachedImages, onBuiltinCommand, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock]);
 
   const getNextSlashIndex = useCallback((direction: "up" | "down" | "left" | "right") => {
     const lastIndex = filteredSlashCommands.length - 1;

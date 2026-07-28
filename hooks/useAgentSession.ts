@@ -137,12 +137,24 @@ export type BuiltinSlashCommandResult =
   | { handled: false }
   | { handled: true; message?: string; error?: string; action?: "openSessionStats" };
 
+export function isExactCloneCommand(text: string): boolean {
+  return text.trim() === "/clone";
+}
+
+type CloneCommandResult =
+  | { created: true; newSessionId: string }
+  | {
+      created: false;
+      reason: "busy" | "nothing_to_clone" | "missing_source" | "stale_leaf" | "clone_failed";
+    };
+
 export interface UseAgentSessionOptions {
   session: SessionInfo | null;
   newSessionCwd: string | null;
   onAgentEnd?: () => void;
   onSessionCreated?: (session: SessionInfo) => void;
   onSessionForked?: (newSessionId: string) => void;
+  onSessionCloned?: () => void;
   modelsRefreshKey?: number;
   chatInputRef?: React.RefObject<ChatInputHandle | null>;
   onBranchDataChange?: (tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void) => void;
@@ -320,7 +332,7 @@ type SlashCommandsResponse = {
 
 export function useAgentSession(opts: UseAgentSessionOptions) {
   const {
-    session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked,
+    session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, onSessionCloned,
     modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen,
   } = opts;
 
@@ -375,6 +387,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const ensuringNewSessionRef = useRef<Promise<string | null> | null>(null);
+  const cloneInFlightRef = useRef<Promise<BuiltinSlashCommandResult> | null>(null);
   const newSessionPromotedRef = useRef(false);
   const promptRunIdRef = useRef(0);
   const optimisticUserMessageKeyRef = useRef<string | null>(null);
@@ -1184,13 +1197,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [isNew, newSessionCwd, session?.cwd]);
 
   const handleBuiltinSlashCommand = useCallback(async (text: string): Promise<BuiltinSlashCommandResult> => {
-    if (!text.startsWith("/")) return { handled: false };
-    const match = text.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/);
+    const normalizedText = text.trim();
+    if (!normalizedText.startsWith("/")) return { handled: false };
+    const match = normalizedText.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/);
     if (!match) return { handled: false };
 
     const [, commandName, rawArgs = ""] = match;
     const args = rawArgs.trim();
-    const sid = sessionIdRef.current ?? await ensureNewSession();
     const complete = (result: BuiltinSlashCommandResult): BuiltinSlashCommandResult => {
       if (!result.handled) return result;
       if (result.error) {
@@ -1201,6 +1214,61 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       return result;
     };
 
+    if (commandName === "clone") {
+      if (!isExactCloneCommand(normalizedText)) return { handled: false };
+      if (cloneInFlightRef.current) return cloneInFlightRef.current;
+
+      const invocation = (async (): Promise<BuiltinSlashCommandResult> => {
+        if (agentRunningRef.current) {
+          return complete({ handled: true, error: "Wait for the current run to finish before cloning" });
+        }
+
+        const sid = sessionIdRef.current;
+        if (!sid || !activeLeafId) {
+          return complete({ handled: true, error: "Nothing to clone yet" });
+        }
+
+        try {
+          const result = await sendAgentCommand<CloneCommandResult>(sid, {
+            type: "clone",
+            activeLeafId,
+          });
+          if (result.created) {
+            const completed = complete({ handled: true, message: "Cloned session — available in sidebar" });
+            onSessionCloned?.();
+            return completed;
+          }
+
+          switch (result.reason) {
+            case "busy":
+              return complete({ handled: true, error: "Wait for the current run to finish before cloning" });
+            case "nothing_to_clone":
+              return complete({ handled: true, error: "Nothing to clone yet" });
+            case "missing_source":
+              return complete({ handled: true, error: "Session is no longer available" });
+            case "stale_leaf":
+              return complete({ handled: true, error: "The selected branch changed; reload and try again" });
+            case "clone_failed":
+            default:
+              return complete({ handled: true, error: "Could not clone session" });
+          }
+        } catch (error) {
+          const message = error instanceof Error && error.message === "Session not found"
+            ? "Session is no longer available"
+            : "Could not clone session";
+          return complete({ handled: true, error: message });
+        }
+      })();
+
+      cloneInFlightRef.current = invocation;
+      try {
+        return await invocation;
+      } finally {
+        if (cloneInFlightRef.current === invocation) cloneInFlightRef.current = null;
+      }
+    }
+
+    const sid = sessionIdRef.current ?? await ensureNewSession();
     try {
       switch (commandName) {
         case "compact": {
@@ -1264,7 +1332,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       if (commandName === "compact") setIsCompacting(false);
     }
-  }, [addNotice, ensureNewSession, isCompacting, loadModels, loadSession, loadSlashCommands, loadTools, promoteNewSession, onSessionStatsPanelOpen]);
+  }, [activeLeafId, addNotice, ensureNewSession, isCompacting, loadModels, loadSession, loadSlashCommands, loadTools, onSessionCloned, promoteNewSession, onSessionStatsPanelOpen]);
 
   // Queued (undelivered) messages live in the queue panel only; the chat gets
   // the real user message when pi delivers it (user message_end event). An

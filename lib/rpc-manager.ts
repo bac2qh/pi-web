@@ -3,6 +3,7 @@ import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@e
 import { randomUUID } from "crypto";
 import { invalidateModelsCache } from "./models-cache";
 import { cacheSessionPath, invalidateSessionListCache } from "./session-reader";
+import { cloneSessionBranch } from "./session-clone";
 import type { SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import type { AgentSessionLike, ExtensionUiContextLike, ToolInfo } from "./pi-types";
 import type { ExtensionUiRequest, ExtensionUiResponse, ExtensionWidgetItem } from "./types";
@@ -110,7 +111,8 @@ export class AgentSessionWrapper {
   private activeCustomUis = new Map<string, ActiveCustomUi>();
   private extensionStatuses = new Map<string, string>();
   private extensionWidgets = new Map<string, ExtensionWidgetItem>();
-  private promptRunning = false;
+  private promptRunningCount = 0;
+  private compactionRunningCount = 0;
   private extensionsBound = false;
   private extensionBindingPromise: Promise<void> | null = null;
   private extensionBindingError: unknown = null;
@@ -135,7 +137,12 @@ export class AgentSessionWrapper {
   }
 
   isRunning(): boolean {
-    return this._alive && (this.promptRunning || this.inner.isStreaming || this.inner.isCompacting);
+    return this._alive && (
+      this.promptRunningCount > 0
+      || this.compactionRunningCount > 0
+      || this.inner.isStreaming
+      || this.inner.isCompacting
+    );
   }
 
   start(): void {
@@ -241,6 +248,16 @@ export class AgentSessionWrapper {
     }
   }
 
+  private claimPromptRun(): void {
+    this.promptRunningCount += 1;
+    notifyRunningChange();
+  }
+
+  private releasePromptRun(): void {
+    this.promptRunningCount = Math.max(0, this.promptRunningCount - 1);
+    notifyRunningChange();
+  }
+
   private applyForcedEmptySystemPrompt(): void {
     if (this.forceEmptySystemPrompt && this.inner.agent.state) {
       this.inner.agent.state.systemPrompt = "";
@@ -272,32 +289,48 @@ export class AgentSessionWrapper {
   async send(command: Record<string, unknown>): Promise<unknown> {
     this.resetIdleTimer();
     const type = command.type as string;
-    if (this.shouldWaitForExtensions(type)) await this.waitForExtensionsBound();
+    if (type === "prompt") {
+      // Claim each accepted prompt before extension binding can await. Clone is
+      // synchronous, and per-invocation accounting prevents one overlapping
+      // prompt from exposing an idle window while another is still pending.
+      this.claimPromptRun();
+      try {
+        await this.waitForExtensionsBound();
+      } catch (error) {
+        this.releasePromptRun();
+        throw error;
+      }
+    } else if (this.shouldWaitForExtensions(type)) {
+      await this.waitForExtensionsBound();
+    }
 
     switch (type) {
       case "prompt": {
         // Fire and forget — events come via subscribe
         const promptImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
         const streamingBehavior = command.streamingBehavior as "steer" | "followUp" | undefined;
-        this.promptRunning = true;
-        notifyRunningChange();
-        this.inner.prompt(command.message as string, {
-          ...(promptImages?.length ? { images: promptImages } : {}),
-          ...(streamingBehavior ? { streamingBehavior } : {}),
-          source: "rpc",
-        }).then(() => {
-          this.promptRunning = false;
+        let promptPromise: Promise<void>;
+        try {
+          promptPromise = this.inner.prompt(command.message as string, {
+            ...(promptImages?.length ? { images: promptImages } : {}),
+            ...(streamingBehavior ? { streamingBehavior } : {}),
+            source: "rpc",
+          });
+        } catch (error) {
+          this.releasePromptRun();
+          throw error;
+        }
+        promptPromise.then(() => {
+          this.releasePromptRun();
           if (!streamingBehavior) this.emit({ type: "prompt_done" });
-          notifyRunningChange();
-        }).catch((error) => {
-          this.promptRunning = false;
+        }, (error) => {
+          this.releasePromptRun();
           invalidateSessionListCache();
           this.emit({
             type: "prompt_error",
             errorMessage: error instanceof Error ? error.message : String(error),
           });
           if (!streamingBehavior) this.emit({ type: "prompt_done" });
-          notifyRunningChange();
         });
         return null;
       }
@@ -313,8 +346,8 @@ export class AgentSessionWrapper {
           sessionId: this.inner.sessionId,
           sessionFile: this.inner.sessionFile ?? "",
           isStreaming: this.inner.isStreaming,
-          isPromptRunning: this.promptRunning,
-          isCompacting: this.inner.isCompacting,
+          isPromptRunning: this.promptRunningCount > 0,
+          isCompacting: this.compactionRunningCount > 0 || this.inner.isCompacting,
           autoCompactionEnabled: this.inner.autoCompactionEnabled,
           autoRetryEnabled: this.inner.autoRetryEnabled,
           model: model ? { id: model.id, provider: model.provider } : undefined,
@@ -342,6 +375,37 @@ export class AgentSessionWrapper {
         invalidateModelsCache();
         invalidateSessionListCache();
         return { id: model.id, provider: model.provider };
+      }
+
+      case "clone": {
+        if (this.isRunning()) return { created: false, reason: "busy" };
+
+        const activeLeafId = typeof command.activeLeafId === "string" ? command.activeLeafId : null;
+        const sessionManager = this.inner.sessionManager;
+        const liveLeafId = sessionManager.getLeafId();
+        if (!activeLeafId || !liveLeafId || !sessionManager.isPersisted()) {
+          return { created: false, reason: "nothing_to_clone" };
+        }
+        if (activeLeafId !== liveLeafId) {
+          return { created: false, reason: "stale_leaf" };
+        }
+
+        const sourceSessionFile = this.inner.sessionFile ?? sessionManager.getSessionFile();
+        if (!sourceSessionFile) return { created: false, reason: "missing_source" };
+
+        const result = cloneSessionBranch({
+          sourceSessionFile,
+          sourceSessionDir: sessionManager.getSessionDir(),
+          sourceSessionId: this.inner.sessionId,
+          activeLeafId,
+        });
+        if (result.status !== "created") {
+          return { created: false, reason: result.status };
+        }
+
+        cacheSessionPath(result.newSessionId, result.newSessionFile);
+        invalidateSessionListCache();
+        return { created: true, newSessionId: result.newSessionId };
       }
 
       case "fork": {
@@ -397,12 +461,16 @@ export class AgentSessionWrapper {
       }
 
       case "compact": {
+        // Claim compaction before invoking the native async method: its public
+        // isCompacting flag may not flip until after an initial await.
+        this.compactionRunningCount += 1;
+        notifyRunningChange();
         try {
-          return await this.withFinalRunningNotification(() =>
-            this.inner.compact(command.customInstructions as string | undefined)
-          );
+          return await this.inner.compact(command.customInstructions as string | undefined);
         } finally {
+          this.compactionRunningCount = Math.max(0, this.compactionRunningCount - 1);
           invalidateSessionListCache();
+          notifyRunningChange();
         }
       }
 

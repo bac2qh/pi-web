@@ -74,6 +74,7 @@ lib/
   npx.ts               npx runner used by skill install
   pi-types.ts          local structural types for pi SDK objects
   rpc-manager.ts      AgentSessionWrapper + registry + startRpcSession
+  session-clone.ts    disposable native active-branch extraction for /clone
   session-reader.ts   SessionManager wrappers + path cache + buildSessionContext adapter
   tool-presets.ts     PRESET_NONE/DEFAULT/FULL + getPresetFromTools()
   types.ts            shared TypeScript types
@@ -98,7 +99,7 @@ components/
   TabBar.tsx          tab bar (Chat + open file tabs)
 
 hooks/
-  useAgentSession.ts  messages + streaming + SSE + fork/navigate/reconciliation logic
+  useAgentSession.ts  messages + streaming + SSE + fork/clone/navigate/reconciliation logic
   useAudio.ts         completion sound + browser AudioContext unlock
   useDragDrop.ts      shared drag/drop state
   useIsMobile.ts      responsive breakpoint hook
@@ -114,14 +115,16 @@ hooks/
 - `globalThis` survives Next.js hot-reload; plain module-level Map does not
 - Idle timeout: 10 minutes. Concurrent `startRpcSession()` calls share a single start Promise (`globalThis.__piStartLocks`)
 
-### Fork must destroy the wrapper immediately
-`AgentSession.fork()` **mutates the wrapper's inner state in-place** — after fork, `inner.sessionId` is the *new* session's id. If the wrapper stays alive in the registry under the old id, the next request gets the already-forked state and subsequent forks produce a corrupt `parentSession` chain.
+### Fork and clone wrapper lifecycles
+- Contextual **Fork** reopens the source on a disposable `SessionManager`, extracts the path before the selected user prompt, caches the new child, and destroys the source wrapper because the UI immediately transitions to the child. It does not mutate the live manager with `createBranchedSession()`.
+- `/clone` first requires the browser's displayed leaf to match the live manager leaf, then calls `createBranchedSession()` on a separately reopened disposable manager. It keeps the source wrapper alive and the UI on the source; only the ordinary session-list cache/refresh path changes.
+- Web clone deliberately does not emit Pi TUI replacement events (`session_before_fork`, `session_shutdown`, or clone `session_start`). File contents and `parentSession` ancestry remain native Pi behavior.
+- Each prompt claims its own running count before awaiting extension binding, so overlapping accepted prompts cannot be overtaken by clone. Compaction is claimed before its native async call for the same reason. Exact `/clone` is also intercepted before image or streaming steer/follow-up delivery.
 
-**Fix**: `send("fork")` captures `newSessionId`, then calls `this.destroy()` before returning. The next request for the original session reloads a clean AgentSession from the original file.
-
-### Two kinds of branching — don't confuse them
-- **Fork** (Fork button on user message): creates a new independent `.jsonl` file. Shown as a child in the sidebar tree via `parentSession` header field.
-- **In-session branch** (Continue button / BranchNavigator): calls `navigate_tree` within the same file. Multiple entries share the same `parentId`. Switching between them calls `/api/sessions/[id]/context?leafId=`.
+### Three branching operations — don't confuse them
+- **Fork / New session** (button on a historical user message): creates a child `.jsonl` from before that prompt and selects it.
+- **Clone** (`/clone`): creates a child `.jsonl` containing the complete displayed active branch through its current leaf, refreshes the sidebar, and leaves the source selected.
+- **In-session branch / Edit from here** (historical user message / BranchNavigator): calls `navigate_tree` within the same file. Multiple entries share the same `parentId`. Switching between them calls `/api/sessions/[id]/context?leafId=`.
 
 ### Session files can be fully rewritten
 `parentSession` in the header is **display metadata only** — has zero effect on chat content. Safe to `writeFileSync` the entire file (pi does this itself during migrations). Used when cascade-reparenting children on delete.
@@ -190,7 +193,7 @@ Location: `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`
 {"type":"session_info","id":"...","parentId":"...","name":"user-defined name"}
 ```
 
-`entryIds[]` in `SessionContext` is a parallel array to `messages[]` — maps each displayed message back to its `.jsonl` entry id, used for fork and navigate_tree calls.
+`entryIds[]` in `SessionContext` is a parallel array to `messages[]` — maps each displayed message back to its `.jsonl` entry id, used for fork and `navigate_tree` calls. The displayed active leaf is also sent with `/clone` and must equal the live wrapper leaf before extraction.
 
 ---
 

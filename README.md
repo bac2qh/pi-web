@@ -40,7 +40,7 @@ PI_WEB_NO_OPEN=1 pi-web         # useful when running as a background service
 ## Features
 
 - **Pick work back up**: browse previous pi conversations by project without digging through terminal history or session paths.
-- **Try different directions safely**: continue from an earlier message or fork a session into a separate route.
+- **Try different directions safely**: edit from an earlier message, fork before a historical prompt, or run `/clone` to copy the complete active branch.
 - **Work across branches**: switch Git worktrees from the sidebar so new sessions and the Explorer follow the checkout you choose.
 - **Chat beside the project**: browse files on the left and preview source, docs, images, audio, and PDFs on the right while the agent works.
 - **See session state clearly**: context usage, cost, compaction state, and system prompt details are visible from the top bar.
@@ -53,7 +53,8 @@ PI_WEB_NO_OPEN=1 pi-web         # useful when running as a background service
 - **Model config**: the Models panel reads and writes `models.json` in the pi agent directory. Model lists and defaults come from pi's config.
 - **File access**: file browsing and preview are scoped to the selected project directory and working directories that appear in sessions.
 - **Git worktrees**: see [Worktrees in pi-web](./docs/worktrees.md) for when the switcher appears, how new worktrees are created, and what removal does.
-- **Forks vs in-session branches**: Fork creates a new `.jsonl` file. "Edit from here" creates another branch inside the same session file.
+- **Branch operations**: "Edit from here" creates a branch inside the current session file. Fork creates a child `.jsonl` from before the selected historical prompt and opens it. `/clone` creates an ordinary child session containing the complete active branch through the current position; pi-web refreshes the sidebar but stays on the source session.
+- **Clone host boundary**: `/clone` uses Pi's native session-file extraction and ancestry format, but it does not replace the live web session or emit the TUI's fork/clone extension lifecycle events.
 
 ## Development
 
