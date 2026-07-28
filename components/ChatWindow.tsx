@@ -6,6 +6,7 @@ import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent,
 import type { AgentMessage, AssistantContentBlock, AssistantMessage, ExtensionUiRequest, SessionInfo, SessionTreeNode, ToolResultMessage } from "@/lib/types";
 import { normalizeCustomPanelLines, parseAnsiLine } from "@/lib/ansi";
 import { countToolCallBlocks, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
+import type { MermaidView } from "@/lib/mermaid-display";
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
@@ -197,6 +198,17 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   // Only render the last N messages initially. When the user scrolls to the
   // top, load another page while keeping the scroll position stable.
   const [visibleCount, setVisibleCount] = useState(VISIBLE_PAGE_SIZE);
+  // Settled process folding can remount text under a different parent. Keep only
+  // the user's view choice at the mounted-session boundary; SVG state stays local.
+  const [mermaidViewSelections, setMermaidViewSelections] = useState<Map<string, MermaidView>>(() => new Map());
+  const handleMermaidViewChange = useCallback((key: string, view: MermaidView) => {
+    setMermaidViewSelections((current) => {
+      if (current.get(key) === view) return current;
+      const next = new Map(current);
+      next.set(key, view);
+      return next;
+    });
+  }, []);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const prevScrollDistanceRef = useRef<number | null>(null);
 
@@ -490,7 +502,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
                 if (idx === lastUserIdx) { (lastUserMsgRef as { current: HTMLDivElement | null }).current = el; }
               };
 
-              const renderMessage = (idx: number, options: { attachRef?: boolean; keyPrefix?: string; messageOverride?: AgentMessage; showTimestamp?: boolean } = {}): ReactNode => {
+              const renderMessage = (idx: number, options: { attachRef?: boolean; keyPrefix?: string; messageOverride?: AgentMessage; showTimestamp?: boolean; assistantBlockIndices?: number[] } = {}): ReactNode => {
                 const msg = options.messageOverride ?? messages[idx];
                 const prevAssistantEntryId =
                   msg.role === "user" && idx > 0 && messages[idx - 1].role === "assistant"
@@ -530,6 +542,9 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
                     showTimestamp={showTimestamp}
                     prevTimestamp={idx > 0 ? (messages[idx - 1] as AgentMessage & { timestamp?: number }).timestamp : undefined}
                     sessionId={session?.id ?? sessionIdRef.current ?? undefined}
+                    assistantBlockIndices={options.assistantBlockIndices}
+                    mermaidViewSelections={mermaidViewSelections}
+                    onMermaidViewChange={handleMermaidViewChange}
                   />
                 );
                 if (!isVisible || options.attachRef === false || currentRefIdx === undefined) return view;
@@ -600,7 +615,13 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
                       toolCallCount={countToolCalls(messages, visibleProcessIndices) + countToolCallBlocks(finalSplit.processBlocks)}
                     >
                       {visibleProcessIndices.map((processIdx) => renderMessage(processIdx, { attachRef: false, keyPrefix: "process" }))}
-                      {finalProcessMessage && renderMessage(finalAssistantIdx, { attachRef: false, keyPrefix: "process-final", messageOverride: finalProcessMessage, showTimestamp: false })}
+                      {finalProcessMessage && renderMessage(finalAssistantIdx, {
+                        attachRef: false,
+                        keyPrefix: "process-final",
+                        messageOverride: finalProcessMessage,
+                        showTimestamp: false,
+                        assistantBlockIndices: finalSplit.processBlockIndices,
+                      })}
                     </ProcessDetailsGroup>
                   );
                   rendered.push(
@@ -614,7 +635,10 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
                 }
 
                 if (finalAnswerMessage) {
-                  rendered.push(renderMessage(finalAssistantIdx, { messageOverride: finalAnswerMessage }));
+                  rendered.push(renderMessage(finalAssistantIdx, {
+                    messageOverride: finalAnswerMessage,
+                    assistantBlockIndices: finalSplit.answerBlockIndices,
+                  }));
                 }
                 for (let renderIdx = finalAssistantIdx + 1; renderIdx < endIdx; renderIdx++) {
                   rendered.push(renderMessage(renderIdx));
@@ -634,7 +658,15 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
               );
             })()}
             {streamState.isStreaming && streamState.streamingMessage && (
-              <MessageView message={streamState.streamingMessage as AgentMessage} isStreaming modelNames={modelNames} cwd={messageCwd} onOpenFile={onOpenFile} />
+              <MessageView
+                message={streamState.streamingMessage as AgentMessage}
+                isStreaming
+                modelNames={modelNames}
+                cwd={messageCwd}
+                onOpenFile={onOpenFile}
+                mermaidViewSelections={mermaidViewSelections}
+                onMermaidViewChange={handleMermaidViewChange}
+              />
             )}
 
             {agentRunning && !streamState.streamingMessage && (

@@ -408,6 +408,10 @@ pre, code {
   color: var(--text);
   border-color: color-mix(in srgb, var(--border) 70%, var(--text-muted));
 }
+.markdown-code-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 .markdown-code-action:disabled {
   color: var(--text-dim);
   cursor: not-allowed;
