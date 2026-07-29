@@ -1,4 +1,9 @@
-import { getRunningRpcSessionIds, subscribeRunningSessions } from "@/lib/rpc-manager";
+import {
+  getRunningRpcSessionIds,
+  getSessionListRefreshGeneration,
+  subscribeRunningSessions,
+  subscribeSessionListRefresh,
+} from "@/lib/rpc-manager";
 
 export const dynamic = "force-dynamic";
 
@@ -15,9 +20,16 @@ export async function GET(req: Request) {
 
       // Subscribe BEFORE taking the initial snapshot so no state change can slip
       // through the gap between snapshot and subscription.
-      const unsubscribe = subscribeRunningSessions((ids) => {
+      const unsubscribeRunning = subscribeRunningSessions((ids) => {
         try {
           encode({ type: "running", runningSessionIds: ids });
+        } catch {
+          // controller already closed
+        }
+      });
+      const unsubscribeSessionListRefresh = subscribeSessionListRefresh((generation) => {
+        try {
+          encode({ type: "sessions_changed", sessionListGeneration: generation });
         } catch {
           // controller already closed
         }
@@ -26,6 +38,9 @@ export async function GET(req: Request) {
       // Initial snapshot so the client renders the correct state immediately.
       // (A duplicate frame here is harmless: the client just sets the same set.)
       encode({ type: "running", runningSessionIds: getRunningRpcSessionIds() });
+      // Replay the current discovery generation on every initial connection and
+      // reconnect so a change published during an SSE outage cannot be lost.
+      encode({ type: "sessions_changed", sessionListGeneration: getSessionListRefreshGeneration() });
 
       // Heartbeat to keep the connection alive through proxies/timeouts.
       const heartbeat = setInterval(() => {
@@ -38,7 +53,8 @@ export async function GET(req: Request) {
 
       const cleanup = () => {
         clearInterval(heartbeat);
-        unsubscribe();
+        unsubscribeRunning();
+        unsubscribeSessionListRefresh();
         try { controller.close(); } catch { /* already closed */ }
       };
 
