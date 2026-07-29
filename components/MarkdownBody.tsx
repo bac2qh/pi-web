@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vs } from "react-syntax-highlighter/dist/cjs/styles/prism";
@@ -15,6 +15,7 @@ import {
   buildMermaidRenderKey,
   buildMermaidViewStateKey,
   enqueueMermaidOperation,
+  finalizeMermaidSvg,
   getMermaidModeState,
   mermaidDisplayConfig,
   type MermaidView,
@@ -193,21 +194,7 @@ function MermaidBlock({
   const [failedKey, setFailedKey] = useState<string | null>(null);
   const [failureSignal, setFailureSignal] = useState<{ stage: "load" | "parse" | "render"; name: string } | null>(null);
   const [renderStage, setRenderStage] = useState("idle");
-  const previewRef = useRef<HTMLDivElement>(null);
   const currentKey = buildMermaidRenderKey(isDark, transcriptFontSize, code);
-
-  useLayoutEffect(() => {
-    if (renderedKey !== currentKey) return;
-    const svgElement = previewRef.current?.querySelector("svg");
-    const viewBox = svgElement?.viewBox.baseVal;
-    if (!svgElement || !viewBox || !Number.isFinite(viewBox.width) || viewBox.width <= 0) return;
-
-    svgElement.setAttribute("width", String(viewBox.width));
-    svgElement.dataset.mermaidNaturalWidth = String(viewBox.width);
-    svgElement.style.setProperty("width", `${viewBox.width}px`, "important");
-    svgElement.style.setProperty("height", "auto", "important");
-    svgElement.style.setProperty("max-width", "none", "important");
-  }, [currentKey, renderedKey, svg]);
 
   useEffect(() => {
     if (effectiveView !== "preview") return;
@@ -249,7 +236,7 @@ function MermaidBlock({
       });
 
       if (result && !cancelled) {
-        setSvg(result.svg);
+        setSvg(finalizeMermaidSvg(result.svg));
         setRenderedKey(currentKey);
         setRenderStage("complete");
       }
@@ -307,7 +294,6 @@ function MermaidBlock({
       />
     ) : (
       <div
-        ref={previewRef}
         className="mermaid-block"
         dangerouslySetInnerHTML={{ __html: svg }}
       />

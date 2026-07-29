@@ -429,7 +429,6 @@ pre, code {
 }
 .mermaid-block svg {
   display: block;
-  max-width: none !important;
 }
 .mermaid-block-loading {
   min-height: 120px;
