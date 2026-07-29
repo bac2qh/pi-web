@@ -74,6 +74,7 @@ lib/
   npx.ts               npx runner used by skill install
   pi-types.ts          local structural types for pi SDK objects
   rpc-manager.ts      AgentSessionWrapper + registry + startRpcSession
+  hosted-implementation-session.ts  process-local Start/Orchestrate host capability
   session-clone.ts    disposable native active-branch extraction for /clone
   session-reader.ts   SessionManager wrappers + path cache + buildSessionContext adapter
   tool-presets.ts     PRESET_NONE/DEFAULT/FULL + getPresetFromTools()
@@ -114,6 +115,14 @@ hooks/
 - One `AgentSessionWrapper` per session id, keyed in `globalThis.__piSessions`
 - `globalThis` survives Next.js hot-reload; plain module-level Map does not
 - Idle timeout: 10 minutes. Concurrent `startRpcSession()` calls share a single start Promise (`globalThis.__piStartLocks`)
+
+### Pi Web-hosted implementation sessions
+- `lib/hosted-implementation-session.ts` publishes a versioned `Symbol.for("pi-web.hosted-implementation-session")` capability only inside the Pi Web server process. Compatible same-runtime hot reload invalidates/replaces the record; foreign or incompatible records are preserved.
+- Start/Orchestrate materialize the native JSONL first. Pi Web accepts exactly the six-field ID/file/cwd/kickoff/kind/signal request, opens that exact owner under the existing per-session startup lock, publishes one wrapper, initiates extension binding, and schedules the kickoff through a wrapper-owned background prompt without awaiting binding, preflight, or settlement. Target Stop or wrapper destruction cancels a scheduled kickoff before native dispatch; after dispatch Stop uses native abort.
+- The optional source signal is checked immediately before synchronous publication when Pi supplies one. Publication transfers ownership: later source cancellation/Stop cannot abort the target, and only target-addressed ordinary controls can steer, follow up, or stop it. A duplicate request for the same owner is rejected without a second ownership acceptance, kickoff, discovery refresh, or detached fallback.
+- Hosted wrappers retain accepted-prompt/compaction running claims and are never idle-evicted while active. Real cleanup calls native `AgentSession.dispose()` once; full graceful `session_shutdown` parity would require the deliberately excluded `AgentSessionRuntime`.
+- Hosted registration invalidates ordinary session discovery and advances a process-global `sessions_changed` generation over the existing running SSE stream. Initial and reconnected streams replay the generation; the sidebar consumes it only after the latest `/api/sessions` load succeeds, retries failed generations on replay, and ignores stale overlapping responses without changing selection or URL.
+- Capability absence is the detached-print compatibility boundary in the launcher repository. A present invalid or failing capability never falls back because acceptance may be ambiguous.
 
 ### Fork and clone wrapper lifecycles
 - Contextual **Fork** reopens the source on a disposable `SessionManager`, extracts the path before the selected user prompt, caches the new child, and destroys the source wrapper because the UI immediately transitions to the child. It does not mutate the live manager with `createBranchedSession()`.

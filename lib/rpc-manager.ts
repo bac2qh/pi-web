@@ -1,9 +1,16 @@
 import { createAgentSessionFromServices, createAgentSessionServices, getAgentDir, initTheme, SessionManager, Theme } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
+import { resolve as resolvePath } from "node:path";
 import { invalidateModelsCache } from "./models-cache";
 import { cacheSessionPath, invalidateSessionListCache } from "./session-reader";
 import { cloneSessionBranch } from "./session-clone";
+import {
+  invalidateHostedImplementationCapability,
+  registerHostedImplementationCapability,
+  type HostedImplementationLaunchRequest,
+  type HostedImplementationLifecycle,
+} from "./hosted-implementation-session";
 import type { SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import type { AgentSessionLike, ExtensionUiContextLike, ToolInfo } from "./pi-types";
 import type { ExtensionUiRequest, ExtensionUiResponse, ExtensionWidgetItem } from "./types";
@@ -58,6 +65,7 @@ type ExtensionBindingOptions = {
 };
 
 const CODING_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+export const RPC_SESSION_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
 // Extensions require a complete Theme, while the web UI applies its own styling.
 class PlainTextTheme extends Theme {
@@ -119,10 +127,16 @@ export class AgentSessionWrapper {
   private forceEmptySystemPrompt = false;
   private unsubscribe: (() => void) | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
-  private onDestroyCallback: (() => void) | null = null;
+  private onDestroyCallbacks = new Set<() => void>();
+  private hostedKickoffState: "none" | "scheduled" | "dispatched" | "cancelled" | "failed" = "none";
+  private hostedKickoffLifecycle: HostedImplementationLifecycle | null = null;
+  private nativeDisposed = false;
   private _alive = true;
 
-  constructor(public readonly inner: AgentSessionLike) {}
+  constructor(
+    public readonly inner: AgentSessionLike,
+    private readonly idleTimeoutMs = RPC_SESSION_IDLE_TIMEOUT_MS,
+  ) {}
 
   get sessionId(): string {
     return this.inner.sessionId;
@@ -167,7 +181,10 @@ export class AgentSessionWrapper {
 
   beginExtensionBinding(options: ExtensionBindingOptions = {}): void {
     void this.ensureExtensionsBound(options).catch((err) => {
-      console.error("[pi-web] failed to dispatch session_start to extensions:", err instanceof Error ? err.message : err);
+      const errorClass = err instanceof Error && /^[A-Za-z_$][A-Za-z0-9_$.-]{0,79}$/.test(err.name)
+        ? err.name
+        : "Error";
+      console.error(`[pi-web] session_start dispatch failed for session ${this.inner.sessionId} (${errorClass})`);
     });
   }
 
@@ -269,8 +286,17 @@ export class AgentSessionWrapper {
   }
 
   private resetIdleTimer(): void {
+    if (!this._alive) return;
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    this.idleTimer = setTimeout(() => this.destroy(), 10 * 60 * 1000);
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      if (!this._alive) return;
+      if (this.isRunning()) {
+        this.resetIdleTimer();
+        return;
+      }
+      this.destroy();
+    }, this.idleTimeoutMs);
   }
 
   onEvent(listener: EventListener): () => void {
@@ -283,7 +309,98 @@ export class AgentSessionWrapper {
   }
 
   onDestroy(cb: () => void): void {
-    this.onDestroyCallback = cb;
+    this.onDestroyCallbacks.add(cb);
+  }
+
+  private callLifecycle(callback: () => void): void {
+    try { callback(); } catch { /* lifecycle diagnostics must not affect the target */ }
+  }
+
+  private beginPrompt(
+    message: string,
+    promptImages?: Array<{ type: "image"; data: string; mimeType: string }>,
+    streamingBehavior?: "steer" | "followUp",
+    lifecycle?: HostedImplementationLifecycle,
+    publicErrorMessage?: string,
+  ): void {
+    const promptPromise = this.inner.prompt(message, {
+      ...(promptImages?.length ? { images: promptImages } : {}),
+      ...(streamingBehavior ? { streamingBehavior } : {}),
+      source: "rpc",
+    });
+    if (lifecycle) this.callLifecycle(lifecycle.kickoffDispatched);
+
+    promptPromise.then(() => {
+      this.releasePromptRun();
+      this.resetIdleTimer();
+      if (!streamingBehavior) this.emit({ type: "prompt_done" });
+      if (lifecycle) this.callLifecycle(lifecycle.targetSettled);
+    }, (error) => {
+      this.releasePromptRun();
+      this.resetIdleTimer();
+      invalidateSessionListCache();
+      this.emit({
+        type: "prompt_error",
+        errorMessage: publicErrorMessage ?? (error instanceof Error ? error.message : String(error)),
+      });
+      if (!streamingBehavior) this.emit({ type: "prompt_done" });
+      if (lifecycle) this.callLifecycle(() => lifecycle.targetFailed(error));
+    });
+  }
+
+  /**
+   * Claim and schedule the hosted kickoff without returning a target-owned
+   * promise to the source launcher. Extension binding and prompt preflight run
+   * in this wrapper-owned background task.
+   */
+  startHostedPrompt(message: string, lifecycle: HostedImplementationLifecycle): boolean {
+    if (!this._alive || this.hostedKickoffState !== "none") return false;
+    this.hostedKickoffState = "scheduled";
+    this.hostedKickoffLifecycle = lifecycle;
+    this.callLifecycle(lifecycle.ownershipAccepted);
+    this.claimPromptRun();
+    this.callLifecycle(lifecycle.kickoffScheduled);
+
+    void (async () => {
+      try {
+        await this.waitForExtensionsBound();
+        // Target Stop or owner cleanup may have cancelled the wrapper-owned
+        // kickoff while extension binding was unresolved. There is no await
+        // between this check, marking dispatch, and invoking native prompt.
+        if (!this._alive || this.hostedKickoffState !== "scheduled") return;
+        this.hostedKickoffState = "dispatched";
+        this.hostedKickoffLifecycle = null;
+        this.beginPrompt(message, undefined, undefined, lifecycle, "Hosted target prompt failed");
+      } catch (error) {
+        if (this.hostedKickoffState === "cancelled") return;
+        this.hostedKickoffState = "failed";
+        this.hostedKickoffLifecycle = null;
+        this.releasePromptRun();
+        this.resetIdleTimer();
+        invalidateSessionListCache();
+        this.emit({ type: "prompt_error", errorMessage: "Hosted target prompt failed" });
+        this.emit({ type: "prompt_done" });
+        this.callLifecycle(() => lifecycle.targetFailed(error));
+      }
+    })();
+    return true;
+  }
+
+  private cancelHostedKickoffBeforeDispatch(): boolean {
+    if (this.hostedKickoffState !== "scheduled") return false;
+    this.hostedKickoffState = "cancelled";
+    const lifecycle = this.hostedKickoffLifecycle;
+    this.hostedKickoffLifecycle = null;
+    this.releasePromptRun();
+    this.resetIdleTimer();
+    invalidateSessionListCache();
+    this.emit({ type: "prompt_done" });
+    if (lifecycle) {
+      const error = new Error("Hosted target kickoff was stopped before dispatch");
+      error.name = "AbortError";
+      this.callLifecycle(() => lifecycle.targetFailed(error));
+    }
+    return true;
   }
 
   async send(command: Record<string, unknown>): Promise<unknown> {
@@ -306,36 +423,20 @@ export class AgentSessionWrapper {
 
     switch (type) {
       case "prompt": {
-        // Fire and forget — events come via subscribe
+        // Fire and forget — events come via subscribe.
         const promptImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
         const streamingBehavior = command.streamingBehavior as "steer" | "followUp" | undefined;
-        let promptPromise: Promise<void>;
         try {
-          promptPromise = this.inner.prompt(command.message as string, {
-            ...(promptImages?.length ? { images: promptImages } : {}),
-            ...(streamingBehavior ? { streamingBehavior } : {}),
-            source: "rpc",
-          });
+          this.beginPrompt(command.message as string, promptImages, streamingBehavior);
         } catch (error) {
           this.releasePromptRun();
           throw error;
         }
-        promptPromise.then(() => {
-          this.releasePromptRun();
-          if (!streamingBehavior) this.emit({ type: "prompt_done" });
-        }, (error) => {
-          this.releasePromptRun();
-          invalidateSessionListCache();
-          this.emit({
-            type: "prompt_error",
-            errorMessage: error instanceof Error ? error.message : String(error),
-          });
-          if (!streamingBehavior) this.emit({ type: "prompt_done" });
-        });
         return null;
       }
 
       case "abort":
+        this.cancelHostedKickoffBeforeDispatch();
         await this.withFinalRunningNotification(() => this.inner.abort());
         return null;
 
@@ -469,6 +570,7 @@ export class AgentSessionWrapper {
           return await this.inner.compact(command.customInstructions as string | undefined);
         } finally {
           this.compactionRunningCount = Math.max(0, this.compactionRunningCount - 1);
+          this.resetIdleTimer();
           invalidateSessionListCache();
           notifyRunningChange();
         }
@@ -602,14 +704,27 @@ export class AgentSessionWrapper {
 
   destroy(): void {
     if (!this._alive) return;
+    // Owner deletion or process cleanup must not let an unresolved extension
+    // binding dispatch its hosted kickoff against a disposed native session.
+    this.cancelHostedKickoffBeforeDispatch();
     this._alive = false;
     if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
     this.unsubscribe?.();
+    this.unsubscribe = null;
     for (const pending of this.pendingUiResponses.values()) pending.cancel();
     for (const id of Array.from(this.activeCustomUis.keys())) this.closeCustomUi(id, undefined);
     this.pendingUiResponses.clear();
     this.pendingUiRequests.clear();
-    this.onDestroyCallback?.();
+    this.listeners = [];
+    if (!this.nativeDisposed) {
+      this.nativeDisposed = true;
+      try { this.inner.dispose(); } catch { /* disposal is best effort and idempotent here */ }
+    }
+    for (const callback of this.onDestroyCallbacks) {
+      try { callback(); } catch { /* cleanup listeners are isolated */ }
+    }
+    this.onDestroyCallbacks.clear();
     notifyRunningChange();
   }
 
@@ -949,16 +1064,38 @@ export class AgentSessionWrapper {
 // Session registry
 // ============================================================================
 
+export interface RpcSessionStartResult {
+  session: AgentSessionWrapper;
+  realSessionId: string;
+}
+
+export interface PreparedRpcSession extends RpcSessionStartResult {
+  forceEmptySystemPrompt?: boolean;
+}
+
+export interface RpcSessionStartHooks {
+  validatePrepared?(prepared: PreparedRpcSession): void;
+  beforePublication?(): void;
+  afterPublication?(published: RpcSessionStartResult): void;
+}
+
 declare global {
   var __piSessions: Map<string, AgentSessionWrapper> | undefined;
-  var __piStartLocks: Map<string, Promise<{ session: AgentSessionWrapper; realSessionId: string }>> | undefined;
+  var __piStartLocks: Map<string, Promise<RpcSessionStartResult>> | undefined;
   var __piRunningListeners: Set<(ids: string[]) => void> | undefined;
+  var __piSessionListRefreshListeners: Set<(generation: number) => void> | undefined;
+  var __piSessionListRefreshGeneration: number | undefined;
+  var __piRpcCleanupRegistered: boolean | undefined;
 }
 
 function getRegistry(): Map<string, AgentSessionWrapper> {
-  if (!globalThis.__piSessions) {
-    globalThis.__piSessions = new Map();
-    const cleanup = () => globalThis.__piSessions?.forEach((s) => s.destroy());
+  if (!globalThis.__piSessions) globalThis.__piSessions = new Map();
+  if (!globalThis.__piRpcCleanupRegistered) {
+    globalThis.__piRpcCleanupRegistered = true;
+    const cleanup = () => {
+      invalidateHostedImplementationCapability();
+      for (const session of [...(globalThis.__piSessions?.values() ?? [])]) session.destroy();
+    };
     process.once("exit", cleanup);
     process.once("SIGINT", cleanup);
     process.once("SIGTERM", cleanup);
@@ -966,7 +1103,7 @@ function getRegistry(): Map<string, AgentSessionWrapper> {
   return globalThis.__piSessions;
 }
 
-function getLocks(): Map<string, Promise<{ session: AgentSessionWrapper; realSessionId: string }>> {
+function getLocks(): Map<string, Promise<RpcSessionStartResult>> {
   if (!globalThis.__piStartLocks) globalThis.__piStartLocks = new Map();
   return globalThis.__piStartLocks;
 }
@@ -984,12 +1121,9 @@ export function getRunningRpcSessionIds(): string[] {
 }
 
 // ----------------------------------------------------------------------------
-// Running-status broadcaster
-//
-// Pushes the current set of running session ids to subscribers whenever any
-// session's running state may have changed. This lets the sidebar receive live
-// updates over SSE instead of polling. Listeners live on globalThis so they
-// survive Next.js hot-reload.
+// Running-status and ordinary session-list refresh broadcasters. Both use the
+// existing running SSE route; only native session discovery remains
+// authoritative for SessionInfo data.
 // ----------------------------------------------------------------------------
 
 function getRunningListeners(): Set<(ids: string[]) => void> {
@@ -997,11 +1131,38 @@ function getRunningListeners(): Set<(ids: string[]) => void> {
   return globalThis.__piRunningListeners;
 }
 
+function getSessionListRefreshListeners(): Set<(generation: number) => void> {
+  if (!globalThis.__piSessionListRefreshListeners) globalThis.__piSessionListRefreshListeners = new Set();
+  return globalThis.__piSessionListRefreshListeners;
+}
+
 /** Subscribe to running-session-id changes. Returns an unsubscribe function. */
 export function subscribeRunningSessions(listener: (ids: string[]) => void): () => void {
   const listeners = getRunningListeners();
   listeners.add(listener);
   return () => { listeners.delete(listener); };
+}
+
+/** Subscribe to a request to reload the ordinary native session list. */
+export function subscribeSessionListRefresh(listener: (generation: number) => void): () => void {
+  const listeners = getSessionListRefreshListeners();
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+/** Current replay token for initial and reconnected SSE consumers. */
+export function getSessionListRefreshGeneration(): number {
+  return globalThis.__piSessionListRefreshGeneration ?? 0;
+}
+
+/** Invalidate server discovery and prompt connected browsers to reload it. */
+export function notifySessionListRefresh(): void {
+  invalidateSessionListCache();
+  const generation = getSessionListRefreshGeneration() + 1;
+  globalThis.__piSessionListRefreshGeneration = generation;
+  for (const listener of getSessionListRefreshListeners()) {
+    try { listener(generation); } catch { /* ignore listener errors */ }
+  }
 }
 
 let lastRunningSnapshot = "";
@@ -1021,6 +1182,61 @@ export function notifyRunningChange(): void {
 }
 
 /**
+ * Internal shared-start seam. The final hook runs immediately before a fully
+ * synchronous subscribe/cache/publication/binding block. A failure before
+ * publication disposes the unpublished native session; post-publication hook
+ * failures are target-owned and cannot turn into a caller retry.
+ */
+export async function getOrCreateRpcSession(
+  sessionId: string,
+  prepare: () => Promise<PreparedRpcSession>,
+  hooks: RpcSessionStartHooks = {},
+): Promise<RpcSessionStartResult> {
+  const registry = getRegistry();
+  const locks = getLocks();
+
+  const existing = registry.get(sessionId);
+  if (existing?.isAlive()) return { session: existing, realSessionId: existing.sessionId || sessionId };
+
+  const inflight = locks.get(sessionId);
+  if (inflight) return inflight;
+
+  const starting = (async () => {
+    let prepared: PreparedRpcSession | undefined;
+    let published = false;
+    try {
+      prepared = await prepare();
+      hooks.validatePrepared?.(prepared);
+      hooks.beforePublication?.();
+
+      // No asynchronous gap is allowed from the final cancellation/validity
+      // check through ownership publication.
+      const session = prepared.session;
+      const realSessionId = prepared.realSessionId;
+      session.start();
+      const realSessionFile = session.sessionFile;
+      if (realSessionFile) cacheSessionPath(realSessionId, realSessionFile);
+      session.onDestroy(() => {
+        if (registry.get(realSessionId) === session) registry.delete(realSessionId);
+      });
+      registry.set(realSessionId, session);
+      published = true;
+      session.beginExtensionBinding({ forceEmptySystemPrompt: prepared.forceEmptySystemPrompt });
+
+      const result: RpcSessionStartResult = { session, realSessionId };
+      try { hooks.afterPublication?.(result); } catch { /* target-owned after publication */ }
+      return result;
+    } catch (error) {
+      if (prepared && !published) prepared.session.destroy();
+      throw error;
+    }
+  })().finally(() => locks.delete(sessionId));
+
+  locks.set(sessionId, starting);
+  return starting;
+}
+
+/**
  * Get or create an AgentSession for the given session.
  * For new sessions (sessionFile === ""), pi generates its own id.
  * Pass toolNames to pre-configure active tools (empty array = all tools disabled).
@@ -1029,18 +1245,10 @@ export async function startRpcSession(
   sessionId: string,
   sessionFile: string,
   cwd: string,
-  toolNames?: string[]
-): Promise<{ session: AgentSessionWrapper; realSessionId: string }> {
-  const registry = getRegistry();
-  const locks = getLocks();
-
-  const existing = registry.get(sessionId);
-  if (existing?.isAlive()) return { session: existing, realSessionId: sessionId };
-
-  const inflight = locks.get(sessionId);
-  if (inflight) return inflight;
-
-  const starting = (async () => {
+  toolNames?: string[],
+  hooks: RpcSessionStartHooks = {},
+): Promise<RpcSessionStartResult> {
+  return getOrCreateRpcSession(sessionId, async () => {
     // Some extensions access the SDK's global theme even outside the terminal UI.
     initTheme();
     const agentDir = getAgentDir();
@@ -1083,22 +1291,83 @@ export async function startRpcSession(
     // When all tools are disabled, clear the system prompt entirely.
     // pi's buildSystemPrompt always produces a non-empty prompt even with no tools;
     // keep this forced after extension resource discovery and reloads as well.
-    if (toolNames?.length === 0) {
-      wrapper.setForceEmptySystemPrompt(true);
-    }
-    wrapper.start();
+    if (toolNames?.length === 0) wrapper.setForceEmptySystemPrompt(true);
 
-    const realSessionId = inner.sessionId as string;
-    const realSessionFile = inner.sessionFile as string | undefined;
-    if (realSessionFile) cacheSessionPath(realSessionId, realSessionFile);
-
-    wrapper.onDestroy(() => registry.delete(realSessionId));
-    registry.set(realSessionId, wrapper);
-    wrapper.beginExtensionBinding({ forceEmptySystemPrompt: toolNames?.length === 0 });
-
-    return { session: wrapper, realSessionId };
-  })().finally(() => locks.delete(sessionId));
-
-  locks.set(sessionId, starting);
-  return starting;
+    return {
+      session: wrapper,
+      realSessionId: inner.sessionId as string,
+      forceEmptySystemPrompt: toolNames?.length === 0,
+    };
+  }, hooks);
 }
+
+function assertHostedTargetIdentity(
+  session: AgentSessionWrapper,
+  request: HostedImplementationLaunchRequest,
+): void {
+  if (session.sessionId !== request.targetSessionId) throw new Error("Hosted target session ID mismatch");
+  if (resolvePath(session.sessionFile) !== resolvePath(request.targetSessionFile)) {
+    throw new Error("Hosted target session file mismatch");
+  }
+  if (resolvePath(session.inner.sessionManager.getCwd()) !== resolvePath(request.targetCwd)) {
+    throw new Error("Hosted target cwd mismatch");
+  }
+}
+
+function assertHostedAttemptOpen(
+  request: HostedImplementationLaunchRequest,
+  isCapabilityActive: () => boolean,
+): void {
+  if (!isCapabilityActive()) throw new Error("Hosted capability was invalidated before publication");
+  if (request.sourceSignal?.aborted) {
+    const error = new Error("Hosted target registration was cancelled before publication");
+    error.name = "AbortError";
+    throw error;
+  }
+}
+
+async function startHostedImplementationTarget(
+  request: HostedImplementationLaunchRequest,
+  options: {
+    isCapabilityActive: () => boolean;
+    lifecycle: HostedImplementationLifecycle;
+  },
+): Promise<void> {
+  let scheduledDuringPublication = false;
+  const schedule = (session: AgentSessionWrapper): boolean => {
+    if (!session.startHostedPrompt(request.kickoff, options.lifecycle)) {
+      options.lifecycle.targetFailed(new Error("Hosted kickoff was already scheduled"));
+      return false;
+    }
+    session.onDestroy(options.lifecycle.ownerCleanedUp);
+    notifySessionListRefresh();
+    return true;
+  };
+
+  const result = await startRpcSession(
+    request.targetSessionId,
+    request.targetSessionFile,
+    request.targetCwd,
+    undefined,
+    {
+      validatePrepared: ({ session }) => assertHostedTargetIdentity(session, request),
+      beforePublication: () => assertHostedAttemptOpen(request, options.isCapabilityActive),
+      afterPublication: ({ session }) => {
+        scheduledDuringPublication = true;
+        schedule(session);
+      },
+    },
+  );
+
+  // If browser selection won the startup race, that caller published the same
+  // exact owner. Re-check cancellation/capability validity, then schedule once.
+  if (!scheduledDuringPublication) {
+    assertHostedTargetIdentity(result.session, request);
+    assertHostedAttemptOpen(request, options.isCapabilityActive);
+    if (!schedule(result.session)) throw new Error("Hosted target kickoff was already scheduled");
+  }
+}
+
+registerHostedImplementationCapability({
+  startTarget: startHostedImplementationTarget,
+});

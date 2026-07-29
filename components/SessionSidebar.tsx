@@ -13,6 +13,33 @@ declare global {
   }
 }
 
+export function isLatestSessionLoadRequest(requestId: number, latestRequestId: number): boolean {
+  return requestId === latestRequestId;
+}
+
+export function createSessionListGenerationTracker() {
+  let appliedGeneration: number | null = null;
+  const pendingGenerations = new Set<number>();
+
+  return {
+    begin(generation: number): boolean {
+      if (!Number.isSafeInteger(generation) || generation < 0) return false;
+      if (appliedGeneration !== null && generation <= appliedGeneration) return false;
+      for (const pendingGeneration of pendingGenerations) {
+        if (generation <= pendingGeneration) return false;
+      }
+      pendingGenerations.add(generation);
+      return true;
+    },
+    finish(generation: number, applied: boolean): void {
+      pendingGenerations.delete(generation);
+      if (applied && (appliedGeneration === null || generation > appliedGeneration)) {
+        appliedGeneration = generation;
+      }
+    },
+  };
+}
+
 interface Props {
   selectedSessionId: string | null;
   onSelectSession: (session: SessionInfo, isRestore?: boolean) => void;
@@ -356,16 +383,23 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // Once the SSE stream has delivered a frame it is the source of truth for
   // running state; late /api/sessions responses must not overwrite it.
   const sseAuthoritativeRef = useRef(false);
+  const sessionLoadRequestRef = useRef(0);
+  const sessionListGenerationTrackerRef = useRef(createSessionListGenerationTracker());
   const sessionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const explorerRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileExplorerRef = useRef<FileExplorerHandle>(null);
 
   const loadSessions = useCallback(async (showLoading = false) => {
+    const requestId = ++sessionLoadRequestRef.current;
     try {
       if (showLoading) setLoading(true);
       const res = await fetch("/api/sessions");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { sessions: SessionInfo[]; runningSessionIds?: string[] };
+      // A hosted discovery event can overlap the initial/manual request. Only
+      // the newest response may update browser state, so stale network order
+      // cannot hide a newly discovered target.
+      if (!isLatestSessionLoadRequest(requestId, sessionLoadRequestRef.current)) return false;
       setAllSessions(data.sessions);
       // Treat the fetched running set as an initial fallback only. Once SSE is
       // live it owns this state, so a slow fetch can't revive a stale snapshot.
@@ -385,10 +419,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         if (sessionRefreshTimerRef.current) clearTimeout(sessionRefreshTimerRef.current);
         sessionRefreshTimerRef.current = setTimeout(() => setSessionRefreshDone(false), 2000);
       }
+      return true;
     } catch (e) {
-      setError(String(e));
+      if (isLatestSessionLoadRequest(requestId, sessionLoadRequestRef.current)) setError(String(e));
+      return false;
     } finally {
-      if (showLoading) setLoading(false);
+      if (isLatestSessionLoadRequest(requestId, sessionLoadRequestRef.current)) setLoading(false);
     }
   }, []);
 
@@ -412,10 +448,22 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
     source.onmessage = (e) => {
       try {
-        const data = JSON.parse(e.data) as { type?: string; runningSessionIds?: string[] };
+        const data = JSON.parse(e.data) as { type?: string; runningSessionIds?: string[]; sessionListGeneration?: number };
         if (data.type === "running") {
           sseAuthoritativeRef.current = true;
           setRunningSessionIds(new Set(data.runningSessionIds ?? []));
+        } else if (data.type === "sessions_changed") {
+          const generation = data.sessionListGeneration;
+          if (typeof generation !== "number") {
+            void loadSessions(false);
+            return;
+          }
+          const tracker = sessionListGenerationTrackerRef.current;
+          if (!tracker.begin(generation)) return;
+          // Initial connection and reconnect replay the current generation. A
+          // generation is consumed only after the latest native discovery load
+          // succeeds, so a failed fetch can retry on the next replay.
+          void loadSessions(false).then((applied) => tracker.finish(generation, applied));
         }
       } catch {
         // ignore malformed frames
@@ -424,7 +472,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
     // On error EventSource auto-reconnects; keep the last known state meanwhile.
     return () => source.close();
-  }, []);
+  }, [loadSessions]);
 
   useEffect(() => {
     const previous = previousRunningSessionIdsRef.current;
