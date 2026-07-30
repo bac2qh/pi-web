@@ -15,7 +15,7 @@ Lint: `npm run lint`
 ## Architecture
 
 ```
-Browser                Next.js Server              AgentSession (in-process)
+Browser             Pi Web Node/Next Server         AgentSession (in-process)
   │                        │                               │
   ├─ GET /api/sessions ────▶ reads ~/.pi/agent/sessions/   │
   ├─ GET /api/sessions/[id] reads .jsonl file directly     │
@@ -63,6 +63,7 @@ app/api/
   skills/route.ts                 GET/PATCH loaded skills and disable-model-invocation
   skills/install/route.ts         POST install skills through npx skills add
   skills/search/route.ts          GET/POST skills.sh search
+  transport/ticket/route.ts       POST one-use ticket for a registered WebSocket channel
   worktrees/route.ts              GET/POST/DELETE git worktrees
 
 lib/
@@ -79,6 +80,7 @@ lib/
   tool-presets.ts     PRESET_NONE/DEFAULT/FULL + getPresetFromTools()
   types.ts            shared TypeScript types
   normalize.ts        normalizeToolCalls() — field name mismatch between file format and our types
+  websocket-gateway.ts typed accessor for the process-local WebSocket gateway
   worktree.ts         project/worktree resolution and git worktree operations
 
 components/
@@ -109,6 +111,15 @@ hooks/
 ---
 
 ## Key Design Decisions & Traps
+
+### Custom server and dormant WebSocket gateway
+- `npm run dev`, `npm start`, and the published `pi-web` command all enter through `bin/pi-web.js` and the Pi-Web-owned Node server in `bin/pi-web-server.js`; production alone requires an existing `.next` build.
+- One Node `http.Server` delegates ordinary requests to programmatic Next and reserves only `/_pi/websocket`. The Pi upgrade listener must leave every other path untouched so Next continues to own development HMR.
+- `bin/pi-web-transport-gateway.js` installs one V1 gateway in `globalThis.__piWebTransportGatewayV1`; `lib/websocket-gateway.ts` gives App Router code typed access to that same object across hot reloads.
+- `POST /api/transport/ticket` is dormant unless server code explicitly registers a channel. Tickets are same-origin, one-use, and expire after 30 seconds. No production channel or browser WebSocket consumer exists yet; current global and per-session SSE remain authoritative.
+- Programmatic server close is idempotent and non-exiting: it stops acceptance, releases every Pi-Web-owned WebSocket/connection/gateway/ticket/timer/global, and awaits only public Next cleanup. Production must support strict same-process start/close/restart and natural drain.
+- Next 16.2.11 development is process-scoped because public `app.close()` leaves internal Watchpack watchers referenced. Only the executed terminal launcher exits after awaited cleanup (`130` for SIGINT, `143` for SIGTERM); do not reach into private Next/Watchpack state or enumerate arbitrary process handles.
+- Do not add separate signal handlers in the server library, gateway, or App Router modules. Imported launcher/server APIs must never terminate their embedding process.
 
 ### AgentSession lifecycle (`lib/rpc-manager.ts`)
 - One `AgentSessionWrapper` per session id, keyed in `globalThis.__piSessions`

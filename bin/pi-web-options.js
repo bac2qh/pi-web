@@ -16,6 +16,7 @@ function parseLaunchOptions(args = process.argv.slice(2), env = process.env) {
       port:      { type: "string", short: "p" },
       hostname:  { type: "string", short: "H" },
       "no-open": { type: "boolean" },
+      dev:        { type: "boolean" },
     },
     strict: false,
   });
@@ -24,6 +25,7 @@ function parseLaunchOptions(args = process.argv.slice(2), env = process.env) {
     port: cliArgs.port ?? env.PORT ?? "30141",
     hostname: cliArgs.hostname ?? env.HOSTNAME ?? null,
     openBrowser: !cliArgs["no-open"] && !isEnabled(env.PI_WEB_NO_OPEN),
+    dev: cliArgs.dev === true,
   };
 }
 
