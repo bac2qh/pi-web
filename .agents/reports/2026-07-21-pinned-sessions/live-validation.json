@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "failures": [],
+  "sessionId": "00000000-0000-4000-8000-000000000018",
+  "genuineStreamingBeforeHide": true,
+  "genuineStreamingAfterHide": true,
+  "settledNormallyAfterRelease": true,
+  "sessionJsonlUnchangedByHide": true,
+  "touchPointerInputActivatedHide": true,
+  "programmaticClickFallbackUsed": false,
+  "selectedNavigationPreserved": true,
+  "revealedRunningRows": 2,
+  "screenshot": "live-running-touch.png"
+}

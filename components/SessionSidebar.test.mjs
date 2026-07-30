@@ -52,6 +52,75 @@ test("a failed discovery load may retry the replayed generation", () => {
   tracker.finish(8, true);
 });
 
+test("the sidebar composes fixed global sections before Project and a collapsed Explorer", async () => {
+  const sidebarSource = await readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8");
+  const pinnedIndex = sidebarSource.indexOf('label="Pinned"');
+  const recentIndex = sidebarSource.indexOf('label="Recent"');
+  const projectIndex = sidebarSource.indexOf("<span>Project</span>");
+  const explorerIndex = sidebarSource.indexOf("{/* File Explorer section */}");
+
+  assert.ok(pinnedIndex > 0 && pinnedIndex < recentIndex);
+  assert.ok(recentIndex < projectIndex && projectIndex < explorerIndex);
+  assert.match(sidebarSource, /const \[explorerOpen, setExplorerOpen\] = useState\(false\)/);
+  assert.match(sidebarSource, /aria-controls="sidebar-file-explorer"/);
+  assert.match(sidebarSource, /Math\.min\(rowCount, 5\) \* 54/);
+});
+
+test("shared sidebar metadata stays operation-only, optimistic, and separate from session browsing", async () => {
+  const [sidebarSource, routeSource] = await Promise.all([
+    readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/sidebar-state/route.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(sidebarSource, /fetch\("\/api\/sidebar-state", \{ cache: "no-store" \}\)/);
+  assert.match(sidebarSource, /pendingSidebarOperationsRef/);
+  assert.match(sidebarSource, /replaySidebarStateOperations/);
+  assert.match(sidebarSource, /setSidebarStateError/);
+  assert.doesNotMatch(sidebarSource, /new EventSource\("\/api\/sidebar-state/);
+  assert.doesNotMatch(sidebarSource, /setInterval\([^)]*sidebar/i);
+  assert.match(routeSource, /parseSidebarStateOperation/);
+  assert.match(routeSource, /updateSidebarState\(operation, sessions, \{ expectedSessionListGeneration: generation \}\)/);
+  assert.doesNotMatch(routeSource, /pinnedSessionIds\s*[:=]\s*body|explicitlyHiddenSessionIds\s*[:=]\s*body/);
+});
+
+test("the shared row exposes keyboard, touch, pin, hide, restore, and hidden-state semantics", async () => {
+  const [sidebarSource, cssSource] = await Promise.all([
+    readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  const selectionControl = sidebarSource.slice(
+    sidebarSource.indexOf('role="button"'),
+    sidebarSource.indexOf('{/* Fork indicator for child sessions */}'),
+  );
+  assert.match(selectionControl, /tabIndex=\{0\}/);
+  assert.match(selectionControl, /event\.key === "Enter" \|\| event\.key === " "/);
+  assert.match(sidebarSource, /className="session-row-select"/);
+  assert.match(sidebarSource, /aria-pressed=\{isPinned\}/);
+  assert.match(sidebarSource, /className="session-row-actions"/);
+  assert.match(sidebarSource, /hiddenKind === "explicit" \? `Restore/);
+  assert.match(sidebarSource, /Hidden by parent/);
+  assert.match(sidebarSource, /onHideChange=\{hiddenSessionKinds\.get\(node\.session\.id\) === "inherited"/);
+  assert.match(cssSource, /\.session-row:focus-within \.session-row-actions/);
+  assert.match(cssSource, /any-pointer: coarse/);
+  assert.match(cssSource, /\.session-row-compact-action:focus/);
+});
+
+test("background completion refreshes activity-derived sections and successful metadata responses use revision authority", async () => {
+  const sidebarSource = await readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8");
+  const metadataLoader = sidebarSource.slice(
+    sidebarSource.indexOf("const loadSidebarState"),
+    sidebarSource.indexOf("const processSidebarOperationQueue"),
+  );
+  assert.match(metadataLoader, /acceptAuthoritativeSidebarState\(current, state\)/);
+  assert.doesNotMatch(metadataLoader, /requestId !== sidebarStateLoadRequestRef\.current/);
+
+  const completionEffect = sidebarSource.slice(
+    sidebarSource.indexOf("const completedInBackground"),
+    sidebarSource.indexOf("previousRunningSessionIdsRef.current = runningSessionIds") + 70,
+  );
+  assert.match(completionEffect, /completedInBackground\.length > 0\) void loadSessions\(false\)/);
+});
+
 test("only the latest overlapping session-list response may update state", async () => {
   let latestRequestId = 0;
   const applied = [];

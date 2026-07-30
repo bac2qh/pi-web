@@ -1,0 +1,270 @@
+Pinned sessions final automated validation
+UTC: 2026-07-30T00:44:41Z
+Commit before validation: 3c6d242e117ee2be484e7b70e47f3057723ba63d
+
+$ node --test lib/*.test.mjs components/*.test.mjs
+✔ recognizes only the exact trimmed clone command (0.709875ms)
+✔ routes clone through the built-in host before image and delivery guards (11.310125ms)
+✔ allows exact clone through streaming controls even with attached images (0.126542ms)
+✔ clears only the unchanged submitted composer state (0.055875ms)
+✔ maps clone results before new-session creation and coalesces local submissions (1.183625ms)
+✔ threads clone success through refresh-only callback wiring (1.59425ms)
+✔ opens non-file markdown links in a safe new tab (7.789542ms)
+✔ keeps local file markdown links in the app (1.02225ms)
+✔ renders completed Mermaid blocks as Preview by default (1.259417ms)
+✔ keeps streaming Mermaid as source with Preview unavailable (2.830666ms)
+✔ creates an independent default Preview for each completed Mermaid block (0.742291ms)
+✔ hosted session discovery reloads the ordinary list without navigation or selection (9.099542ms)
+✔ a failed discovery load may retry the replayed generation (0.143584ms)
+✔ the sidebar composes fixed global sections before Project and a collapsed Explorer (1.193167ms)
+✔ shared sidebar metadata stays operation-only, optimistic, and separate from session browsing (1.354333ms)
+✔ the shared row exposes keyboard, touch, pin, hide, restore, and hidden-state semantics (1.894ms)
+✔ background completion refreshes activity-derived sections and successful metadata responses use revision authority (0.819917ms)
+✔ only the latest overlapping session-list response may update state (0.922ms)
+(node:57873) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/lib/ansi.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ strips ANSI escape sequences (35.6805ms)
+✔ normalizes boxed custom panel lines while preserving ANSI codes (0.469708ms)
+✔ parses ANSI style segments and reset codes (0.863792ms)
+✔ maps 256-color SGR codes (0.138125ms)
+(node:57874) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/lib/chat-lazy-load.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ shows only the last visible render items (33.494625ms)
+✔ shows all render items when the visible count reaches the total (0.150542ms)
+✔ continues paging when render items outnumber source messages (0.096ms)
+✔ restores the viewport after prepending content (0.821209ms)
+✔ restores top and bottom boundary positions (0.090416ms)
+(node:57875) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/lib/compaction-summary.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ separates pi file metadata tags from the visible compaction summary (1.581167ms)
+✔ leaves normal summaries unchanged (0.187875ms)
+✔ keeps file-like tags that are part of the summary body (0.063083ms)
+✔ uses defaults for absent or malformed display preferences (0.709958ms)
+✔ clamps and snaps display preferences to their approved ranges (0.0815ms)
+✔ steps preferences without crossing their bounds (0.061625ms)
+✔ builds bounded CSS variables without changing font families (0.740334ms)
+(node:57877) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/lib/file-dirent.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ uses Dirent types for regular files and directories (34.657959ms)
+✔ falls back to stat when the Dirent type is unknown (4.227208ms)
+✔ follows directory symlinks and skips dangling symlinks (1.153917ms)
+(node:57878) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/lib/file-fuzzy.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ builds closed file mentions and quotes paths containing spaces (34.688667ms)
+(node:57879) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/lib/file-links.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ resolves absolute markdown file links and strips line suffixes (34.123291ms)
+✔ resolves absolute file links outside cwd (0.916958ms)
+✔ resolves relative markdown file links against cwd (0.188583ms)
+✔ does not let relative links escape cwd (0.081875ms)
+✔ resolves preview links from the file directory within the project root (0.444708ms)
+✔ does not treat app or external URLs as file links (0.110208ms)
+✔ resolves Windows file URLs without a synthetic leading slash (0.133792ms)
+✔ resolves UNC file URLs and backslash UNC paths (0.095042ms)
+(node:57880) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/lib/file-types.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ detects image, audio, and document preview paths (33.42025ms)
+✔ extracts extensions from mixed path styles (0.19575ms)
+(node:57881) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/lib/file-upload.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ validates upload names without accepting paths or duplicates (34.140875ms)
+✔ finds conflicts and prevents replacing directories or symlinks (4.94425ms)
+✔ parses only supported conflict strategies (0.092541ms)
+[pi-web][hosted-implementation] stage=capability_registered
+[pi-web][hosted-implementation] stage=capability_registered
+[pi-web][hosted-implementation] stage=capability_registered
+[pi-web][hosted-implementation] stage=registration_started target=11111111-1111-4111-8111-111111111111 launch=start
+[pi-web][hosted-implementation] stage=capability_registered
+[pi-web][hosted-implementation] stage=capability_registered
+[pi-web][hosted-implementation] stage=registration_started target=11111111-1111-4111-8111-111111111111 launch=start
+[pi-web][hosted-implementation] stage=registration_failed target=11111111-1111-4111-8111-111111111111 launch=start errorClass=Error errorMessage=operation-failed
+[pi-web][hosted-implementation] stage=capability_registration_rejected
+[pi-web][hosted-implementation] stage=capability_registration_rejected
+[pi-web][hosted-implementation] stage=capability_registration_rejected
+[pi-web][hosted-implementation] stage=capability_registration_rejected
+✔ compatible capability exposes the narrow v1 request and response (1.756833ms)
+✔ same-runtime reload invalidates the old callback and replaces only the capability record (0.603166ms)
+✔ a callback invalidated during registration cannot publish ownership (0.248958ms)
+✔ foreign and incompatible records are preserved instead of overwritten (0.122125ms)
+✔ registration failures and lifecycle errors never log private payloads (0.122ms)
+✔ request validation accepts an unavailable idle source signal but rejects malformed or widened requests (0.2195ms)
+✔ builds content-free stable state keys for Mermaid fences (0.595625ms)
+✔ defaults completed Mermaid blocks to Preview (0.592959ms)
+✔ forces Source and disables Preview while streaming (0.058541ms)
+✔ keeps an explicit completed Mermaid selection authoritative (0.04175ms)
+✔ uses the bounded transcript size in Mermaid configuration (0.146417ms)
+✔ changes the Mermaid render key for theme, font size, and source (0.059209ms)
+✔ serializes Mermaid operations without poisoning later renders (1.74925ms)
+(node:57884) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/lib/message-display.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ splits trailing final answer blocks from process blocks (36.580458ms)
+✔ keeps pre-tool text in process blocks (0.147666ms)
+✔ does not expose text before a trailing tool call as final answer (0.104417ms)
+✔ drops empty thinking blocks after completion (0.094875ms)
+✔ keeps empty thinking while streaming (0.095917ms)
+✔ keeps deferred historical thinking placeholders (0.075541ms)
+✔ preserves original content positions when final answer blocks are split (0.089125ms)
+✔ keeps completed text identity stable when the entry id arrives (0.103292ms)
+✔ retains entry isolation for non-text and timestamp-less blocks (0.087ms)
+(node:57885) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/lib/models-cache.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ caches model data independently for each cwd (1.102125ms)
+✔ shares one loader between concurrent requests for the same cwd (0.087875ms)
+✔ does not cache a stale load that finishes after invalidation (0.090292ms)
+✔ retries after a model load fails (0.498209ms)
+(node:57886) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/lib/patch.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ parses paired changes into split diff rows (41.208542ms)
+✔ pads one-sided additions and removes timestamp suffixes from file paths (0.191084ms)
+✔ returns null for text without diff lines (0.506083ms)
+✔ opens the browser by default (1.55825ms)
+✔ supports the no-open CLI option (0.167292ms)
+✔ supports truthy PI_WEB_NO_OPEN values (0.106125ms)
+✔ does not disable browser opening for false PI_WEB_NO_OPEN values (0.084625ms)
+✔ preserves port and hostname options (0.095542ms)
+[pi-web][hosted-implementation] stage=capability_registered
+✔ process cleanup invalidates hosted callbacks before destroying registered owners (3.646833ms)
+[pi-web] session_start dispatched to extensions for session 019fb07b-0c36-78b6-8883-79d53a0bb79c
+✔ RPC session startup preloads extension-registered providers before restoring models (0.40575ms)
+✔ clone keeps the live source wrapper and manager unchanged (4.903708ms)
+✔ clone rejects streaming and compaction as busy (0.789125ms)
+✔ clone rejects a stale displayed leaf without writing (0.921333ms)
+✔ failed extension binding rolls back the accepted prompt running claim (1.085875ms)
+✔ accepted prompts claim running state before extension binding completes (3.082833ms)
+✔ overlapping accepted prompts retain independent running claims (0.903125ms)
+✔ compaction claims busy state before the native flag changes (0.66975ms)
+[pi-web] session_start dispatched to extensions for session 019fb07b-109f-7bbd-a673-b15d97d414b4
+[pi-web][hosted-implementation] stage=registration_started target=019fb07b-10a0-77be-8e30-db84ced4915c launch=start
+[pi-web][hosted-implementation] stage=ownership_accepted target=019fb07b-10a0-77be-8e30-db84ced4915c launch=start
+[pi-web][hosted-implementation] stage=kickoff_scheduled target=019fb07b-10a0-77be-8e30-db84ced4915c launch=start
+✔ cold agent commands reject and evict a deleted cached session path (1123.93775ms)
+✔ shared startup promise publishes one wrapper for overlapping launch and selection (1.133958ms)
+✔ cancellation immediately before publication disposes the unpublished owner (0.800917ms)
+[pi-web] session_start dispatched to extensions for session 019fb07b-10a0-77be-8e30-db84ced4915c
+[pi-web][hosted-implementation] stage=kickoff_dispatched target=019fb07b-10a0-77be-8e30-db84ced4915c launch=start
+[pi-web][hosted-implementation] stage=target_settled target=019fb07b-10a0-77be-8e30-db84ced4915c launch=start
+[pi-web][hosted-implementation] stage=owner_cleanup target=019fb07b-10a0-77be-8e30-db84ced4915c launch=start
+[pi-web] session_start dispatched to extensions for session 019fb07b-10a2-7524-a7e7-e07e05b1a1ff
+✔ host capability acknowledges publication and kickoff scheduling before binding or target settlement (1.696542ms)
+[pi-web] session_start dispatched to extensions for session 019fb07b-10a3-73e2-a641-076ccf80b9aa
+✔ target Stop cancels a hosted kickoff that is still waiting for extension binding (0.737542ms)
+[pi-web][hosted-implementation] stage=registration_started target=019fb07b-10a3-73e2-a641-086b7f29916f launch=start
+[pi-web][hosted-implementation] stage=ownership_accepted target=019fb07b-10a3-73e2-a641-086b7f29916f launch=start
+[pi-web][hosted-implementation] stage=kickoff_scheduled target=019fb07b-10a3-73e2-a641-086b7f29916f launch=start
+[pi-web][hosted-implementation] stage=kickoff_dispatched target=019fb07b-10a3-73e2-a641-086b7f29916f launch=start
+✔ owner destruction cancels a deferred hosted kickoff without duplicate acceptance (0.688167ms)
+[pi-web][hosted-implementation] stage=registration_started target=019fb07b-10a3-73e2-a641-086b7f29916f launch=start
+[pi-web][hosted-implementation] stage=target_failed target=019fb07b-10a3-73e2-a641-086b7f29916f launch=start errorClass=Error errorMessage=operation-failed
+[pi-web][hosted-implementation] stage=registration_failed target=019fb07b-10a3-73e2-a641-086b7f29916f launch=start errorClass=Error errorMessage=operation-failed
+[pi-web][hosted-implementation] stage=target_settled target=019fb07b-10a3-73e2-a641-086b7f29916f launch=start
+[pi-web][hosted-implementation] stage=owner_cleanup target=019fb07b-10a3-73e2-a641-086b7f29916f launch=start
+[pi-web][hosted-implementation] stage=registration_started target=019fb07b-10a4-7f23-b034-47aa32a181e9 launch=start
+[pi-web][hosted-implementation] stage=registration_failed target=019fb07b-10a4-7f23-b034-47aa32a181e9 launch=start errorClass=Error errorMessage=operation-failed
+✔ a duplicate hosted launch rejects without dispatching or refreshing twice (0.925584ms)
+✔ host capability rejects an existing owner whose file or cwd does not match (0.504125ms)
+✔ hosted target failure clears running state, emits a bounded target error, and leaves native JSONL resumable (0.792291ms)
+✔ active wrappers survive idle deadlines and dispose once after a full idle window (94.811292ms)
+✔ native streaming and compaction flags also defer idle cleanup (140.352375ms)
+✔ target commands and source Stop remain isolated by registered session ID (2.924584ms)
+✔ hosted discovery invalidates the ordinary list and advances a replayable refresh generation (0.085667ms)
+✔ running SSE replays session discovery generation to a late or reconnected browser (1.105833ms)
+✔ clones exactly the selected native branch without mutating the source (10.022417ms)
+✔ rejects missing and invalid source leaves without creating a candidate (1.32725ms)
+✔ maps Pi's non-materialized user-only branch to nothing_to_clone (4.36725ms)
+✔ unexpected failures log only bounded clone diagnostics (0.736917ms)
+(node:57890) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/lib/session-file-references-core.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-07-21-pinned-sessions/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ detects exact external file paths referenced in session entries (30.304ms)
+✔ does not authorize sibling files by prefix match (0.178417ms)
+✔ validates session ids before resolving session paths (0.704917ms)
+✔ renders the SDK compaction-aware context with aligned entry IDs (1.31025ms)
+✔ uses only the latest compaction on the active path (0.134667ms)
+✔ uses the selected leaf's path before a later compaction (0.066792ms)
+✔ returns an empty context for a null leaf (0.0455ms)
+✔ defers historical thinking without changing live-session content (0.091625ms)
+✔ does not defer empty historical thinking blocks (0.045875ms)
+✔ defers only base64 images from historical tool results (0.203167ms)
+✔ preserves hidden custom messages so the UI can render them collapsed (0.084708ms)
+✔ preserves valid epoch timestamps on synthetic UI messages (0.068667ms)
+✔ reads only a bounded session header, including headers larger than 4 KiB (5.681916ms)
+✔ returns null for malformed or unbounded session headers (0.6605ms)
+✔ retries a session scan invalidated while it is in flight (0.233417ms)
+✔ keeps forward and reverse session path caches in sync (0.104959ms)
+✔ sidebar state validation is strict, bounded, and defaults are fresh (2.181875ms)
+✔ pin operations are newest-first, idempotent, and optimistic replay ignores stale authority (0.142041ms)
+✔ hiding closes over descendants without hiding ancestors or siblings and preserves pins (5.77225ms)
+✔ hidden closure covers future forks and terminates on cycles and missing parents (0.309083ms)
+✔ reconciliation prunes stale ids only from the supplied complete listing (0.179416ms)
+✔ Recent uses the exact inclusive ten-day boundary, is uncapped, sorted, and schedules expiry (1.100042ms)
+✔ hidden-first section derivation removes hidden pins and Recents unless Show hidden is enabled (0.31775ms)
+✔ project prefixes use the shortest unique suffix (0.124084ms)
+✔ Project trees preserve ancestry and promote families by newest visible descendant (0.204375ms)
+✔ missing storage reads defaults without creating a file (8.288416ms)
+✔ operations write atomically and idempotent operations do not advance revision (9.760958ms)
+✔ the exclusive lock preserves concurrent operations (13.724875ms)
+✔ malformed and unsupported state is refused without overwriting the file (2.80875ms)
+✔ lock acquisition times out without mutating state (21.359792ms)
+✔ stale ids are pruned only when explicit successful-listing reconciliation runs (7.179958ms)
+✔ read and directory-preparation failures map to stable sanitized categories (0.996ms)
+✔ diagnostics expose only bounded categories, counts, and sanitized error classes (12.304875ms)
+✔ an invalidated session snapshot cannot reconcile or overwrite newer state (0.98425ms)
+✔ writes refuse a state that would exceed the read byte limit (1051.379583ms)
+✔ hiding an ancestor atomically removes redundant descendant markers (10.019458ms)
+✔ uses the CLI global lock location (0.572625ms)
+✔ annotates only lock entries that exist in the matching Pi scope (4.514083ms)
+✔ ignores stale lock entries and malformed lock files (1.309375ms)
+✔ does not compare a project ref with the default skills.sh snapshot (1.138417ms)
+✔ compares a global lock version with the remote Git tree (19.117917ms)
+✔ uses the repository hash for a root global skill (0.155959ms)
+✔ compares a project lock version with the skills.sh snapshot (0.217167ms)
+✔ returns unsupported without making a remote request (0.052875ms)
+✔ returns a scoped error when the remote check fails (0.145ms)
+✔ falls back to Git when the GitHub API is rate limited (0.312084ms)
+✔ builds Pi-only update commands for each scope (0.7175ms)
+✔ reuses one remote request for skills from the same GitHub source (0.82125ms)
+ℹ tests 160
+ℹ suites 0
+ℹ pass 160
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1977.698084
+
+$ /Users/xin/Documents/repos/pi-web/node_modules/.bin/tsc --noEmit
+
+$ npm run lint
+
+> @agegr/pi-web@0.7.16 lint
+> eslint .
+
+
+$ git diff --check
+
+Runtime evidence:
+.agents/reports/2026-07-21-pinned-sessions/validation.json: passed=true failures=0
+.agents/reports/2026-07-21-pinned-sessions/live-validation.json: passed=true failures=0
