@@ -45,6 +45,15 @@ async function loadAllSessions(): Promise<SessionInfo[]> {
   });
 }
 
+export interface CompleteSessionListing {
+  sessions: SessionInfo[];
+  generation: number;
+}
+
+export function getSessionListGeneration(): number {
+  return globalThis.__piSessionListGeneration ?? 0;
+}
+
 export async function listAllSessions(): Promise<SessionInfo[]> {
   const generation = globalThis.__piSessionListGeneration ?? 0;
 
@@ -78,6 +87,21 @@ export async function listAllSessions(): Promise<SessionInfo[]> {
   globalThis.__piSessionListPromise = trackedPromise;
   globalThis.__piSessionListPromiseGeneration = generation;
   return trackedPromise;
+}
+
+/**
+ * Return a session listing together with the cache generation that remained
+ * current for the entire scan. A scan invalidated while it is in flight is
+ * still useful to its original caller, but it is not safe for destructive
+ * sidebar-state reconciliation, so retry against the newer generation.
+ */
+export async function listAllSessionsWithGeneration(maxAttempts = 4): Promise<CompleteSessionListing> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const generation = getSessionListGeneration();
+    const sessions = await listAllSessions();
+    if (getSessionListGeneration() === generation) return { sessions, generation };
+  }
+  throw new Error("Session listing changed repeatedly while it was being read");
 }
 
 // ============================================================================

@@ -1,7 +1,19 @@
 "use client";
 
 import { scaledMenuFontSize } from "@/lib/display-preferences";
-import { useEffect, useLayoutEffect, useState, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
+import {
+  acceptAuthoritativeSidebarState,
+  buildVisibleProjectSessionTree,
+  createDefaultSidebarState,
+  deriveSidebarSessionLists,
+  getGlobalSessionPrefix,
+  parseSidebarState,
+  replaySidebarStateOperations,
+  type HiddenSessionKind,
+  type SidebarSessionTreeNode,
+  type SidebarStateOperation,
+} from "@/lib/sidebar-session-state";
+import { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
 import type { SessionInfo } from "@/lib/types";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 
@@ -11,6 +23,33 @@ declare global {
       selectDirectory: () => Promise<string | null>;
     };
   }
+}
+
+export function isLatestSessionLoadRequest(requestId: number, latestRequestId: number): boolean {
+  return requestId === latestRequestId;
+}
+
+export function createSessionListGenerationTracker() {
+  let appliedGeneration: number | null = null;
+  const pendingGenerations = new Set<number>();
+
+  return {
+    begin(generation: number): boolean {
+      if (!Number.isSafeInteger(generation) || generation < 0) return false;
+      if (appliedGeneration !== null && generation <= appliedGeneration) return false;
+      for (const pendingGeneration of pendingGenerations) {
+        if (generation <= pendingGeneration) return false;
+      }
+      pendingGenerations.add(generation);
+      return true;
+    },
+    finish(generation: number, applied: boolean): void {
+      pendingGenerations.delete(generation);
+      if (applied && (appliedGeneration === null || generation > appliedGeneration)) {
+        appliedGeneration = generation;
+      }
+    },
+  };
 }
 
 interface Props {
@@ -44,6 +83,11 @@ interface WorktreeState {
    *  because subdir sessions keep their own project identity */
   isTopLevel: boolean;
   worktrees: WorktreeEntry[];
+}
+
+interface PendingSidebarOperation {
+  clientOperationId: number;
+  operation: SidebarStateOperation;
 }
 
 const UNREAD_SESSIONS_STORAGE_KEY = "pi-web:unread-session-ids";
@@ -182,56 +226,6 @@ function AnimatedDropdown({ open, children, style }: { open: boolean; children: 
 }
 
 
-
-interface SessionTreeNode {
-  session: SessionInfo;
-  children: SessionTreeNode[];
-}
-
-function buildSessionTree(sessions: SessionInfo[]): SessionTreeNode[] {
-  const byId = new Map<string, SessionTreeNode>();
-  for (const s of sessions) {
-    byId.set(s.id, { session: s, children: [] });
-  }
-
-  // Build a map of parentSessionId chains so we can resolve missing ancestors
-  const parentOf = new Map<string, string>();
-  for (const s of sessions) {
-    if (s.parentSessionId) parentOf.set(s.id, s.parentSessionId);
-  }
-
-  // Walk up the parentSessionId chain to find the nearest ancestor that exists in byId
-  function resolveAncestor(id: string): string | null {
-    let cur = parentOf.get(id);
-    const visited = new Set<string>();
-    while (cur) {
-      if (visited.has(cur)) return null; // cycle guard
-      visited.add(cur);
-      if (byId.has(cur)) return cur;
-      cur = parentOf.get(cur);
-    }
-    return null;
-  }
-
-  const roots: SessionTreeNode[] = [];
-  for (const node of byId.values()) {
-    const ancestor = resolveAncestor(node.session.id);
-    if (ancestor) {
-      byId.get(ancestor)!.children.push(node);
-    } else {
-      roots.push(node);
-    }
-  }
-
-  // Sort each level by modified desc
-  const sort = (nodes: SessionTreeNode[]) => {
-    nodes.sort((a, b) => b.session.modified.localeCompare(a.session.modified));
-    nodes.forEach((n) => sort(n.children));
-  };
-  sort(roots);
-  return roots;
-}
-
 const SCRAMBLE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
 
 function useScramble(target: string, running: boolean): string {
@@ -309,10 +303,15 @@ function PiAgentTitle() {
       onClick={handleClick}
       style={{
         background: "none", border: "none", padding: 0, cursor: "default",
-        fontWeight: 700, fontSize: scaledMenuFontSize(15), letterSpacing: "-0.01em",
+        fontWeight: 700, fontSize: scaledMenuFontSize(14), letterSpacing: "-0.01em",
         color: showVersion ? "var(--accent)" : "var(--text)",
         fontFamily: "var(--font-mono)",
-        minWidth: "6ch",
+        flex: "1 1 auto",
+        minWidth: 0,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        textAlign: "left",
       }}
     >
       {display}
@@ -345,27 +344,108 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [worktreeLoadingCwd, setWorktreeLoadingCwd] = useState<string | null>(null);
   const wtDropdownRef = useRef<HTMLDivElement>(null);
   const wtNewInputRef = useRef<HTMLInputElement>(null);
-  const [explorerOpen, setExplorerOpen] = useState(true);
+  const [explorerOpen, setExplorerOpen] = useState(false);
   const [explorerKey, setExplorerKey] = useState(0);
   const [explorerUploadBusy, setExplorerUploadBusy] = useState(false);
   const [sessionRefreshDone, setSessionRefreshDone] = useState(false);
   const [explorerRefreshDone, setExplorerRefreshDone] = useState(false);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
+  const [confirmedSidebarState, setConfirmedSidebarState] = useState(createDefaultSidebarState);
+  const [sidebarStateReady, setSidebarStateReady] = useState(false);
+  const [pendingSidebarOperations, setPendingSidebarOperations] = useState<PendingSidebarOperation[]>([]);
+  const [sidebarStateError, setSidebarStateError] = useState<string | null>(null);
+  const [showHidden, setShowHidden] = useState(false);
+  const [pinnedOpen, setPinnedOpen] = useState(true);
+  const [recentOpen, setRecentOpen] = useState(true);
+  const [sidebarNow, setSidebarNow] = useState(0);
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   // Once the SSE stream has delivered a frame it is the source of truth for
   // running state; late /api/sessions responses must not overwrite it.
   const sseAuthoritativeRef = useRef(false);
+  const sessionLoadRequestRef = useRef(0);
+  const sidebarStateLoadRequestRef = useRef(0);
+  const pendingSidebarOperationsRef = useRef<PendingSidebarOperation[]>([]);
+  const sidebarOperationInFlightRef = useRef(false);
+  const nextClientOperationIdRef = useRef(1);
+  const sessionListGenerationTrackerRef = useRef(createSessionListGenerationTracker());
   const sessionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const explorerRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileExplorerRef = useRef<FileExplorerHandle>(null);
 
+  const loadSidebarState = useCallback(async () => {
+    const requestId = ++sidebarStateLoadRequestRef.current;
+    try {
+      const response = await fetch("/api/sidebar-state", { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const state = parseSidebarState(await response.json());
+      // Every successful response is safe to consider: revision comparison,
+      // not request start order, decides whether it is newer authority.
+      setConfirmedSidebarState((current) => acceptAuthoritativeSidebarState(current, state));
+      setSidebarStateReady(true);
+      setSidebarStateError(null);
+      return true;
+    } catch {
+      if (requestId === sidebarStateLoadRequestRef.current) {
+        setSidebarStateReady(true);
+        setSidebarStateError("Pinned and hidden state is unavailable. Refresh to retry.");
+      }
+      return false;
+    }
+  }, []);
+
+  const processSidebarOperationQueue = useCallback(async () => {
+    if (sidebarOperationInFlightRef.current) return;
+    sidebarOperationInFlightRef.current = true;
+    try {
+      while (pendingSidebarOperationsRef.current.length > 0) {
+        const pending = pendingSidebarOperationsRef.current[0];
+        try {
+          const response = await fetch("/api/sidebar-state", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(pending.operation),
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const state = parseSidebarState(await response.json());
+          setConfirmedSidebarState((current) => acceptAuthoritativeSidebarState(current, state));
+          setSidebarStateError(null);
+        } catch {
+          setSidebarStateError("Sidebar change could not be saved. Refresh to retry.");
+        } finally {
+          if (pendingSidebarOperationsRef.current[0]?.clientOperationId === pending.clientOperationId) {
+            pendingSidebarOperationsRef.current = pendingSidebarOperationsRef.current.slice(1);
+            setPendingSidebarOperations(pendingSidebarOperationsRef.current);
+          }
+        }
+      }
+    } finally {
+      sidebarOperationInFlightRef.current = false;
+    }
+  }, []);
+
+  const requestSidebarOperation = useCallback((operation: SidebarStateOperation) => {
+    const pending = {
+      clientOperationId: nextClientOperationIdRef.current++,
+      operation,
+    };
+    pendingSidebarOperationsRef.current = [...pendingSidebarOperationsRef.current, pending];
+    setPendingSidebarOperations(pendingSidebarOperationsRef.current);
+    void processSidebarOperationQueue();
+  }, [processSidebarOperationQueue]);
+
   const loadSessions = useCallback(async (showLoading = false) => {
+    void loadSidebarState();
+    const requestId = ++sessionLoadRequestRef.current;
     try {
       if (showLoading) setLoading(true);
       const res = await fetch("/api/sessions");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { sessions: SessionInfo[]; runningSessionIds?: string[] };
+      // A hosted discovery event can overlap the initial/manual request. Only
+      // the newest response may update browser state, so stale network order
+      // cannot hide a newly discovered target.
+      if (!isLatestSessionLoadRequest(requestId, sessionLoadRequestRef.current)) return false;
       setAllSessions(data.sessions);
       // Treat the fetched running set as an initial fallback only. Once SSE is
       // live it owns this state, so a slow fetch can't revive a stale snapshot.
@@ -385,14 +465,20 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         if (sessionRefreshTimerRef.current) clearTimeout(sessionRefreshTimerRef.current);
         sessionRefreshTimerRef.current = setTimeout(() => setSessionRefreshDone(false), 2000);
       }
+      return true;
     } catch (e) {
-      setError(String(e));
+      if (isLatestSessionLoadRequest(requestId, sessionLoadRequestRef.current)) setError(String(e));
+      return false;
     } finally {
-      if (showLoading) setLoading(false);
+      if (isLatestSessionLoadRequest(requestId, sessionLoadRequestRef.current)) setLoading(false);
     }
-  }, []);
+  }, [loadSidebarState]);
 
   const initialLoadDone = useRef(false);
+  useEffect(() => {
+    setSidebarNow(Date.now());
+  }, []);
+
   useEffect(() => {
     const isFirst = !initialLoadDone.current;
     initialLoadDone.current = true;
@@ -412,10 +498,22 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
     source.onmessage = (e) => {
       try {
-        const data = JSON.parse(e.data) as { type?: string; runningSessionIds?: string[] };
+        const data = JSON.parse(e.data) as { type?: string; runningSessionIds?: string[]; sessionListGeneration?: number };
         if (data.type === "running") {
           sseAuthoritativeRef.current = true;
           setRunningSessionIds(new Set(data.runningSessionIds ?? []));
+        } else if (data.type === "sessions_changed") {
+          const generation = data.sessionListGeneration;
+          if (typeof generation !== "number") {
+            void loadSessions(false);
+            return;
+          }
+          const tracker = sessionListGenerationTrackerRef.current;
+          if (!tracker.begin(generation)) return;
+          // Initial connection and reconnect replay the current generation. A
+          // generation is consumed only after the latest native discovery load
+          // succeeds, so a failed fetch can retry on the next replay.
+          void loadSessions(false).then((applied) => tracker.finish(generation, applied));
         }
       } catch {
         // ignore malformed frames
@@ -424,7 +522,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
     // On error EventSource auto-reconnects; keep the last known state meanwhile.
     return () => source.close();
-  }, []);
+  }, [loadSessions]);
 
   useEffect(() => {
     const previous = previousRunningSessionIdsRef.current;
@@ -439,9 +537,13 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         return next;
       });
     }
+    // A background completion can move an old session into Recent and can
+    // promote its Project family. Refresh the ordinary listing once on the
+    // running->idle edge; this reuses the existing SSE instead of adding one.
+    if (completedInBackground.length > 0) void loadSessions(false);
 
     previousRunningSessionIdsRef.current = runningSessionIds;
-  }, [runningSessionIds, selectedSessionId]);
+  }, [loadSessions, runningSessionIds, selectedSessionId]);
 
   useEffect(() => {
     if (!selectedSessionId) return;
@@ -535,10 +637,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   // Auto-select cwd and restore session from URL on first load
   useEffect(() => {
-    if (allSessions.length === 0) return;
+    if (allSessions.length === 0 || !sidebarStateReady) return;
 
     if (selectedCwd === null) {
-      // If restoring a session, set cwd to match that session
+      // URL restoration intentionally searches the raw list: a hidden session
+      // remains directly addressable and opening it does not restore it.
       if (initialSessionId && !restoredRef.current) {
         restoredRef.current = true;
         const target = allSessions.find((s) => s.id === initialSessionId);
@@ -550,10 +653,31 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         // Session not found — notify parent so it can show the placeholder
         onInitialRestoreDone?.();
       }
-      const projects = getRecentProjects(allSessions);
+      const optimisticState = replaySidebarStateOperations(
+        confirmedSidebarState,
+        pendingSidebarOperations.map((pending) => pending.operation),
+        allSessions,
+      );
+      const visibleSessions = deriveSidebarSessionLists(
+        allSessions,
+        optimisticState,
+        showHidden,
+        Date.now(),
+      ).presentedSessions;
+      const projects = getRecentProjects(visibleSessions);
       if (projects.length > 0) setSelectedCwd(projects[0]);
     }
-  }, [allSessions, selectedCwd, initialSessionId, onSelectSession, onInitialRestoreDone]);
+  }, [
+    allSessions,
+    confirmedSidebarState,
+    initialSessionId,
+    onInitialRestoreDone,
+    onSelectSession,
+    pendingSidebarOperations,
+    selectedCwd,
+    showHidden,
+    sidebarStateReady,
+  ]);
 
   const commitCustomPath = useCallback(async (candidate?: string) => {
     const path = (candidate ?? customPathValue).trim();
@@ -730,17 +854,41 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     onNewSession?.(tempId, selectedCwd);
   }, [selectedCwd, onNewSession]);
 
-  const recentProjects = getRecentProjects(allSessions);
+  const optimisticSidebarState = useMemo(
+    () => replaySidebarStateOperations(
+      confirmedSidebarState,
+      pendingSidebarOperations.map((pending) => pending.operation),
+      allSessions,
+    ),
+    [allSessions, confirmedSidebarState, pendingSidebarOperations],
+  );
+  const sidebarSessionLists = useMemo(
+    () => deriveSidebarSessionLists(allSessions, optimisticSidebarState, showHidden, sidebarNow),
+    [allSessions, optimisticSidebarState, showHidden, sidebarNow],
+  );
+
+  useEffect(() => {
+    if (sidebarSessionLists.nextRecentExpiryAt === null) return;
+    const timeout = window.setTimeout(
+      () => setSidebarNow(Date.now()),
+      Math.max(1, sidebarSessionLists.nextRecentExpiryAt - Date.now()),
+    );
+    return () => window.clearTimeout(timeout);
+  }, [sidebarSessionLists.nextRecentExpiryAt]);
+
+  const pinnedSessionIds = new Set(optimisticSidebarState.pinnedSessionIds);
+  const recentProjects = getRecentProjects(sidebarSessionLists.presentedSessions);
   const showProjectFilter = recentProjects.length > 8;
   const visibleProjects = projectFilter.trim()
     ? recentProjects.filter((p) => p.toLowerCase().includes(projectFilter.trim().toLowerCase()))
     : recentProjects;
 
-  // Sessions of every worktree in the selected project are shown together
+  // Sessions of every worktree in the selected project are shown together.
+  // Project controls remain tied to selectedCwd even when every row is hidden.
   const selectedProject = projectRootFor(selectedCwd);
   const filteredSessions = selectedProject
-    ? allSessions.filter((s) => (s.projectRoot ?? s.cwd) === selectedProject)
-    : allSessions;
+    ? sidebarSessionLists.presentedSessions.filter((s) => (s.projectRoot ?? s.cwd) === selectedProject)
+    : sidebarSessionLists.presentedSessions;
   const showWorktreeSwitcher = Boolean(
     worktreeState?.isGit
     && worktreeState.isTopLevel
@@ -770,8 +918,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         }
       : null);
 
-  // Build parent-child tree within the filtered set
-  const sessionTree = buildSessionTree(filteredSessions);
+  // Build the visible selected-project tree after global hidden closure.
+  const sessionTree = buildVisibleProjectSessionTree(filteredSessions);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -783,9 +931,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           flexShrink: 0,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <PiAgentTitle />
-          <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
             <button
               onClick={handleNewSession}
               disabled={!selectedCwd}
@@ -850,7 +998,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 e.currentTarget.style.color = "var(--text-muted)";
                 e.currentTarget.style.borderColor = "var(--border)";
               }}
-              title="Refresh"
+              title="Refresh sessions and shared sidebar state"
+              aria-label="Refresh sessions and shared sidebar state"
             >
               {sessionRefreshDone ? (
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -863,9 +1012,125 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 </svg>
               )}
             </button>
+            <button
+              type="button"
+              onClick={() => setShowHidden((value) => !value)}
+              aria-label={showHidden ? "Hide hidden sessions" : "Show hidden sessions"}
+              aria-pressed={showHidden}
+              title={showHidden ? "Hide hidden sessions" : "Show hidden sessions"}
+              className="sidebar-icon-button"
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                width: 32, height: 32, padding: 0,
+                background: showHidden ? "var(--bg-selected)" : "var(--bg-hover)",
+                border: `1px solid ${showHidden ? "rgba(37,99,235,0.35)" : "var(--border)"}`,
+                borderRadius: 7,
+                color: showHidden ? "var(--accent)" : "var(--text-muted)",
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+            >
+              {showHidden ? (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              ) : (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="m3 3 18 18" />
+                  <path d="M10.6 10.7a2 2 0 0 0 2.7 2.7" />
+                  <path d="M9.9 4.2A10.8 10.8 0 0 1 12 4c6.5 0 10 8 10 8a17.4 17.4 0 0 1-2 3.2" />
+                  <path d="M6.6 6.6C3.8 8.5 2 12 2 12s3.5 8 10 8a9.8 9.8 0 0 0 4.1-.9" />
+                </svg>
+              )}
+            </button>
           </div>
         </div>
+        {sidebarStateError && (
+          <div role="status" style={{ marginTop: 7, color: "#f87171", fontSize: scaledMenuFontSize(10), lineHeight: 1.3 }}>
+            {sidebarStateError}
+          </div>
+        )}
+      </div>
 
+      <SidebarSessionSection
+        id="pinned-sessions"
+        label="Pinned"
+        open={pinnedOpen}
+        onToggle={() => setPinnedOpen((value) => !value)}
+        rowCount={sidebarSessionLists.pinnedSessions.length}
+        emptyText={loading ? "Loading…" : "No pinned sessions"}
+      >
+        {sidebarSessionLists.pinnedSessions.map((session) => (
+          <SessionItem
+            key={session.id}
+            session={session}
+            isSelected={session.id === selectedSessionId}
+            isRunning={runningSessionIds.has(session.id)}
+            isUnread={unreadSessionIds.has(session.id)}
+            isPinned={pinnedSessionIds.has(session.id)}
+            hiddenKind={showHidden ? sidebarSessionLists.hiddenSessionKinds.get(session.id) : undefined}
+            titlePrefix={getGlobalSessionPrefix(session, sidebarSessionLists.projectPrefixes)}
+            globalContextTitle={`${session.projectRoot ?? session.cwd}${session.worktreeBranch ? ` · ${session.worktreeBranch} (${session.cwd})` : ""}`}
+            onClick={() => handleSelectSessionFromList(session)}
+            onPinChange={() => requestSidebarOperation({ operation: "unpin", sessionId: session.id })}
+            onHideChange={sidebarSessionLists.hiddenSessionKinds.get(session.id) === "inherited"
+              ? undefined
+              : () => requestSidebarOperation({
+                  operation: sidebarSessionLists.hiddenSessionKinds.get(session.id) === "explicit" ? "restore" : "hide",
+                  sessionId: session.id,
+                })}
+            onRenamed={loadSessions}
+            onDeleted={(id) => {
+              onSessionDeleted?.(id);
+              void loadSessions();
+            }}
+          />
+        ))}
+      </SidebarSessionSection>
+
+      <SidebarSessionSection
+        id="recent-sessions"
+        label="Recent"
+        open={recentOpen}
+        onToggle={() => setRecentOpen((value) => !value)}
+        rowCount={sidebarSessionLists.recentSessions.length}
+        emptyText={loading ? "Loading…" : "No recent sessions"}
+      >
+        {sidebarSessionLists.recentSessions.map((session) => (
+          <SessionItem
+            key={session.id}
+            session={session}
+            isSelected={session.id === selectedSessionId}
+            isRunning={runningSessionIds.has(session.id)}
+            isUnread={unreadSessionIds.has(session.id)}
+            isPinned={false}
+            hiddenKind={showHidden ? sidebarSessionLists.hiddenSessionKinds.get(session.id) : undefined}
+            titlePrefix={getGlobalSessionPrefix(session, sidebarSessionLists.projectPrefixes)}
+            globalContextTitle={`${session.projectRoot ?? session.cwd}${session.worktreeBranch ? ` · ${session.worktreeBranch} (${session.cwd})` : ""}`}
+            onClick={() => handleSelectSessionFromList(session)}
+            onPinChange={() => requestSidebarOperation({ operation: "pin", sessionId: session.id })}
+            onHideChange={sidebarSessionLists.hiddenSessionKinds.get(session.id) === "inherited"
+              ? undefined
+              : () => requestSidebarOperation({
+                  operation: sidebarSessionLists.hiddenSessionKinds.get(session.id) === "explicit" ? "restore" : "hide",
+                  sessionId: session.id,
+                })}
+            onRenamed={loadSessions}
+            onDeleted={(id) => {
+              onSessionDeleted?.(id);
+              void loadSessions();
+            }}
+          />
+        ))}
+      </SidebarSessionSection>
+
+      <div style={{ display: "flex", flexDirection: "column", flex: "1 1 240px", minHeight: "min(180px, 38dvh)", overflow: "hidden", borderBottom: "1px solid var(--border)" }}>
+        <div className="sidebar-section-heading" style={{ flexShrink: 0 }}>
+          <span>Project</span>
+          <span style={{ color: "var(--text-dim)", fontWeight: 500, letterSpacing: 0, textTransform: "none" }}>{filteredSessions.length}</span>
+        </div>
+        <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
         {/* CWD picker */}
         <div ref={dropdownRef} style={{ position: "relative" }}>
           <button
@@ -1458,8 +1723,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         )}
       </div>
 
-      {/* Session list */}
-      <div style={{ flex: explorerOpen && (selectedCwdProp || selectedCwd) ? "1 1 0" : "1 1 auto", overflowY: "auto", padding: "0", minHeight: 80 }}>
+      {/* Selected-project session tree */}
+      <div style={{ flex: "1 1 auto", overflowY: "auto", padding: "0", minHeight: 0 }}>
         {loading && (
           <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: scaledMenuFontSize(12) }}>
             Loading...
@@ -1482,7 +1747,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             selectedSessionId={selectedSessionId}
             runningSessionIds={runningSessionIds}
             unreadSessionIds={unreadSessionIds}
+            pinnedSessionIds={pinnedSessionIds}
+            hiddenSessionKinds={sidebarSessionLists.hiddenSessionKinds}
+            showHidden={showHidden}
             onSelectSession={handleSelectSessionFromList}
+            onSidebarOperation={requestSidebarOperation}
             onRenamed={loadSessions}
             onSessionDeleted={(id) => {
               onSessionDeleted?.(id);
@@ -1492,6 +1761,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           />
         ))}
       </div>
+      </div>
 
       {/* File Explorer section */}
       {(selectedCwdProp || selectedCwd) && (
@@ -1500,7 +1770,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             borderTop: "1px solid var(--border)",
             display: "flex",
             flexDirection: "column",
-            flex: explorerOpen ? "1 1 0" : "0 0 auto",
+            flex: explorerOpen ? "1 1 180px" : "0 0 auto",
+            maxHeight: explorerOpen ? "45%" : undefined,
             minHeight: 0,
             overflow: "hidden",
           }}
@@ -1508,6 +1779,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
             <button
               onClick={() => setExplorerOpen((v) => !v)}
+              aria-expanded={explorerOpen}
+              aria-controls="sidebar-file-explorer"
+              className="sidebar-section-toggle"
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -1597,7 +1871,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             </button>
           </div>
           {explorerOpen && (
-            <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
+            <div id="sidebar-file-explorer" style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
               <FileExplorer
                 ref={fileExplorerRef}
                 cwd={selectedCwd ?? selectedCwdProp!}
@@ -1615,21 +1889,90 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   );
 }
 
+function SidebarSessionSection({
+  id,
+  label,
+  open,
+  onToggle,
+  rowCount,
+  emptyText,
+  children,
+}: {
+  id: string;
+  label: string;
+  open: boolean;
+  onToggle: () => void;
+  rowCount: number;
+  emptyText: string;
+  children: ReactNode;
+}) {
+  const desiredBodyHeight = rowCount === 0 ? 28 : Math.min(rowCount, 5) * 54;
+  return (
+    <section
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        flex: open ? `0 1 ${31 + desiredBodyHeight}px` : "0 0 31px",
+        minHeight: 31,
+        maxHeight: open ? 31 + desiredBodyHeight : 31,
+        overflow: "hidden",
+        borderBottom: "1px solid var(--border)",
+      }}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-controls={id}
+        className="sidebar-section-heading sidebar-section-toggle"
+      >
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <svg
+            width="9" height="9" viewBox="0 0 10 10" fill="none"
+            stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+            style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }}
+            aria-hidden="true"
+          >
+            <polyline points="3 2 7 5 3 8" />
+          </svg>
+          {label}
+        </span>
+        <span style={{ color: "var(--text-dim)", fontWeight: 500, letterSpacing: 0, textTransform: "none" }}>{rowCount}</span>
+      </button>
+      {open && (
+        <div id={id} style={{ flex: "1 1 auto", minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
+          {rowCount === 0
+            ? <div style={{ padding: "6px 14px", color: "var(--text-dim)", fontSize: scaledMenuFontSize(10) }}>{emptyText}</div>
+            : children}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function SessionTreeItem({
   node,
   selectedSessionId,
   runningSessionIds,
   unreadSessionIds,
+  pinnedSessionIds,
+  hiddenSessionKinds,
+  showHidden,
   onSelectSession,
+  onSidebarOperation,
   onRenamed,
   onSessionDeleted,
   depth,
 }: {
-  node: SessionTreeNode;
+  node: SidebarSessionTreeNode;
   selectedSessionId: string | null;
   runningSessionIds: Set<string>;
   unreadSessionIds: Set<string>;
+  pinnedSessionIds: Set<string>;
+  hiddenSessionKinds: Map<string, HiddenSessionKind>;
+  showHidden: boolean;
   onSelectSession: (s: SessionInfo) => void;
+  onSidebarOperation: (operation: SidebarStateOperation) => void;
   onRenamed?: () => void;
   onSessionDeleted?: (id: string) => void;
   depth: number;
@@ -1656,7 +1999,19 @@ function SessionTreeItem({
           isSelected={node.session.id === selectedSessionId}
           isRunning={runningSessionIds.has(node.session.id)}
           isUnread={unreadSessionIds.has(node.session.id)}
+          isPinned={pinnedSessionIds.has(node.session.id)}
+          hiddenKind={showHidden ? hiddenSessionKinds.get(node.session.id) : undefined}
           onClick={() => onSelectSession(node.session)}
+          onPinChange={() => onSidebarOperation({
+            operation: pinnedSessionIds.has(node.session.id) ? "unpin" : "pin",
+            sessionId: node.session.id,
+          })}
+          onHideChange={hiddenSessionKinds.get(node.session.id) === "inherited"
+            ? undefined
+            : () => onSidebarOperation({
+                operation: hiddenSessionKinds.get(node.session.id) === "explicit" ? "restore" : "hide",
+                sessionId: node.session.id,
+              })}
           onRenamed={onRenamed}
           onDeleted={(id) => onSessionDeleted?.(id)}
           depth={depth}
@@ -1674,7 +2029,11 @@ function SessionTreeItem({
               selectedSessionId={selectedSessionId}
               runningSessionIds={runningSessionIds}
               unreadSessionIds={unreadSessionIds}
+              pinnedSessionIds={pinnedSessionIds}
+              hiddenSessionKinds={hiddenSessionKinds}
+              showHidden={showHidden}
               onSelectSession={onSelectSession}
+              onSidebarOperation={onSidebarOperation}
               onRenamed={onRenamed}
               onSessionDeleted={onSessionDeleted}
               depth={depth + 1}
@@ -1754,7 +2113,13 @@ function SessionItem({
   isSelected,
   isRunning,
   isUnread,
+  isPinned,
+  hiddenKind,
+  titlePrefix,
+  globalContextTitle,
   onClick,
+  onPinChange,
+  onHideChange,
   onRenamed,
   onDeleted,
   depth = 0,
@@ -1766,7 +2131,13 @@ function SessionItem({
   isSelected: boolean;
   isRunning?: boolean;
   isUnread?: boolean;
+  isPinned: boolean;
+  hiddenKind?: HiddenSessionKind;
+  titlePrefix?: string;
+  globalContextTitle?: string;
   onClick: () => void;
+  onPinChange: () => void;
+  onHideChange?: () => void;
   onRenamed?: () => void;
   onDeleted?: (id: string) => void;
   depth?: number;
@@ -1811,6 +2182,16 @@ function SessionItem({
     setConfirmDelete(true);
   }, []);
 
+  const handlePinClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onPinChange();
+  }, [onPinChange]);
+
+  const handleHideClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onHideChange?.();
+  }, [onHideChange]);
+
   const handleDeleteConfirm = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
     setConfirmDelete(false);
@@ -1833,16 +2214,17 @@ function SessionItem({
 
   return (
     <div
-      onClick={confirmDelete || renaming ? undefined : onClick}
+      className="session-row"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); }}
       style={{
+        position: "relative",
         height: ITEM_HEIGHT,
         display: "flex",
         alignItems: "center",
         paddingLeft: depth > 0 ? depth * 12 + 14 : 14,
         paddingRight: 8,
-        cursor: confirmDelete || renaming ? "default" : "pointer",
+        cursor: "default",
         background: confirmDelete
           ? "rgba(239,68,68,0.06)"
           : isSelected ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
@@ -1850,7 +2232,7 @@ function SessionItem({
           ? "2px solid #ef4444"
           : isSelected ? "2px solid var(--accent)" : "2px solid transparent",
         transition: "background 0.1s",
-        opacity: deleting ? 0.5 : 1,
+        opacity: deleting ? 0.5 : hiddenKind ? 0.68 : 1,
         gap: 6,
         overflow: "hidden",
       }}
@@ -1923,6 +2305,33 @@ function SessionItem({
       ) : (
         /* ── Normal view ── */
         <>
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={onClick}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onClick();
+              }
+            }}
+            aria-label={`Open session ${title}${globalContextTitle ? ` in ${globalContextTitle}` : ""}${hiddenKind ? `, ${hiddenKind === "explicit" ? "explicitly hidden" : "hidden by parent"}` : ""}`}
+            className="session-row-select"
+            style={{
+              flex: 1,
+              alignSelf: "stretch",
+              minWidth: 0,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              padding: 0,
+              background: "none",
+              border: "none",
+              color: "inherit",
+              cursor: "pointer",
+              textAlign: "left",
+            }}
+          >
           {/* Fork indicator for child sessions */}
           {depth > 0 && (
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
@@ -1944,17 +2353,30 @@ function SessionItem({
                 lineHeight: 1.4,
                 color: "var(--text)",
               }}
-              title={isRunning ? `${title} · Agent running…` : isUnread ? `${title} · New activity` : title}
+              title={`${globalContextTitle ? `${globalContextTitle} · ` : ""}${title}${isRunning ? " · Agent running…" : isUnread ? " · New activity" : ""}${hiddenKind ? ` · ${hiddenKind === "explicit" ? "Explicitly hidden" : "Hidden by parent"}` : ""}`}
             >
               {isRunning ? <RunningSessionIndicator /> : isUnread ? <UnreadSessionIndicator /> : null}
+              {titlePrefix && (
+                <>
+                  <span style={{ color: "var(--accent)", flexShrink: 0, maxWidth: "46%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {titlePrefix}
+                  </span>
+                  <span aria-hidden="true" style={{ color: "var(--text-dim)", flexShrink: 0 }}>·</span>
+                </>
+              )}
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                 {title}
               </span>
             </div>
-            <div style={{ marginTop: 2, display: "flex", gap: 8, color: "var(--text-dim)", fontSize: scaledMenuFontSize(11), minWidth: 0 }}>
+            <div style={{ marginTop: 2, display: "flex", gap: 8, color: "var(--text-dim)", fontSize: scaledMenuFontSize(11), minWidth: 0, paddingRight: onHideChange ? 78 : 54 }}>
+              {hiddenKind && (
+                <span style={{ color: hiddenKind === "explicit" ? "#d97706" : "var(--text-dim)", whiteSpace: "nowrap" }}>
+                  {hiddenKind === "explicit" ? "Hidden" : "Hidden by parent"}
+                </span>
+              )}
               <span title={session.modified}>{formatRelativeTime(session.modified)}</span>
               <span>{session.messageCount} msgs</span>
-              {session.worktreeBranch && (
+              {!titlePrefix && session.worktreeBranch && (
                 <span
                   title={`Worktree: ${session.cwd}`}
                   style={{ display: "flex", alignItems: "center", gap: 3, color: "var(--accent)", minWidth: 0, overflow: "hidden" }}
@@ -1970,12 +2392,16 @@ function SessionItem({
               )}
             </div>
           </div>
+          </div>
 
           {/* Collapse toggle — always visible when has children */}
           {hasChildren && (
             <button
               onClick={(e) => { e.stopPropagation(); onToggleCollapse?.(); }}
               title={collapsed ? "Expand forks" : "Collapse forks"}
+              aria-label={collapsed ? `Expand forks under ${title}` : `Collapse forks under ${title}`}
+              aria-expanded={!collapsed}
+              className="session-row-compact-action"
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center",
                 width: 20, height: 20, padding: 0, flexShrink: 0,
@@ -1991,15 +2417,37 @@ function SessionItem({
             </button>
           )}
 
-          {/* Action buttons — shown on hover */}
-          {hovered && (
-            <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={handlePinClick}
+            aria-label={isPinned ? `Unpin ${title}` : `Pin ${title}`}
+            aria-pressed={isPinned}
+            title={isPinned ? "Unpin" : "Pin"}
+            className="session-row-compact-action session-row-pin"
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 24, height: 24, padding: 0, flexShrink: 0,
+              background: "none", border: "none",
+              color: isPinned ? "var(--accent)" : "var(--text-dim)",
+              cursor: "pointer", borderRadius: 5,
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill={isPinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M14 4.5 19.5 10l-3 1.5-4 4L11 21l-2-2 1.5-5.5 4-4L16 6.5 14 4.5Z" />
+              <path d="m4 20 6-6" />
+            </svg>
+          </button>
+
+          {/* Rename, Hide/Restore, and Delete remain available on focus and touch. */}
+          <div className="session-row-actions" style={{ position: "absolute", right: hasChildren ? 56 : 34, bottom: 2, display: "flex", gap: 3, padding: 2, background: "var(--bg-hover)", borderRadius: 6, zIndex: 2 }}>
               <button
                 onClick={startRename}
                 title="Rename"
+                aria-label={`Rename ${title}`}
+                className="session-row-action"
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  width: 32, height: 32, padding: 0,
+                  width: 26, height: 24, padding: 0,
                   background: "var(--bg-hover)", border: "1px solid var(--border)",
                   borderRadius: 7, color: "var(--text-muted)",
                   cursor: "pointer", flexShrink: 0,
@@ -2020,12 +2468,47 @@ function SessionItem({
                   <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
                 </svg>
               </button>
+              {onHideChange && (
+                <button
+                  onClick={handleHideClick}
+                  title={hiddenKind === "explicit" ? "Restore" : "Hide"}
+                  aria-label={hiddenKind === "explicit" ? `Restore ${title}` : `Hide ${title}`}
+                  className="session-row-action"
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    width: 26, height: 24, padding: 0,
+                    background: "var(--bg-hover)", border: "1px solid var(--border)",
+                    borderRadius: 7, color: hiddenKind === "explicit" ? "#d97706" : "var(--text-muted)",
+                    cursor: "pointer", flexShrink: 0,
+                  }}
+                >
+                  {hiddenKind === "explicit" ? (
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M3 12s3.5-7 9-7c2 0 3.7.7 5.1 1.7" />
+                      <path d="M21 12s-3.5 7-9 7c-2 0-3.7-.7-5.1-1.7" />
+                      <path d="M8 12a4 4 0 0 1 6.8-2.8" />
+                      <path d="M16 12a4 4 0 0 1-6.8 2.8" />
+                      <path d="m18 3 3 3-3 3" />
+                      <path d="m6 21-3-3 3-3" />
+                    </svg>
+                  ) : (
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="m3 3 18 18" />
+                      <path d="M10.6 10.7a2 2 0 0 0 2.7 2.7" />
+                      <path d="M9.9 4.2A10.8 10.8 0 0 1 12 4c6.5 0 10 8 10 8a17.4 17.4 0 0 1-2 3.2" />
+                      <path d="M6.6 6.6C3.8 8.5 2 12 2 12s3.5 8 10 8a9.8 9.8 0 0 0 4.1-.9" />
+                    </svg>
+                  )}
+                </button>
+              )}
               <button
                 onClick={handleDeleteClick}
                 title="Delete"
+                aria-label={`Delete ${title}`}
+                className="session-row-action"
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  width: 32, height: 32, padding: 0,
+                  width: 26, height: 24, padding: 0,
                   background: "var(--bg-hover)", border: "1px solid var(--border)",
                   borderRadius: 7, color: "var(--text-muted)",
                   cursor: "pointer", flexShrink: 0,
@@ -2049,8 +2532,7 @@ function SessionItem({
                   <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
                 </svg>
               </button>
-            </div>
-          )}
+          </div>
         </>
       )}
     </div>

@@ -1,0 +1,21 @@
+Expand File Viewer — Automated Validation Summary
+Date: 2026-07-30
+
+$ node --test components/*.test.mjs lib/*.test.mjs
+PASS: 169 tests, 0 failures, 0 skipped, 0 cancelled.
+Note: the suite emitted its existing module-type warnings; they did not affect results.
+
+$ node_modules/.bin/tsc --noEmit
+PASS: no TypeScript errors.
+
+$ npm run lint
+PASS: no lint errors.
+
+$ git diff --check
+PASS: no whitespace errors.
+
+$ focused production-source boundary search
+PASS: no Fullscreen API, persistence, or new keyboard/Escape handling in the changed production surfaces.
+PASS: chat Markdown, the keyboard-shortcut hook, and dependency manifests are unchanged.
+
+Raw command output is intentionally not retained because unrelated tests emit local paths and synthetic session identifiers. The browser report and screenshots use an isolated temporary HOME and synthetic content only.

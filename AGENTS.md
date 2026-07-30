@@ -43,6 +43,7 @@ app/api/
   sessions/[id]/route.ts          GET/PATCH/DELETE session
   sessions/[id]/context/route.ts  GET ?leafId= — context for a specific leaf
   sessions/[id]/export/route.ts   GET exported HTML for a session
+  sidebar-state/route.ts          GET/PATCH shared pin and hidden-sidebar state
   agent/new/route.ts              POST { cwd, message, toolNames?, provider?, modelId? }
   agent/[id]/route.ts             GET state | POST any command
   agent/[id]/events/route.ts      GET SSE stream
@@ -75,8 +76,11 @@ lib/
   npx.ts               npx runner used by skill install
   pi-types.ts          local structural types for pi SDK objects
   rpc-manager.ts      AgentSessionWrapper + registry + startRpcSession
+  hosted-implementation-session.ts  process-local Start/Orchestrate host capability
   session-clone.ts    disposable native active-branch extraction for /clone
   session-reader.ts   SessionManager wrappers + path cache + buildSessionContext adapter
+  sidebar-session-state.ts  client-safe pin/hide/recent/tree derivation
+  sidebar-state-store.ts    locked atomic pi-web-sidebar.json persistence
   tool-presets.ts     PRESET_NONE/DEFAULT/FULL + getPresetFromTools()
   types.ts            shared TypeScript types
   normalize.ts        normalizeToolCalls() — field name mismatch between file format and our types
@@ -85,13 +89,14 @@ lib/
 
 components/
   AppShell.tsx        layout + URL state + tab management
-  SessionSidebar.tsx  session tree + FileExplorer
+  SessionSidebar.tsx  Pinned/Recent/Project presentations + FileExplorer
   ChatWindow.tsx      chat composition + completion sound wrapper
   ChatInput.tsx       input bar + model/thinking/tools/compact controls
   MessageView.tsx     renders one message (user/assistant/toolCall/toolResult)
   BranchNavigator.tsx in-session branch switcher
   ChatMinimap.tsx     scroll minimap alongside the message list
-  MarkdownBody.tsx    markdown renderer
+  MarkdownBody.tsx    chat markdown renderer
+  MarkdownFilePreview.tsx  Explorer Markdown renderer with hybrid-width blocks
   ModelsConfig.tsx    modal for editing models.json (opened from sidebar bottom)
   PluginsConfig.tsx   modal for installed package plugins
   SkillsConfig.tsx    modal for loaded/search/installable skills
@@ -125,6 +130,14 @@ hooks/
 - One `AgentSessionWrapper` per session id, keyed in `globalThis.__piSessions`
 - `globalThis` survives Next.js hot-reload; plain module-level Map does not
 - Idle timeout: 10 minutes. Concurrent `startRpcSession()` calls share a single start Promise (`globalThis.__piStartLocks`)
+
+### Pi Web-hosted implementation sessions
+- `lib/hosted-implementation-session.ts` publishes a versioned `Symbol.for("pi-web.hosted-implementation-session")` capability only inside the Pi Web server process. Compatible same-runtime hot reload invalidates/replaces the record; foreign or incompatible records are preserved.
+- Start/Orchestrate materialize the native JSONL first. Pi Web accepts exactly the six-field ID/file/cwd/kickoff/kind/signal request, opens that exact owner under the existing per-session startup lock, publishes one wrapper, initiates extension binding, and schedules the kickoff through a wrapper-owned background prompt without awaiting binding, preflight, or settlement. Target Stop or wrapper destruction cancels a scheduled kickoff before native dispatch; after dispatch Stop uses native abort.
+- The optional source signal is checked immediately before synchronous publication when Pi supplies one. Publication transfers ownership: later source cancellation/Stop cannot abort the target, and only target-addressed ordinary controls can steer, follow up, or stop it. A duplicate request for the same owner is rejected without a second ownership acceptance, kickoff, discovery refresh, or detached fallback.
+- Hosted wrappers retain accepted-prompt/compaction running claims and are never idle-evicted while active. Real cleanup calls native `AgentSession.dispose()` once; full graceful `session_shutdown` parity would require the deliberately excluded `AgentSessionRuntime`.
+- Hosted registration invalidates ordinary session discovery and advances a process-global `sessions_changed` generation over the existing running SSE stream. Initial and reconnected streams replay the generation; the sidebar consumes it only after the latest `/api/sessions` load succeeds, retries failed generations on replay, and ignores stale overlapping responses without changing selection or URL.
+- Capability absence is the detached-print compatibility boundary in the launcher repository. A present invalid or failing capability never falls back because acceptance may be ambiguous.
 
 ### Fork and clone wrapper lifecycles
 - Contextual **Fork** reopens the source on a disposable `SessionManager`, extracts the path before the selected user prompt, caches the new child, and destroys the source wrapper because the UI immediately transitions to the child. It does not mutate the live manager with `createBranchedSession()`.
@@ -160,6 +173,12 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - `useAgentSession` still treats per-session SSE as primary for chat events, but while a run is active it periodically calls `GET /api/agent/[id]` and also reconciles on `visibilitychange`/`online`. This fixes missed `agent_end` events from background tabs or half-open connections.
 - Prompt runs use a monotonic run id; late SSE or slow reconciliation responses from an old run must be ignored so they cannot resurrect stale streaming bubbles.
 
+### Pinned, recent, and hidden sidebar state
+- `GET/PATCH /api/sidebar-state` stores versioned pi-web-only metadata in `getAgentDir()/pi-web-sidebar.json`. Clients send one idempotent `pin`, `unpin`, `hide`, or `restore` operation rather than replacing arrays.
+- `lib/sidebar-state-store.ts` serializes mutations with a bounded exclusive lock, rereads under the lock, rejects malformed/unsupported state without rewriting it, and publishes same-directory temporary writes by atomic rename. Stale IDs are pruned only when a complete `listAllSessions()` scan remains generation-current through metadata-lock acquisition.
+- `lib/sidebar-session-state.ts` builds hidden-descendant closure from the raw global session graph before filtering. Pinned order comes from stored IDs; Recent is the uncapped, unpinned exact ten-day window; Project families sort by their newest visible descendant; duplicate project basenames expand to shortest unique suffixes.
+- Hide/Restore never mutates Pi JSONL, settings, selection, running agents, navigation, or pin state. Show hidden is a reload-local UI mode. Cross-client convergence uses existing Refresh paths—there is no sidebar-state polling or SSE channel.
+
 ### Worktrees and project grouping
 - `lib/worktree.ts` resolves linked worktree top-levels back to the main repo `projectRoot`; `listAllSessions()` attaches that to each `SessionInfo` so all worktrees for one repo are grouped together in the sidebar.
 - Worktree operations are served by `/api/worktrees` and guarded by the same allowed-root rules as `/api/files`.
@@ -182,6 +201,11 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - OAuth/device-code/manual-code flows are streamed by `GET /api/auth/login/[provider]`; manual code responses POST back with a short-lived token stored in `globalThis.__piLoginCallbacks`.
 - API-key routes store and remove keys through `AuthStorage`. Status endpoints must never return the raw key.
 - The model test route is `app/api/models-config/test/route.ts`; `app/api/models/test/` is not a real route.
+
+### Expanded file viewer
+- `AppShell` owns the ephemeral expanded-viewer Boolean. Expansion changes shell/panel classes only: sidebar and center/chat remain mounted but leave layout and hit testing, while the existing right panel fills `100dvh` and the fixed panel toggle is suppressed.
+- Desktop expansion must override both the panel's `42%`/`300px` rule and its direct children's separate `42vw`/`300px` rule. At `640px` and below, the normal mobile panel remains the sole full-width mode and clears stale desktop expansion.
+- Explorer Markdown stays separate from chat `MarkdownBody`. `MarkdownFilePreview` centers direct reading blocks at `1000px` maximum while direct code, wrapped tables, and standalone images use the wider padded surface with inner overflow.
 
 ### Completion sound
 - `hooks/useAudio.ts` stores the toggle in `localStorage` as `pi-sound-enabled` and reuses one `AudioContext`.
