@@ -1,0 +1,76 @@
+{
+  "passed": true,
+  "failures": [],
+  "tallLayout": {
+    "sidebarWidth": 260,
+    "order": [
+      55,
+      356,
+      657,
+      923.5
+    ],
+    "pinnedRows": 6,
+    "recentRows": 7,
+    "pinnedClientHeight": 274,
+    "pinnedScrollHeight": 324,
+    "recentClientHeight": 277,
+    "recentScrollHeight": 378,
+    "projectHeight": 265.5,
+    "explorerExpanded": "false",
+    "bodyOverflow": false
+  },
+  "shortLayout": {
+    "pinnedHeight": 143.75,
+    "recentHeight": 143.75,
+    "projectHeight": 180
+  },
+  "hiddenMode": {
+    "explicitSelections": 2,
+    "inheritedSelections": 2,
+    "restoreButtons": 2,
+    "inheritedRestoreButtons": 0
+  },
+  "runningDuplicateCount": 4,
+  "revealedRunningCount": 2,
+  "backgroundUnreadCount": 2,
+  "concurrentPinnedCount": 8,
+  "selectedHidden": {
+    "urlStillSelected": true,
+    "rowVisible": false,
+    "matchingRowCount": 0,
+    "matchingRowLabels": [],
+    "showHiddenControl": "normal",
+    "chatPresent": true
+  },
+  "mobile": {
+    "sidebarWidth": 280,
+    "sidebarLeft": 0,
+    "documentOverflow": false,
+    "actionsVisibleOnFocus": true,
+    "activeClass": "session-row-compact-action session-row-pin",
+    "activeFocusVisible": false,
+    "activeOutlineWidth": "3px",
+    "activeOutlineStyle": "none",
+    "rowContainsActiveElement": true,
+    "documentHasFocus": false,
+    "focusRulePresent": true,
+    "pointerCoarse": false,
+    "sectionToggleCount": 4
+  },
+  "mobileLandscape": {
+    "sidebarLeft": 0,
+    "sidebarWidth": 280,
+    "explorerBottom": 312,
+    "viewportHeight": 360,
+    "projectHeight": 136.8000030517578,
+    "documentOverflow": false
+  },
+  "browserErrorCount": 0,
+  "sessionFilesUnchanged": true,
+  "screenshots": [
+    "desktop-tall.png",
+    "desktop-short.png",
+    "mobile.png",
+    "mobile-landscape.png"
+  ]
+}

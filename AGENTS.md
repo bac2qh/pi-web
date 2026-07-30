@@ -43,6 +43,7 @@ app/api/
   sessions/[id]/route.ts          GET/PATCH/DELETE session
   sessions/[id]/context/route.ts  GET ?leafId= — context for a specific leaf
   sessions/[id]/export/route.ts   GET exported HTML for a session
+  sidebar-state/route.ts          GET/PATCH shared pin and hidden-sidebar state
   agent/new/route.ts              POST { cwd, message, toolNames?, provider?, modelId? }
   agent/[id]/route.ts             GET state | POST any command
   agent/[id]/events/route.ts      GET SSE stream
@@ -77,6 +78,8 @@ lib/
   hosted-implementation-session.ts  process-local Start/Orchestrate host capability
   session-clone.ts    disposable native active-branch extraction for /clone
   session-reader.ts   SessionManager wrappers + path cache + buildSessionContext adapter
+  sidebar-session-state.ts  client-safe pin/hide/recent/tree derivation
+  sidebar-state-store.ts    locked atomic pi-web-sidebar.json persistence
   tool-presets.ts     PRESET_NONE/DEFAULT/FULL + getPresetFromTools()
   types.ts            shared TypeScript types
   normalize.ts        normalizeToolCalls() — field name mismatch between file format and our types
@@ -84,7 +87,7 @@ lib/
 
 components/
   AppShell.tsx        layout + URL state + tab management
-  SessionSidebar.tsx  session tree + FileExplorer
+  SessionSidebar.tsx  Pinned/Recent/Project presentations + FileExplorer
   ChatWindow.tsx      chat composition + completion sound wrapper
   ChatInput.tsx       input bar + model/thinking/tools/compact controls
   MessageView.tsx     renders one message (user/assistant/toolCall/toolResult)
@@ -157,6 +160,12 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - The sidebar listens to `/api/agent/running/events`, backed by `subscribeRunningSessions()` in `lib/rpc-manager.ts`, so running badges update without polling.
 - `useAgentSession` still treats per-session SSE as primary for chat events, but while a run is active it periodically calls `GET /api/agent/[id]` and also reconciles on `visibilitychange`/`online`. This fixes missed `agent_end` events from background tabs or half-open connections.
 - Prompt runs use a monotonic run id; late SSE or slow reconciliation responses from an old run must be ignored so they cannot resurrect stale streaming bubbles.
+
+### Pinned, recent, and hidden sidebar state
+- `GET/PATCH /api/sidebar-state` stores versioned pi-web-only metadata in `getAgentDir()/pi-web-sidebar.json`. Clients send one idempotent `pin`, `unpin`, `hide`, or `restore` operation rather than replacing arrays.
+- `lib/sidebar-state-store.ts` serializes mutations with a bounded exclusive lock, rereads under the lock, rejects malformed/unsupported state without rewriting it, and publishes same-directory temporary writes by atomic rename. Stale IDs are pruned only when a complete `listAllSessions()` scan remains generation-current through metadata-lock acquisition.
+- `lib/sidebar-session-state.ts` builds hidden-descendant closure from the raw global session graph before filtering. Pinned order comes from stored IDs; Recent is the uncapped, unpinned exact ten-day window; Project families sort by their newest visible descendant; duplicate project basenames expand to shortest unique suffixes.
+- Hide/Restore never mutates Pi JSONL, settings, selection, running agents, navigation, or pin state. Show hidden is a reload-local UI mode. Cross-client convergence uses existing Refresh paths—there is no sidebar-state polling or SSE channel.
 
 ### Worktrees and project grouping
 - `lib/worktree.ts` resolves linked worktree top-levels back to the main repo `projectRoot`; `listAllSessions()` attaches that to each `SessionInfo` so all worktrees for one repo are grouped together in the sidebar.

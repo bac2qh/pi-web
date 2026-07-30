@@ -40,6 +40,7 @@ PI_WEB_NO_OPEN=1 pi-web         # useful when running as a background service
 ## Features
 
 - **Pick work back up**: browse previous pi conversations by project without digging through terminal history or session paths.
+- **Keep important work close**: pin sessions across projects, use the rolling ten-day Recent list, or hide unwanted fork subtrees from the sidebar and reveal them temporarily with Show hidden.
 - **Try different directions safely**: edit from an earlier message, fork before a historical prompt, or run `/clone` to copy the complete active branch.
 - **Work across branches**: switch Git worktrees from the sidebar so new sessions and the Explorer follow the checkout you choose.
 - **Chat beside the project**: browse files on the left and preview source, docs, images, audio, and PDFs on the right while the agent works.
@@ -50,6 +51,7 @@ PI_WEB_NO_OPEN=1 pi-web         # useful when running as a background service
 
 - **Data directory**: pi-web reads `~/.pi/agent/sessions` by default. Set `PI_CODING_AGENT_DIR` to point at another pi agent directory.
 - **Session files**: files are stored as `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`.
+- **Sidebar state**: pins and explicit hidden markers are shared by pi-web clients through `pi-web-sidebar.json` in the pi agent directory. Hiding is presentation-only: it does not move or rewrite session JSONL files, change pins, or stop a running session.
 - **Model config**: the Models panel reads and writes `models.json` in the pi agent directory. Model lists and defaults come from pi's config.
 - **File access**: file browsing and preview are scoped to the selected project directory and working directories that appear in sessions.
 - **Git worktrees**: see [Worktrees in pi-web](./docs/worktrees.md) for when the switcher appears, how new worktrees are created, and what removal does.
@@ -88,10 +90,11 @@ app/
     models/         # available models, default model, thinking levels
     models-config/  # read/write models.json and test models
     sessions/       # session reads, rename, delete, context, HTML export
+    sidebar-state/  # shared pin/hide operation API
     skills/         # skill listing, search, install, enable/disable
 components/
   AppShell.tsx        # main layout, URL state, top panels, file tabs
-  SessionSidebar.tsx  # project selector, session tree, Explorer
+  SessionSidebar.tsx  # Pinned/Recent/Project sections and Explorer
   ChatWindow.tsx      # messages, SSE, image drag/drop, minimap
   ChatInput.tsx       # input bar, model/tools/thinking/compact/slash controls
   MessageView.tsx     # message, thinking, tool call/result rendering
@@ -101,8 +104,10 @@ components/
   FileViewer.tsx      # source, diff, image, audio, PDF, DOCX preview
 lib/
   rpc-manager.ts      # AgentSessionWrapper lifecycle and global registry
-  session-reader.ts   # parses .jsonl session files and branch contexts
-  normalize.ts        # normalizes toolCall field names
+  session-reader.ts           # parses .jsonl session files and branch contexts
+  sidebar-session-state.ts    # pure pin/hide/recent/tree derivation
+  sidebar-state-store.ts      # locked atomic pi-web-sidebar.json storage
+  normalize.ts                # normalizes toolCall field names
   file-access.ts      # file read safety boundary
   file-paths.ts       # path encoding and relative path helpers
   markdown.ts         # Markdown/Mermaid/KaTeX plugin configuration
