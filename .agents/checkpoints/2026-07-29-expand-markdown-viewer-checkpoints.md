@@ -83,3 +83,15 @@ Plan: `.agents/plans/2026-07-29-expand-markdown-viewer.md`
 **Departures from approved obligations:** None. The browser workflow is retained as synthetic reports/screenshots rather than a committed executable harness, consistent with the approved no-new-DOM-framework strategy and the repository's current test infrastructure.
 
 **Implementation commit:** pending.
+
+## Implementation Summary
+
+**Plan section:** Final validation and closeout for Objective, Design / Implementation Strategy items 1-10, and Validation Contract VC-001 through VC-005.
+
+**Work and outcome:** The expanded shared file viewer and Explorer Markdown hybrid layout are implemented, documented, independently reviewed, and committed. The existing viewer/chat trees remain mounted during expansion; all supported renderer classes share the mode; restoration is visible-button-only; mobile and final-tab paths clear state; and Explorer-only Markdown keeps prose readable while widening safe block content.
+
+**Validation / evidence:** Implementation commit `7f9778ec5f47e01ff6b112962d4974d16306cc15`. Final results: 169 Node tests passed, TypeScript passed, lint passed, `git diff --check` passed, prohibited-boundary and report-privacy searches passed, and no dependency/keyboard/chat-Markdown files changed. Browser evidence and seven synthetic screenshots under `.agents/reports/2026-07-29-expand-markdown-viewer/` cover every validation-contract surface, including direct raw media, normal and expanded `641px`, `640px` mobile clearing, mounted identity, retained nonzero scroll state through layout reflow, all representative file renderers, tab lifecycle, both themes, and no browser Fullscreen use. Final independent review found no remaining blocking or non-blocking defect after transient reviewer artifacts were removed.
+
+**Departures from approved obligations:** None. The browser workflow is preserved as synthetic evidence rather than a committed executable browser harness, as anticipated by the approved strategy and current repository infrastructure; no validation obligation was waived.
+
+**Implementation commit:** `7f9778ec5f47e01ff6b112962d4974d16306cc15`.
