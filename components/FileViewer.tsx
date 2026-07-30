@@ -1,12 +1,12 @@
 "use client";
 
 import { scaledMenuFontSize } from "@/lib/display-preferences";
-import { useEffect, useState, useRef, useCallback, type MouseEvent } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vs } from "react-syntax-highlighter/dist/cjs/styles/prism";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/cjs/styles/prism";
-import ReactMarkdown from "react-markdown";
 import { useTheme } from "@/hooks/useTheme";
+import { MarkdownFilePreview } from "./MarkdownFilePreview";
 import {
   DOCX_PREVIEW_MAX_BYTES,
   getFileExt,
@@ -14,9 +14,7 @@ import {
   isDocumentPreviewPath,
   isImagePath,
 } from "@/lib/file-types";
-import { encodeFilePathForApi, getFileDirectory, getFileName, getRelativeFilePath } from "@/lib/file-paths";
-import { resolveLocalFileHref } from "@/lib/file-links";
-import { markdownPreviewRehypePlugins, markdownPreviewRemarkPlugins } from "@/lib/markdown";
+import { encodeFilePathForApi, getFileName, getRelativeFilePath } from "@/lib/file-paths";
 
 interface Props {
   filePath: string;
@@ -799,7 +797,6 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
 
   const isHtml = data.language === "html";
   const isMarkdown = data.language === "markdown";
-  const markdownDirectory = getFileDirectory(filePath);
   const lines = data.content.split("\n");
   const hasDiff = prevContent !== null && prevContent !== data.content;
 
@@ -959,37 +956,12 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
             title="HTML preview"
           />
         ) : isMarkdown && previewMode ? (
-          <div
-            className="markdown-body markdown-file-preview"
-            style={{ padding: "24px 32px" }}
-          >
-            <ReactMarkdown
-              remarkPlugins={markdownPreviewRemarkPlugins}
-              rehypePlugins={markdownPreviewRehypePlugins}
-              components={{
-                a({ href, children, ...props }) {
-                  delete props.node;
-                  const linkedFile = onOpenFile
-                    ? resolveLocalFileHref(href, markdownDirectory, cwd ?? markdownDirectory)
-                    : null;
-                  if (!linkedFile || !onOpenFile) {
-                    return <a href={href} {...props}>{children}</a>;
-                  }
-
-                  const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
-                    if (event.defaultPrevented || event.button !== 0) return;
-                    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                    event.preventDefault();
-                    onOpenFile(linkedFile);
-                  };
-
-                  return <a href={href} {...props} onClick={handleClick}>{children}</a>;
-                },
-              }}
-            >
-              {data.content}
-            </ReactMarkdown>
-          </div>
+          <MarkdownFilePreview
+            markdown={data.content}
+            filePath={filePath}
+            cwd={cwd}
+            onOpenFile={onOpenFile}
+          />
         ) : (
           <SyntaxHighlighter
             language={data.language === "text" ? "plaintext" : data.language}

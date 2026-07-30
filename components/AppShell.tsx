@@ -137,6 +137,12 @@ export function AppShell() {
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [fileViewerExpanded, setFileViewerExpanded] = useState(false);
+  const fileViewerExpandedActive = fileViewerExpanded && !isMobile;
+
+  useEffect(() => {
+    if (isMobile) setFileViewerExpanded(false);
+  }, [isMobile]);
 
   // Same @mention format as the chat input's @ autocomplete, so the agent's
   // read tool resolves it the same way (it strips the @ prefix).
@@ -313,14 +319,14 @@ export function AppShell() {
   }, [handleOpenFile, selectedSession?.id]);
 
   const handleCloseFileTab = useCallback((tabId: string) => {
-    setFileTabs((prev) => {
-      const next = prev.filter((t) => t.id !== tabId);
-      if (next.length === 0) setRightPanelOpen(false);
-      return next;
-    });
+    const remaining = fileTabs.filter((t) => t.id !== tabId);
+    setFileTabs(remaining);
+    if (remaining.length === 0) {
+      setRightPanelOpen(false);
+      setFileViewerExpanded(false);
+    }
     setActiveFileTabId((cur) => {
       if (cur !== tabId) return cur;
-      const remaining = fileTabs.filter((t) => t.id !== tabId);
       return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
     });
   }, [fileTabs]);
@@ -497,7 +503,11 @@ export function AppShell() {
         }
       }
     `}</style>
-    <div style={{ display: "flex", height: "100dvh", overflow: "hidden", background: "var(--bg)" }}>
+    <div
+      className={`app-shell${fileViewerExpandedActive ? " file-viewer-expanded" : ""}`}
+      data-file-viewer-expanded={fileViewerExpandedActive ? "true" : "false"}
+      style={{ display: "flex", height: "100dvh", overflow: "hidden", background: "var(--bg)" }}
+    >
       {/* Mobile overlay backdrop */}
       <div
         className={`sidebar-overlay-backdrop${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}
@@ -1061,7 +1071,7 @@ export function AppShell() {
 
       {/* Right panel: file viewer — always mounted, width animated via CSS */}
       <div
-        className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}`}
+        className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}${fileViewerExpandedActive ? " right-panel-expanded" : ""}`}
         style={{
           display: "flex",
           flexDirection: "column",
@@ -1079,7 +1089,27 @@ export function AppShell() {
               onCloseTab={handleCloseFileTab}
             />
           </div>
-
+          {rightPanelOpen && activeFileTab && (
+            <button
+              type="button"
+              className="file-viewer-expand-button"
+              onClick={() => setFileViewerExpanded((expanded) => !expanded)}
+              title={fileViewerExpandedActive ? "Restore file viewer" : "Expand file viewer"}
+              aria-label={fileViewerExpandedActive ? "Restore file viewer" : "Expand file viewer"}
+            >
+              {fileViewerExpandedActive ? (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M3 8h5V3" /><path d="M21 8h-5V3" />
+                  <path d="M3 16h5v5" /><path d="M21 16h-5v5" />
+                </svg>
+              ) : (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M8 3H3v5" /><path d="M16 3h5v5" />
+                  <path d="M8 21H3v-5" /><path d="M16 21h5v-5" />
+                </svg>
+              )}
+            </button>
+          )}
         </div>
 
         {/* File content */}
@@ -1103,8 +1133,9 @@ export function AppShell() {
         </div>
       </div>
     </div>
-    {/* File panel toggle — always visible at top-right */}
+    {/* Normal file panel toggle — suppressed while the viewer is expanded */}
     <button
+      className={`file-panel-toggle${fileViewerExpandedActive ? " file-panel-toggle-hidden" : ""}`}
       onClick={() => setRightPanelOpen((v) => !v)}
       title={rightPanelOpen ? "Hide file panel" : "Show file panel"}
       aria-label={rightPanelOpen ? "Hide file panel" : "Show file panel"}
