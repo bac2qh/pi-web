@@ -93,7 +93,8 @@ components/
   MessageView.tsx     renders one message (user/assistant/toolCall/toolResult)
   BranchNavigator.tsx in-session branch switcher
   ChatMinimap.tsx     scroll minimap alongside the message list
-  MarkdownBody.tsx    markdown renderer
+  MarkdownBody.tsx    chat markdown renderer
+  MarkdownFilePreview.tsx  Explorer Markdown renderer with hybrid-width blocks
   ModelsConfig.tsx    modal for editing models.json (opened from sidebar bottom)
   PluginsConfig.tsx   modal for installed package plugins
   SkillsConfig.tsx    modal for loaded/search/installable skills
@@ -189,6 +190,11 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - OAuth/device-code/manual-code flows are streamed by `GET /api/auth/login/[provider]`; manual code responses POST back with a short-lived token stored in `globalThis.__piLoginCallbacks`.
 - API-key routes store and remove keys through `AuthStorage`. Status endpoints must never return the raw key.
 - The model test route is `app/api/models-config/test/route.ts`; `app/api/models/test/` is not a real route.
+
+### Expanded file viewer
+- `AppShell` owns the ephemeral expanded-viewer Boolean. Expansion changes shell/panel classes only: sidebar and center/chat remain mounted but leave layout and hit testing, while the existing right panel fills `100dvh` and the fixed panel toggle is suppressed.
+- Desktop expansion must override both the panel's `42%`/`300px` rule and its direct children's separate `42vw`/`300px` rule. At `640px` and below, the normal mobile panel remains the sole full-width mode and clears stale desktop expansion.
+- Explorer Markdown stays separate from chat `MarkdownBody`. `MarkdownFilePreview` centers direct reading blocks at `1000px` maximum while direct code, wrapped tables, and standalone images use the wider padded surface with inner overflow.
 
 ### Completion sound
 - `hooks/useAudio.ts` stores the toggle in `localStorage` as `pi-sound-enabled` and reuses one `AudioContext`.

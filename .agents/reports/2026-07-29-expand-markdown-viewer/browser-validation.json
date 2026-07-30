@@ -1,0 +1,719 @@
+{
+  "baseUrl": "http://localhost:31347",
+  "viewport": {
+    "normalSidebarOpen": {
+      "expanded": "false",
+      "shell": {
+        "x": 0,
+        "y": 0,
+        "width": 1440,
+        "height": 900
+      },
+      "panel": {
+        "x": 835.203125,
+        "y": 0,
+        "width": 604.796875,
+        "height": 900
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 0,
+        "width": 260,
+        "height": 900
+      },
+      "center": {
+        "x": 260,
+        "y": 0,
+        "width": 575.203125,
+        "height": 900
+      },
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "fixedToggle": {
+        "x": 1404,
+        "y": 0,
+        "width": 36,
+        "height": 36
+      },
+      "expand": {
+        "x": 1369,
+        "y": -0.5,
+        "width": 36,
+        "height": 36
+      },
+      "displays": {
+        "sidebar": "flex",
+        "center": "flex",
+        "backdrop": "none",
+        "fixedToggle": "flex",
+        "expand": "flex"
+      },
+      "panelClass": "right-panel-container right-panel-open",
+      "fullscreen": false,
+      "documentWidth": {
+        "client": 1440,
+        "scroll": 1440
+      }
+    },
+    "normalSidebarClosed": {
+      "expanded": "false",
+      "shell": {
+        "x": 0,
+        "y": 0,
+        "width": 1440,
+        "height": 900
+      },
+      "panel": {
+        "x": 835.203125,
+        "y": 0,
+        "width": 604.796875,
+        "height": 900
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 900
+      },
+      "center": {
+        "x": 0,
+        "y": 0,
+        "width": 835.203125,
+        "height": 900
+      },
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "fixedToggle": {
+        "x": 1404,
+        "y": 0,
+        "width": 36,
+        "height": 36
+      },
+      "expand": {
+        "x": 1369,
+        "y": -0.5,
+        "width": 36,
+        "height": 36
+      },
+      "displays": {
+        "sidebar": "flex",
+        "center": "flex",
+        "backdrop": "none",
+        "fixedToggle": "flex",
+        "expand": "flex"
+      },
+      "panelClass": "right-panel-container right-panel-open",
+      "fullscreen": false,
+      "documentWidth": {
+        "client": 1440,
+        "scroll": 1440
+      }
+    },
+    "expandedDesktop": {
+      "expanded": "true",
+      "shell": {
+        "x": 0,
+        "y": 0,
+        "width": 1440,
+        "height": 900
+      },
+      "panel": {
+        "x": 0,
+        "y": 0,
+        "width": 1440,
+        "height": 900
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "center": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "fixedToggle": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "expand": {
+        "x": 1404,
+        "y": -0.5,
+        "width": 36,
+        "height": 36
+      },
+      "displays": {
+        "sidebar": "none",
+        "center": "none",
+        "backdrop": "none",
+        "fixedToggle": "none",
+        "expand": "flex"
+      },
+      "panelClass": "right-panel-container right-panel-open right-panel-expanded",
+      "fullscreen": false,
+      "documentWidth": {
+        "client": 1440,
+        "scroll": 1440
+      }
+    },
+    "threshold641": {
+      "expanded": "true",
+      "shell": {
+        "x": 0,
+        "y": 0,
+        "width": 641,
+        "height": 800
+      },
+      "panel": {
+        "x": 0,
+        "y": 0,
+        "width": 641,
+        "height": 800
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "center": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "fixedToggle": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "expand": {
+        "x": 605,
+        "y": -0.5,
+        "width": 36,
+        "height": 36
+      },
+      "displays": {
+        "sidebar": "none",
+        "center": "none",
+        "backdrop": "none",
+        "fixedToggle": "none",
+        "expand": "flex"
+      },
+      "panelClass": "right-panel-container right-panel-open right-panel-expanded",
+      "fullscreen": false,
+      "documentWidth": {
+        "client": 641,
+        "scroll": 641
+      }
+    },
+    "threshold640": {
+      "expanded": "false",
+      "shell": {
+        "x": 0,
+        "y": 0,
+        "width": 640,
+        "height": 800
+      },
+      "panel": {
+        "x": 0,
+        "y": 0,
+        "width": 640,
+        "height": 800
+      },
+      "sidebar": {
+        "x": -280,
+        "y": 0,
+        "width": 280,
+        "height": 800
+      },
+      "center": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 800
+      },
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 640,
+        "height": 800
+      },
+      "fixedToggle": {
+        "x": 604,
+        "y": 0,
+        "width": 36,
+        "height": 36
+      },
+      "expand": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "displays": {
+        "sidebar": "flex",
+        "center": "flex",
+        "backdrop": "block",
+        "fixedToggle": "flex",
+        "expand": "none"
+      },
+      "panelClass": "right-panel-container right-panel-open",
+      "fullscreen": false,
+      "documentWidth": {
+        "client": 640,
+        "scroll": 640
+      }
+    },
+    "mobile390": {
+      "expanded": "false",
+      "shell": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 844
+      },
+      "panel": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 844
+      },
+      "sidebar": {
+        "x": -280,
+        "y": 0,
+        "width": 280,
+        "height": 844
+      },
+      "center": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 844
+      },
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 844
+      },
+      "fixedToggle": {
+        "x": 354,
+        "y": 0,
+        "width": 36,
+        "height": 36
+      },
+      "expand": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "displays": {
+        "sidebar": "flex",
+        "center": "flex",
+        "backdrop": "block",
+        "fixedToggle": "flex",
+        "expand": "none"
+      },
+      "panelClass": "right-panel-container right-panel-open",
+      "fullscreen": false,
+      "documentWidth": {
+        "client": 390,
+        "scroll": 390
+      }
+    },
+    "desktopAfterMobile": {
+      "expanded": "false",
+      "shell": {
+        "x": 0,
+        "y": 0,
+        "width": 1440,
+        "height": 900
+      },
+      "panel": {
+        "x": 835.203125,
+        "y": 0,
+        "width": 604.796875,
+        "height": 900
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 900
+      },
+      "center": {
+        "x": 0,
+        "y": 0,
+        "width": 835.203125,
+        "height": 900
+      },
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "fixedToggle": {
+        "x": 1404,
+        "y": 0,
+        "width": 36,
+        "height": 36
+      },
+      "expand": {
+        "x": 1369,
+        "y": -0.5,
+        "width": 36,
+        "height": 36
+      },
+      "displays": {
+        "sidebar": "flex",
+        "center": "flex",
+        "backdrop": "none",
+        "fixedToggle": "flex",
+        "expand": "flex"
+      },
+      "panelClass": "right-panel-container right-panel-open",
+      "fullscreen": false,
+      "documentWidth": {
+        "client": 1440,
+        "scroll": 1440
+      }
+    },
+    "normal641": {
+      "expanded": "false",
+      "shell": {
+        "x": 0,
+        "y": 0,
+        "width": 641,
+        "height": 800
+      },
+      "panel": {
+        "x": 341,
+        "y": 0,
+        "width": 300,
+        "height": 800
+      },
+      "sidebar": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 800
+      },
+      "center": {
+        "x": 0,
+        "y": 0,
+        "width": 341,
+        "height": 800
+      },
+      "backdrop": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "fixedToggle": {
+        "x": 605,
+        "y": 0,
+        "width": 36,
+        "height": 36
+      },
+      "expand": {
+        "x": 570,
+        "y": -0.5,
+        "width": 36,
+        "height": 36
+      },
+      "displays": {
+        "sidebar": "flex",
+        "center": "flex",
+        "backdrop": "none",
+        "fixedToggle": "flex",
+        "expand": "flex"
+      },
+      "panelClass": "right-panel-container right-panel-open",
+      "fullscreen": false,
+      "documentWidth": {
+        "client": 641,
+        "scroll": 641
+      }
+    }
+  },
+  "fixtures": [
+    "README.md",
+    "SECOND.md",
+    "source.ts",
+    "wide-image.png",
+    "tone.wav",
+    "sample.html",
+    "sample.pdf",
+    "sample.docx"
+  ],
+  "checks": {
+    "liveWatchObserved": true,
+    "mountedIdentityAndPointer": {
+      "chatAttached": true,
+      "viewerAttached": true,
+      "chatProbe": "chat-preserved",
+      "viewerProbe": "viewer-preserved",
+      "hitInsidePanel": true,
+      "restoreLabel": "Restore file viewer",
+      "restoreTitle": "Restore file viewer",
+      "contentScrollTop": 97
+    },
+    "scrollStateRetainedDuringExpansion": {
+      "before": 120,
+      "afterLayoutReflow": 97
+    },
+    "markdownGeometry": {
+      "preview": {
+        "width": 1440,
+        "x": 0,
+        "clientWidth": 1440,
+        "scrollWidth": 1440
+      },
+      "ordinary": {
+        "width": 1000,
+        "x": 220,
+        "clientWidth": 1000,
+        "scrollWidth": 1000
+      },
+      "mixed": {
+        "width": 1000,
+        "x": 220,
+        "clientWidth": 1000,
+        "scrollWidth": 1000
+      },
+      "longToken": {
+        "width": 1000,
+        "x": 220,
+        "clientWidth": 1000,
+        "scrollWidth": 1000
+      },
+      "heading": {
+        "width": 1000,
+        "x": 220,
+        "clientWidth": 1000,
+        "scrollWidth": 1000
+      },
+      "list": {
+        "width": 1000,
+        "x": 220,
+        "clientWidth": 1000,
+        "scrollWidth": 1000
+      },
+      "quote": {
+        "width": 1000,
+        "x": 220,
+        "clientWidth": 997,
+        "scrollWidth": 997
+      },
+      "pre": {
+        "width": 1376,
+        "x": 32,
+        "clientWidth": 1374,
+        "scrollWidth": 13510
+      },
+      "tableWrap": {
+        "width": 1376,
+        "x": 32,
+        "clientWidth": 1374,
+        "scrollWidth": 2743
+      },
+      "mediaBlock": {
+        "width": 1376,
+        "x": 32,
+        "clientWidth": 1376,
+        "scrollWidth": 1376
+      },
+      "media": {
+        "width": 1200,
+        "x": 120,
+        "clientWidth": 1200,
+        "scrollWidth": 1200,
+        "height": 400,
+        "naturalWidth": 1200,
+        "naturalHeight": 400
+      },
+      "directMedia": {
+        "width": 1200,
+        "x": 120,
+        "clientWidth": 1200,
+        "scrollWidth": 1200,
+        "height": 400,
+        "naturalWidth": 1200,
+        "naturalHeight": 400
+      },
+      "previewOverflow": {
+        "clientWidth": 1440,
+        "scrollWidth": 1440
+      }
+    },
+    "markdownPreviewRawDiff": true,
+    "localLinkOpenedSourceWhileExpanded": true,
+    "renderersWhileExpanded": {
+      "source": true,
+      "image": true,
+      "audio": true,
+      "html": true,
+      "pdf": true,
+      "docx": true,
+      "secondMarkdown": true
+    },
+    "normalPanelToggle": true,
+    "tabClosure": {
+      "initialTabCount": 8,
+      "afterNonFinal": {
+        "expanded": "true",
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 1440,
+          "height": 900
+        },
+        "panel": {
+          "x": 0,
+          "y": 0,
+          "width": 1440,
+          "height": 900
+        },
+        "sidebar": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "center": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "backdrop": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "fixedToggle": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "expand": {
+          "x": 1404,
+          "y": -0.5,
+          "width": 36,
+          "height": 36
+        },
+        "displays": {
+          "sidebar": "none",
+          "center": "none",
+          "backdrop": "none",
+          "fixedToggle": "none",
+          "expand": "flex"
+        },
+        "panelClass": "right-panel-container right-panel-open right-panel-expanded",
+        "fullscreen": false,
+        "documentWidth": {
+          "client": 1440,
+          "scroll": 1440
+        }
+      },
+      "afterFinal": {
+        "expanded": "false",
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 1440,
+          "height": 900
+        },
+        "panel": {
+          "x": 1440,
+          "y": 0,
+          "width": 0,
+          "height": 900
+        },
+        "sidebar": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 900
+        },
+        "center": {
+          "x": 0,
+          "y": 0,
+          "width": 1440,
+          "height": 900
+        },
+        "backdrop": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "fixedToggle": {
+          "x": 1404,
+          "y": 0,
+          "width": 36,
+          "height": 36
+        },
+        "expand": null,
+        "displays": {
+          "sidebar": "flex",
+          "center": "flex",
+          "backdrop": "none",
+          "fixedToggle": "flex",
+          "expand": null
+        },
+        "panelClass": "right-panel-container right-panel-closed",
+        "fullscreen": false,
+        "documentWidth": {
+          "client": 1440,
+          "scroll": 1440
+        }
+      }
+    },
+    "noFullscreen": true,
+    "expandRestoreAccessibleNames": true,
+    "mobileClearsExpansion": true
+  },
+  "screenshots": [
+    "normal-sidebar-open-light.png",
+    "normal-sidebar-closed-light.png",
+    "expanded-light.png",
+    "expanded-dark.png",
+    "expanded-641-dark.png",
+    "mobile-640-dark.png",
+    "mobile-390-dark.png"
+  ],
+  "consoleErrors": []
+}
