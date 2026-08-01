@@ -13,7 +13,7 @@ Success means the same orchestration root resumes with its preserved history and
 1. Treat this follow-up as a narrow durable amendment, not a replacement orchestration plan. Do not edit the immutable master or S1 plan, start another implementation session, or create another worktree.
 2. Waive only the real distributed 256/257 integration run and its four-address/loopback-source setup. Record it as explicitly waived, never passed or silently skipped.
 3. Retain the existing pure automated 256/257 accounting tests; real single-address 64/65, close/reconnect, malformed-handshake, ordering, cleanup, and forwarded-header tests; full automated S1 gates; Chromium/Firefox page inventory; hosted discovery/reconnect; HTTP schedulability; and fresh independent review.
-4. After approval and an exact-plan commit, return the plan path and commit to the existing orchestration session `019fb6d0-af96-7b6f-b3af-d5ad71e149e2`. That root records the waiver in its existing checkpoint and resumes from the preserved S1 source diff.
+4. After approval and an exact-plan commit, return the plan path and commit to the existing paused persistent-WebSocket orchestration root. That root records the waiver in its existing checkpoint and resumes from the preserved S1 source diff.
 
 **Rough scope estimate:** one validation-authority amendment with no intended production-source change. Test scope is one explicit omission while all existing automated and browser layers remain. Testability is high; implementation difficulty is low. The main risk is accidentally treating the waiver as broader than the one real distributed test.
 
@@ -62,4 +62,4 @@ No production telemetry change is authorized. Existing bounded, identifier-free 
 
 ## Implementation Handoff
 
-After explicit approval and a separate request to commit this exact plan, send its path and commit to the existing paused orchestration session `019fb6d0-af96-7b6f-b3af-d5ad71e149e2` with the instruction to resume under this narrow waiver. Do not invoke a new Start or Orchestrate implementation command for this amendment.
+After explicit approval and a separate request to commit this exact plan, send its path and commit to the existing paused persistent-WebSocket orchestration root with the instruction to resume under this narrow waiver. Do not invoke a new Start or Orchestrate implementation command for this amendment.
