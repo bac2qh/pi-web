@@ -53,7 +53,7 @@ function createPiWebUpgradeHandler({ gateway, webSocketServer, diagnostics }) {
       diagnostics?.({
         event,
         serverInstanceId: gateway.serverInstanceId,
-        activePiWebSocketCount: webSocketServer.clients?.size ?? 0,
+        activePiWebSocketCount: gateway.getStats().activeConnectionCount,
         ...details,
       });
     } catch {
@@ -95,28 +95,59 @@ function createPiWebUpgradeHandler({ gateway, webSocketServer, diagnostics }) {
       return true;
     }
 
+    let releaseAdmission;
+    try {
+      // The accepted Node socket is the sole peer-address authority. Forwarded
+      // request headers are deliberately never consulted for admission.
+      releaseAdmission = gateway.reserveConnection(socket.remoteAddress);
+    } catch (error) {
+      const reason = error?.code === "peer_unavailable" ? "peer_unavailable" : "connection_limit";
+      emitDiagnostic("upgrade_rejected", { reason });
+      rejectUpgrade(socket, reason === "connection_limit" ? 429 : 503);
+      return true;
+    }
+
+    // `ws` may reject a malformed handshake by closing the accepted raw socket
+    // without throwing or invoking the upgrade callback. Attach the idempotent
+    // reservation release before handing control to `handleUpgrade` so every
+    // callback-less close converges with accepted-WebSocket and catch paths.
+    const release = () => releaseAdmission();
+    socket.once("close", release);
+
     try {
       webSocketServer.handleUpgrade(req, socket, head, (webSocket) => {
+        let handlerFailed = false;
+        webSocket.once("close", () => {
+          release();
+          emitDiagnostic("websocket_closed");
+        });
         webSocket.on("error", () => {
           emitDiagnostic("websocket_error");
         });
-        webSocket.on("close", () => {
-          emitDiagnostic("websocket_closed");
-        });
+
+        const closeAfterHandlerFailure = () => {
+          if (handlerFailed) return;
+          handlerFailed = true;
+          try {
+            // Keep the reservation until the accepted socket actually closes.
+            // Handler failure is terminal, so do not wait on a close handshake.
+            webSocket.terminate();
+          } catch {
+            try { socket.destroy(); } catch { /* admission release still converges */ }
+            release();
+          }
+        };
 
         emitDiagnostic("upgrade_accepted");
-        try {
-          Promise.resolve(authorization.handler(webSocket, {
+        Promise.resolve()
+          .then(() => authorization.handler(webSocket, {
             channel: authorization.channel,
             serverInstanceId: gateway.serverInstanceId,
-          })).catch(() => {
-            if (webSocket.readyState === webSocket.OPEN) webSocket.close(1011);
-          });
-        } catch {
-          if (webSocket.readyState === webSocket.OPEN) webSocket.close(1011);
-        }
+          }))
+          .catch(closeAfterHandlerFailure);
       });
     } catch {
+      release();
       emitDiagnostic("upgrade_rejected", { reason: "handshake" });
       if (!socket.destroyed) socket.destroy();
     }

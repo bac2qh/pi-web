@@ -8,6 +8,8 @@ const PI_WEB_TRANSPORT_GATEWAY_SLOT = "__piWebTransportGatewayV1";
 const PI_WEB_TRANSPORT_TICKET_TTL_MS = 30_000;
 const PI_WEB_TRANSPORT_PATH = "/_pi/websocket";
 const PI_WEB_TRANSPORT_MAX_PAYLOAD_BYTES = 16 * 1024;
+const PI_WEB_TRANSPORT_MAX_CONNECTIONS_PER_PEER = 64;
+const PI_WEB_TRANSPORT_MAX_CONNECTIONS_TOTAL = 256;
 const PI_WEB_TRANSPORT_CHANNEL_PATTERN = /^[a-z][a-z0-9.-]{0,63}$/;
 const TICKET_BYTES = 32;
 const TICKET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -118,6 +120,9 @@ function createPiWebTransportGateway(options = {}) {
   const serverInstanceId = createInstanceId();
   const channels = new Map();
   const tickets = new Map();
+  const peerConnectionCounts = new Map();
+  const activeReservations = new Set();
+  let activeConnectionCount = 0;
   let closed = false;
 
   const emitDiagnostic = (event, details = {}) => {
@@ -128,6 +133,8 @@ function createPiWebTransportGateway(options = {}) {
         serverInstanceId,
         registeredChannelCount: channels.size,
         pendingTicketCount: tickets.size,
+        activeConnectionCount,
+        activePeerKeyCount: peerConnectionCounts.size,
         ...details,
       });
     } catch {
@@ -244,11 +251,55 @@ function createPiWebTransportGateway(options = {}) {
       };
     },
 
+    reserveConnection(directPeerAddress) {
+      assertOpen();
+      if (
+        typeof directPeerAddress !== "string"
+        || directPeerAddress.length === 0
+        || directPeerAddress.length > 128
+        || directPeerAddress !== directPeerAddress.trim()
+      ) {
+        emitDiagnostic("connection_rejected", { reason: "peer_unavailable" });
+        throw gatewayError("peer_unavailable");
+      }
+
+      const peerCount = peerConnectionCounts.get(directPeerAddress) ?? 0;
+      if (peerCount >= PI_WEB_TRANSPORT_MAX_CONNECTIONS_PER_PEER) {
+        emitDiagnostic("connection_rejected", { reason: "peer_limit" });
+        throw gatewayError("connection_limit");
+      }
+      if (activeConnectionCount >= PI_WEB_TRANSPORT_MAX_CONNECTIONS_TOTAL) {
+        emitDiagnostic("connection_rejected", { reason: "total_limit" });
+        throw gatewayError("connection_limit");
+      }
+
+      const reservation = { peerKey: directPeerAddress, released: false };
+      activeReservations.add(reservation);
+      activeConnectionCount += 1;
+      peerConnectionCounts.set(directPeerAddress, peerCount + 1);
+      emitDiagnostic("connection_admitted");
+
+      return () => {
+        if (reservation.released) return false;
+        reservation.released = true;
+        if (!activeReservations.delete(reservation)) return false;
+
+        activeConnectionCount = Math.max(0, activeConnectionCount - 1);
+        const currentPeerCount = peerConnectionCounts.get(reservation.peerKey) ?? 0;
+        if (currentPeerCount <= 1) peerConnectionCounts.delete(reservation.peerKey);
+        else peerConnectionCounts.set(reservation.peerKey, currentPeerCount - 1);
+        emitDiagnostic("connection_released");
+        return true;
+      };
+    },
+
     getStats() {
       return {
         closed,
         registeredChannelCount: channels.size,
         pendingTicketCount: tickets.size,
+        activeConnectionCount,
+        activePeerKeyCount: peerConnectionCounts.size,
       };
     },
 
@@ -258,6 +309,12 @@ function createPiWebTransportGateway(options = {}) {
       for (const record of tickets.values()) cancelTimeout(record.timeout);
       tickets.clear();
       channels.clear();
+      for (const reservation of [...activeReservations]) {
+        reservation.released = true;
+      }
+      activeReservations.clear();
+      activeConnectionCount = 0;
+      peerConnectionCounts.clear();
       if (
         Object.prototype.hasOwnProperty.call(globalThis, PI_WEB_TRANSPORT_GATEWAY_SLOT) &&
         globalThis[PI_WEB_TRANSPORT_GATEWAY_SLOT] === gateway
@@ -326,6 +383,8 @@ module.exports = {
   PI_WEB_TRANSPORT_TICKET_TTL_MS,
   PI_WEB_TRANSPORT_PATH,
   PI_WEB_TRANSPORT_MAX_PAYLOAD_BYTES,
+  PI_WEB_TRANSPORT_MAX_CONNECTIONS_PER_PEER,
+  PI_WEB_TRANSPORT_MAX_CONNECTIONS_TOTAL,
   PI_WEB_TRANSPORT_CHANNEL_PATTERN,
   PiWebTransportGatewayError,
   createPiWebTransportGateway,

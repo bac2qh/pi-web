@@ -10,24 +10,26 @@ const jiti = createJiti(import.meta.url, {
 const {
   createSessionListGenerationTracker,
   isLatestSessionLoadRequest,
+  resolveSidebarRunningSessionIds,
+  shouldApplySidebarHttpRunningFallback,
 } = await jiti.import("./SessionSidebar.tsx");
 
 test("hosted session discovery reloads the ordinary list without navigation or selection", async () => {
-  const [sidebarSource, routeSource] = await Promise.all([
+  const [sidebarSource, channelSource] = await Promise.all([
     readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/api/agent/running/events/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/global-status-channel.ts", import.meta.url), "utf8"),
   ]);
 
-  assert.match(routeSource, /subscribeSessionListRefresh/);
-  assert.match(routeSource, /sessionListGeneration: generation/);
-  assert.match(routeSource, /sessionListGeneration: getSessionListRefreshGeneration\(\)/);
+  assert.match(channelSource, /subscribeSessionListRefresh/);
+  assert.match(channelSource, /sessionListGeneration/);
+  assert.match(channelSource, /getSessionListRefreshGeneration/);
   const handler = sidebarSource.slice(
-    sidebarSource.indexOf("source.onmessage"),
-    sidebarSource.indexOf("// On error EventSource auto-reconnects"),
+    sidebarSource.indexOf("subscribeSessionsChanged((event)"),
+    sidebarSource.indexOf("}), [loadSessions, subscribeSessionsChanged]") + 60,
   );
-  assert.match(handler, /data\.type === "sessions_changed"/);
-  assert.match(handler, /tracker\.begin\(generation\)/);
-  assert.match(handler, /loadSessions\(false\)\.then\(\(applied\) => tracker\.finish\(generation, applied\)\)/);
+  assert.match(handler, /tracker\.begin\(event\.sessionListGeneration\)/);
+  assert.match(handler, /loadSessions\(false\)\.then\(\(applied\) => tracker\.finish\(event\.sessionListGeneration, applied\)\)/);
+  assert.match(handler, /createSessionListGenerationTracker\(\)/);
   assert.doesNotMatch(handler, /onSelectSession|router\.|setSelectedSession|history\./);
 
   const loadSessions = sidebarSource.slice(
@@ -103,6 +105,54 @@ test("the shared row exposes keyboard, touch, pin, hide, restore, and hidden-sta
   assert.match(cssSource, /\.session-row:focus-within \.session-row-actions/);
   assert.match(cssSource, /any-pointer: coarse/);
   assert.match(cssSource, /\.session-row-compact-action:focus/);
+});
+
+test("WebSocket authority atomically suppresses a late HTTP fallback before passive effects", async () => {
+  let fallbackRunningSessionIds = new Set(["still-running"]);
+  let controllerSnapshot = { runningAuthoritative: false };
+  let providerRunningSessionIds = [];
+  let providerRunningAuthoritative = false;
+  let releaseHttp;
+  const delayedHttp = new Promise((resolve) => { releaseHttp = resolve; }).then((ids) => {
+    if (shouldApplySidebarHttpRunningFallback(() => controllerSnapshot)) {
+      fallbackRunningSessionIds = new Set(ids);
+    }
+  });
+
+  // Controller delivery is synchronous, while React provider rendering/effects
+  // may follow later. The async HTTP commit must already see socket authority.
+  controllerSnapshot = { runningAuthoritative: true };
+  releaseHttp([]);
+  await delayedHttp;
+  providerRunningSessionIds = ["still-running"];
+  providerRunningAuthoritative = true;
+
+  const displayed = resolveSidebarRunningSessionIds(
+    fallbackRunningSessionIds,
+    providerRunningSessionIds,
+    providerRunningAuthoritative,
+  );
+  assert.deepEqual([...fallbackRunningSessionIds], ["still-running"]);
+  assert.deepEqual([...displayed], ["still-running"]);
+  const falseBackgroundCompletions = ["still-running"].filter((id) => !displayed.has(id));
+  assert.deepEqual(falseBackgroundCompletions, []);
+});
+
+test("WebSocket authority uses provider running data and server instances reset generation namespace", async () => {
+  const sidebarSource = await readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8");
+  const loadSessions = sidebarSource.slice(
+    sidebarSource.indexOf("const loadSessions"),
+    sidebarSource.indexOf("const initialLoadDone"),
+  );
+  assert.match(loadSessions, /shouldApplySidebarHttpRunningFallback\(getCurrentGlobalStatusSnapshot\)/);
+  assert.match(sidebarSource, /resolveSidebarRunningSessionIds\([\s\S]*globalRunningSessionIds,[\s\S]*runningAuthoritative/);
+  assert.doesNotMatch(sidebarSource, /streamAuthoritativeRef/);
+  const namespaceEffect = sidebarSource.slice(
+    sidebarSource.indexOf("if (!serverInstanceId) return"),
+    sidebarSource.indexOf("subscribeSessionsChanged((event)"),
+  );
+  assert.match(namespaceEffect, /namespace\.serverInstanceId !== serverInstanceId/);
+  assert.match(namespaceEffect, /tracker: createSessionListGenerationTracker\(\)/);
 });
 
 test("background completion refreshes activity-derived sections and successful metadata responses use revision authority", async () => {

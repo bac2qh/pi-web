@@ -166,12 +166,12 @@ export class AgentSessionWrapper {
         invalidateSessionListCache();
       }
       this.emit(event);
-      // Streaming / compaction / tool events flow through here; re-broadcast
-      // the running-status snapshot so the sidebar can update live.
-      notifyRunningChange();
+      // Streaming and compaction state can change with any native event. The
+      // wrapper publishes only its own projection; subscribers never inspect it.
+      this.publishRunningState();
     });
     this.resetIdleTimer();
-    notifyRunningChange();
+    this.publishRunningState();
   }
 
   setForceEmptySystemPrompt(force: boolean): void {
@@ -184,7 +184,7 @@ export class AgentSessionWrapper {
       const errorClass = err instanceof Error && /^[A-Za-z_$][A-Za-z0-9_$.-]{0,79}$/.test(err.name)
         ? err.name
         : "Error";
-      console.error(`[pi-web] session_start dispatch failed for session ${this.inner.sessionId} (${errorClass})`);
+      console.error(`[pi-web] extension_binding stage=failed errorClass=${errorClass}`);
     });
   }
 
@@ -231,7 +231,7 @@ export class AgentSessionWrapper {
       }
       this.extensionsBound = true;
       this.applyForcedEmptySystemPrompt();
-      console.log(`[pi-web] session_start dispatched to extensions for session ${this.inner.sessionId}`);
+      console.log("[pi-web] extension_binding stage=dispatched outcome=ok");
     })().catch((err) => {
       this.extensionBindingError = err;
       throw err;
@@ -257,22 +257,26 @@ export class AgentSessionWrapper {
     return type === "prompt" || type === "steer" || type === "follow_up" || type === "get_commands";
   }
 
+  private publishRunningState(): void {
+    publishRunningSessionState(this.sessionId, this.isRunning());
+  }
+
   private async withFinalRunningNotification<T>(operation: () => Promise<T>): Promise<T> {
     try {
       return await operation();
     } finally {
-      notifyRunningChange();
+      this.publishRunningState();
     }
   }
 
   private claimPromptRun(): void {
     this.promptRunningCount += 1;
-    notifyRunningChange();
+    this.publishRunningState();
   }
 
   private releasePromptRun(): void {
     this.promptRunningCount = Math.max(0, this.promptRunningCount - 1);
-    notifyRunningChange();
+    this.publishRunningState();
   }
 
   private applyForcedEmptySystemPrompt(): void {
@@ -565,14 +569,14 @@ export class AgentSessionWrapper {
         // Claim compaction before invoking the native async method: its public
         // isCompacting flag may not flip until after an initial await.
         this.compactionRunningCount += 1;
-        notifyRunningChange();
+        this.publishRunningState();
         try {
           return await this.inner.compact(command.customInstructions as string | undefined);
         } finally {
           this.compactionRunningCount = Math.max(0, this.compactionRunningCount - 1);
           this.resetIdleTimer();
           invalidateSessionListCache();
-          notifyRunningChange();
+          this.publishRunningState();
         }
       }
 
@@ -725,7 +729,7 @@ export class AgentSessionWrapper {
       try { callback(); } catch { /* cleanup listeners are isolated */ }
     }
     this.onDestroyCallbacks.clear();
-    notifyRunningChange();
+    publishRunningSessionState(this.sessionId, false);
   }
 
   private resolveExtensionUiResponse(response: ExtensionUiResponse): void {
@@ -1083,6 +1087,8 @@ declare global {
   var __piSessions: Map<string, AgentSessionWrapper> | undefined;
   var __piStartLocks: Map<string, Promise<RpcSessionStartResult>> | undefined;
   var __piRunningListeners: Set<(ids: string[]) => void> | undefined;
+  var __piRunningSessionIds: Set<string> | undefined;
+  var __piLastRunningSnapshot: string | undefined;
   var __piSessionListRefreshListeners: Set<(generation: number) => void> | undefined;
   var __piSessionListRefreshGeneration: number | undefined;
   var __piRpcCleanupRegistered: boolean | undefined;
@@ -1112,12 +1118,13 @@ export function getRpcSession(sessionId: string): AgentSessionWrapper | undefine
   return getRegistry().get(sessionId);
 }
 
+function getRunningProjection(): Set<string> {
+  if (!globalThis.__piRunningSessionIds) globalThis.__piRunningSessionIds = new Set();
+  return globalThis.__piRunningSessionIds;
+}
+
 export function getRunningRpcSessionIds(): string[] {
-  const ids = new Set<string>();
-  for (const [sessionId, session] of getRegistry()) {
-    if (session.isRunning()) ids.add(session.sessionId || sessionId);
-  }
-  return [...ids];
+  return [...getRunningProjection()].sort();
 }
 
 // ----------------------------------------------------------------------------
@@ -1165,17 +1172,18 @@ export function notifySessionListRefresh(): void {
   }
 }
 
-let lastRunningSnapshot = "";
+/** Publish one wrapper's current running state into the HMR-stable projection. */
+export function publishRunningSessionState(sessionId: string, running: boolean): void {
+  const projection = getRunningProjection();
+  const changed = running ? !projection.has(sessionId) : projection.has(sessionId);
+  if (!changed) return;
+  if (running) projection.add(sessionId);
+  else projection.delete(sessionId);
 
-/**
- * Recompute the running-session-id set and, if it changed since the last
- * notification, broadcast it to subscribers. Cheap to call often.
- */
-export function notifyRunningChange(): void {
-  const ids = getRunningRpcSessionIds();
-  const snapshot = JSON.stringify([...ids].sort());
-  if (snapshot === lastRunningSnapshot) return;
-  lastRunningSnapshot = snapshot;
+  const ids = [...projection].sort();
+  const snapshot = JSON.stringify(ids);
+  if (snapshot === globalThis.__piLastRunningSnapshot) return;
+  globalThis.__piLastRunningSnapshot = snapshot;
   for (const listener of getRunningListeners()) {
     try { listener(ids); } catch { /* ignore listener errors */ }
   }

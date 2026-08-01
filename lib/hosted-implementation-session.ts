@@ -161,13 +161,13 @@ function diagnostic(
   logger: Pick<Console, "info" | "error">,
   level: "info" | "error",
   stage: string,
-  request?: Pick<HostedImplementationLaunchRequest, "targetSessionId" | "launchKind">,
+  request?: Pick<HostedImplementationLaunchRequest, "launchKind">,
   error?: unknown,
 ): void {
   const fields = [
     "[pi-web][hosted-implementation]",
     `stage=${stage}`,
-    ...(request ? [`target=${request.targetSessionId}`, `launch=${request.launchKind}`] : []),
+    ...(request ? [`launch=${request.launchKind}`] : []),
     ...(error === undefined ? [] : [`errorClass=${safeErrorClass(error)}`, "errorMessage=operation-failed"]),
   ];
   logger[level](fields.join(" ").slice(0, 512));
@@ -207,13 +207,12 @@ export function registerHostedImplementationCapability(
       if (!record.active) throw new Error("Pi Web hosted capability is invalidated");
       assertValidRequest(request);
       const diagnosticIdentity = {
-        targetSessionId: request.targetSessionId,
         launchKind: request.launchKind,
       };
       diagnostic(logger, "info", "registration_started", diagnosticIdentity);
 
-      // Lifecycle callbacks deliberately retain only bounded diagnostic identity;
-      // they never retain the source signal, kickoff, cwd, or session path.
+      // Lifecycle callbacks retain only bounded stage and launch-kind fields;
+      // they never retain an identifier, signal, kickoff, cwd, or session path.
       const lifecycle: HostedImplementationLifecycle = {
         ownershipAccepted: () => diagnostic(logger, "info", "ownership_accepted", diagnosticIdentity),
         kickoffScheduled: () => diagnostic(logger, "info", "kickoff_scheduled", diagnosticIdentity),

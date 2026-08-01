@@ -24,10 +24,13 @@ export type PiWebTransportGatewayV1 = {
     channel: string;
     expiresAt: number;
   };
+  reserveConnection(directPeerAddress: string | undefined): () => boolean;
   getStats(): {
     closed: boolean;
     registeredChannelCount: number;
     pendingTicketCount: number;
+    activeConnectionCount: number;
+    activePeerKeyCount: number;
   };
   close(): void;
 };
@@ -56,6 +59,7 @@ function isGatewayV1(value: unknown): value is PiWebTransportGatewayV1 {
     typeof gateway.registerChannel === "function" &&
     typeof gateway.issueTicket === "function" &&
     typeof gateway.consumeTicket === "function" &&
+    typeof gateway.reserveConnection === "function" &&
     typeof gateway.getStats === "function" &&
     typeof gateway.close === "function"
   );

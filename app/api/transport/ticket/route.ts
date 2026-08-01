@@ -1,3 +1,5 @@
+import { ensureGlobalStatusChannel } from "@/lib/global-status-channel";
+import { GLOBAL_STATUS_CHANNEL } from "@/lib/global-status-protocol";
 import { getWebSocketGateway } from "@/lib/websocket-gateway";
 
 export const dynamic = "force-dynamic";
@@ -175,6 +177,7 @@ export async function POST(req: Request) {
   }
 
   try {
+    if (channel === GLOBAL_STATUS_CHANNEL) ensureGlobalStatusChannel(gateway);
     const { ticket, expiresAt } = gateway.issueTicket(channel);
     return jsonResponse({ ticket, expiresAt }, 200);
   } catch (error) {

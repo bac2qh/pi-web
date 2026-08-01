@@ -15,6 +15,7 @@ import {
 } from "@/lib/sidebar-session-state";
 import { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
 import type { SessionInfo } from "@/lib/types";
+import { useGlobalStatus } from "./GlobalStatusProvider";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 
 declare global {
@@ -27,6 +28,20 @@ declare global {
 
 export function isLatestSessionLoadRequest(requestId: number, latestRequestId: number): boolean {
   return requestId === latestRequestId;
+}
+
+export function shouldApplySidebarHttpRunningFallback(
+  getCurrentSnapshot: () => { runningAuthoritative: boolean },
+): boolean {
+  return !getCurrentSnapshot().runningAuthoritative;
+}
+
+export function resolveSidebarRunningSessionIds(
+  fallbackRunningSessionIds: ReadonlySet<string>,
+  globalRunningSessionIds: readonly string[],
+  runningAuthoritative: boolean,
+): Set<string> {
+  return new Set(runningAuthoritative ? globalRunningSessionIds : fallbackRunningSessionIds);
 }
 
 export function createSessionListGenerationTracker() {
@@ -320,6 +335,13 @@ function PiAgentTitle() {
 }
 
 export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onAtMention, onAtMentions }: Props) {
+  const {
+    runningSessionIds: globalRunningSessionIds,
+    runningAuthoritative,
+    serverInstanceId,
+    getCurrentSnapshot: getCurrentGlobalStatusSnapshot,
+    subscribeSessionsChanged,
+  } = useGlobalStatus();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -349,7 +371,15 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [explorerUploadBusy, setExplorerUploadBusy] = useState(false);
   const [sessionRefreshDone, setSessionRefreshDone] = useState(false);
   const [explorerRefreshDone, setExplorerRefreshDone] = useState(false);
-  const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
+  const [fallbackRunningSessionIds, setFallbackRunningSessionIds] = useState<Set<string>>(() => new Set());
+  const runningSessionIds = useMemo(
+    () => resolveSidebarRunningSessionIds(
+      fallbackRunningSessionIds,
+      globalRunningSessionIds,
+      runningAuthoritative,
+    ),
+    [fallbackRunningSessionIds, globalRunningSessionIds, runningAuthoritative],
+  );
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const [confirmedSidebarState, setConfirmedSidebarState] = useState(createDefaultSidebarState);
   const [sidebarStateReady, setSidebarStateReady] = useState(false);
@@ -360,15 +390,15 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [recentOpen, setRecentOpen] = useState(true);
   const [sidebarNow, setSidebarNow] = useState(0);
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
-  // Once the SSE stream has delivered a frame it is the source of truth for
-  // running state; late /api/sessions responses must not overwrite it.
-  const sseAuthoritativeRef = useRef(false);
   const sessionLoadRequestRef = useRef(0);
   const sidebarStateLoadRequestRef = useRef(0);
   const pendingSidebarOperationsRef = useRef<PendingSidebarOperation[]>([]);
   const sidebarOperationInFlightRef = useRef(false);
   const nextClientOperationIdRef = useRef(1);
-  const sessionListGenerationTrackerRef = useRef(createSessionListGenerationTracker());
+  const sessionListGenerationNamespaceRef = useRef({
+    serverInstanceId: null as string | null,
+    tracker: createSessionListGenerationTracker(),
+  });
   const sessionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const explorerRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileExplorerRef = useRef<FileExplorerHandle>(null);
@@ -447,10 +477,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       // cannot hide a newly discovered target.
       if (!isLatestSessionLoadRequest(requestId, sessionLoadRequestRef.current)) return false;
       setAllSessions(data.sessions);
-      // Treat the fetched running set as an initial fallback only. Once SSE is
-      // live it owns this state, so a slow fetch can't revive a stale snapshot.
-      if (!sseAuthoritativeRef.current) {
-        setRunningSessionIds(new Set(data.runningSessionIds ?? []));
+      // Read controller authority synchronously at the async commit point. A
+      // valid WebSocket frame therefore wins even before React publishes the
+      // corresponding provider snapshot through a render or passive effect.
+      if (shouldApplySidebarHttpRunningFallback(getCurrentGlobalStatusSnapshot)) {
+        setFallbackRunningSessionIds(new Set(data.runningSessionIds ?? []));
       }
       // Drop unread markers for sessions that no longer exist (e.g. deleted).
       const existingIds = new Set(data.sessions.map((s) => s.id));
@@ -472,7 +503,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     } finally {
       if (isLatestSessionLoadRequest(requestId, sessionLoadRequestRef.current)) setLoading(false);
     }
-  }, [loadSidebarState]);
+  }, [getCurrentGlobalStatusSnapshot, loadSidebarState]);
 
   const initialLoadDone = useRef(false);
   useEffect(() => {
@@ -492,37 +523,32 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [unreadSessionIds]);
 
   useEffect(() => {
-    // Live running status via SSE — no polling. The server pushes the current
-    // set of running session ids whenever any session starts/stops working.
-    const source = new EventSource("/api/agent/running/events");
+    if (!serverInstanceId) return;
+    const namespace = sessionListGenerationNamespaceRef.current;
+    if (namespace.serverInstanceId !== serverInstanceId) {
+      sessionListGenerationNamespaceRef.current = {
+        serverInstanceId,
+        tracker: createSessionListGenerationTracker(),
+      };
+    }
+  }, [serverInstanceId]);
 
-    source.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data) as { type?: string; runningSessionIds?: string[]; sessionListGeneration?: number };
-        if (data.type === "running") {
-          sseAuthoritativeRef.current = true;
-          setRunningSessionIds(new Set(data.runningSessionIds ?? []));
-        } else if (data.type === "sessions_changed") {
-          const generation = data.sessionListGeneration;
-          if (typeof generation !== "number") {
-            void loadSessions(false);
-            return;
-          }
-          const tracker = sessionListGenerationTrackerRef.current;
-          if (!tracker.begin(generation)) return;
-          // Initial connection and reconnect replay the current generation. A
-          // generation is consumed only after the latest native discovery load
-          // succeeds, so a failed fetch can retry on the next replay.
-          void loadSessions(false).then((applied) => tracker.finish(generation, applied));
-        }
-      } catch {
-        // ignore malformed frames
-      }
-    };
-
-    // On error EventSource auto-reconnects; keep the last known state meanwhile.
-    return () => source.close();
-  }, [loadSessions]);
+  useEffect(() => subscribeSessionsChanged((event) => {
+    let namespace = sessionListGenerationNamespaceRef.current;
+    if (namespace.serverInstanceId !== event.serverInstanceId) {
+      namespace = {
+        serverInstanceId: event.serverInstanceId,
+        tracker: createSessionListGenerationTracker(),
+      };
+      sessionListGenerationNamespaceRef.current = namespace;
+    }
+    const tracker = namespace.tracker;
+    if (!tracker.begin(event.sessionListGeneration)) return;
+    // Initial connection and every reconnect replay the current generation. A
+    // generation is consumed only after the latest native discovery succeeds,
+    // so an equal replay remains retryable after a failed request.
+    void loadSessions(false).then((applied) => tracker.finish(event.sessionListGeneration, applied));
+  }), [loadSessions, subscribeSessionsChanged]);
 
   useEffect(() => {
     const previous = previousRunningSessionIdsRef.current;
@@ -539,7 +565,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     }
     // A background completion can move an old session into Recent and can
     // promote its Project family. Refresh the ordinary listing once on the
-    // running->idle edge; this reuses the existing SSE instead of adding one.
+    // running->idle edge; this reuses the global status stream.
     if (completedInBackground.length > 0) void loadSessions(false);
 
     previousRunningSessionIdsRef.current = runningSessionIds;
