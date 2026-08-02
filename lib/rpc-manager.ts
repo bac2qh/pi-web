@@ -14,6 +14,14 @@ import {
 import type { SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import type { AgentSessionLike, ExtensionUiContextLike, ToolInfo } from "./pi-types";
 import type { ExtensionUiRequest, ExtensionUiResponse, ExtensionWidgetItem } from "./types";
+import {
+  getProjectedSessionHub,
+  installProjectedSessionHubCapability,
+  type ProjectedInputCommitOutcome,
+  type ProjectedSessionEventHub,
+  type ProjectedSessionHubReader,
+} from "./session-event-hub";
+import type { AcceptedNativeLifecycleInput } from "./session-projector";
 
 // ============================================================================
 // Types
@@ -43,6 +51,18 @@ type ActiveCustomUi = {
   width: number;
   resolve: (value: unknown) => void;
   settled: boolean;
+};
+
+type PendingCustomUiSetup = {
+  finish: (value: unknown) => void;
+  destroyed: boolean;
+};
+
+type NativeCausalClaim = {
+  startOutcome: "pending" | "committed";
+  terminalReserved: boolean;
+  terminalOutcome: "pending" | "committed" | null;
+  terminalFanoutComplete: boolean;
 };
 
 type ExtensionUiRequestBody = Record<string, unknown> & {
@@ -117,10 +137,19 @@ export class AgentSessionWrapper {
   private pendingUiResponses = new Map<string, PendingUiResponse>();
   private pendingUiRequests = new Map<string, AgentEvent>();
   private activeCustomUis = new Map<string, ActiveCustomUi>();
+  private pendingCustomUiSetups = new Map<string, PendingCustomUiSetup>();
   private extensionStatuses = new Map<string, string>();
   private extensionWidgets = new Map<string, ExtensionWidgetItem>();
   private promptRunningCount = 0;
   private compactionRunningCount = 0;
+  private nativeAgentTurnCount = 0;
+  private reservedNativeTerminalCount = 0;
+  private standaloneNativeCompactionCount = 0;
+  private reservedStandaloneCompactionTerminalCount = 0;
+  private nativeCausalClaims: NativeCausalClaim[] = [];
+  private standaloneCompactionCausalClaims: NativeCausalClaim[] = [];
+  private eventFanoutDepth = 0;
+  private deferredSettlementRequested = false;
   private extensionsBound = false;
   private extensionBindingPromise: Promise<void> | null = null;
   private extensionBindingError: unknown = null;
@@ -132,11 +161,25 @@ export class AgentSessionWrapper {
   private hostedKickoffLifecycle: HostedImplementationLifecycle | null = null;
   private nativeDisposed = false;
   private _alive = true;
+  private readonly projectedHub: ProjectedSessionEventHub;
 
   constructor(
     public readonly inner: AgentSessionLike,
     private readonly idleTimeoutMs = RPC_SESSION_IDLE_TIMEOUT_MS,
-  ) {}
+  ) {
+    // This wrapper-owned capability must exist before start() subscribes to Pi
+    // and before the wrapper can be published in the global registry.
+    this.projectedHub = installProjectedSessionHubCapability(this, {
+      initialQueue: {
+        steering: inner.getSteeringMessages(),
+        followUp: inner.getFollowUpMessages(),
+      },
+    });
+  }
+
+  getProjectedEventHub(): ProjectedSessionHubReader | null {
+    return getProjectedSessionHub(this);
+  }
 
   get sessionId(): string {
     return this.inner.sessionId;
@@ -162,13 +205,37 @@ export class AgentSessionWrapper {
   start(): void {
     this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
       this.resetIdleTimer();
-      if (event.type === "agent_end") {
-        invalidateSessionListCache();
+      // One outer barrier covers canonical capture, projected publication,
+      // stable exact-raw fanout, receipt resolution, and causal release.
+      this.beginEventFanout();
+      try {
+        const prepared = this.projectedHub.prepareNativeInput(event);
+        const lifecycle = prepared?.lifecycle ?? null;
+        if (lifecycle?.kind === "agent_end") invalidateSessionListCache();
+
+        // Pending starts are causal claims before raw fanout so a nested terminal
+        // can reserve them. They become committed activity only if their exact
+        // projected start frame commits.
+        const startClaim = this.prepareCausalStart(lifecycle);
+        const terminalClaim = this.reserveCausalTerminal(lifecycle);
+        const receipt = prepared ? this.projectedHub.acceptPreparedNativeInput(prepared) : null;
+
+        // Capture/projection rejection never suppresses the exact original raw
+        // object or lets one hostile observer suppress another.
+        this.fanoutLegacyEvent(event);
+        if (terminalClaim) terminalClaim.terminalFanoutComplete = true;
+
+        const observeOutcome = (outcome: ProjectedInputCommitOutcome) => {
+          if (!this._alive) return;
+          if (startClaim) this.resolveCausalStart(lifecycle, startClaim, outcome);
+          if (terminalClaim) this.resolveCausalTerminal(lifecycle, terminalClaim, outcome);
+        };
+        if (receipt) receipt.whenResolved(observeOutcome);
+        else observeOutcome("rejected");
+        this.publishRunningState();
+      } finally {
+        this.endEventFanout();
       }
-      this.emit(event);
-      // Streaming and compaction state can change with any native event. The
-      // wrapper publishes only its own projection; subscribers never inspect it.
-      this.publishRunningState();
     });
     this.resetIdleTimer();
     this.publishRunningState();
@@ -271,12 +338,139 @@ export class AgentSessionWrapper {
 
   private claimPromptRun(): void {
     this.promptRunningCount += 1;
+    this.projectedHub.accept({ type: "wrapper_activity_started", activity: "prompt" });
     this.publishRunningState();
   }
 
-  private releasePromptRun(): void {
-    this.promptRunningCount = Math.max(0, this.promptRunningCount - 1);
+  private releasePromptRun(settle = true): void {
+    if (this.promptRunningCount === 0) return;
+    this.promptRunningCount -= 1;
     this.publishRunningState();
+    if (settle) this.settleProjectedActivityIfIdle();
+  }
+
+  private claimCompactionRun(): void {
+    this.compactionRunningCount += 1;
+    this.projectedHub.accept({ type: "wrapper_activity_started", activity: "compaction" });
+    this.publishRunningState();
+  }
+
+  private releaseCompactionRun(settle = true): void {
+    if (this.compactionRunningCount === 0) return;
+    this.compactionRunningCount -= 1;
+    this.publishRunningState();
+    if (settle) this.settleProjectedActivityIfIdle();
+  }
+
+  private causalClaimsFor(lifecycle: AcceptedNativeLifecycleInput | null): NativeCausalClaim[] | null {
+    if (lifecycle?.kind === "agent_start" || lifecycle?.kind === "agent_settled") return this.nativeCausalClaims;
+    if (lifecycle?.kind === "manual_compaction_start" || lifecycle?.kind === "manual_compaction_end") return this.standaloneCompactionCausalClaims;
+    return null;
+  }
+
+  private syncCausalClaimCounts(): void {
+    this.nativeAgentTurnCount = this.nativeCausalClaims.filter((claim) => !claim.terminalReserved).length;
+    this.reservedNativeTerminalCount = this.nativeCausalClaims.filter((claim) => claim.terminalReserved).length;
+    this.standaloneNativeCompactionCount = this.standaloneCompactionCausalClaims.filter((claim) => !claim.terminalReserved).length;
+    this.reservedStandaloneCompactionTerminalCount = this.standaloneCompactionCausalClaims.filter((claim) => claim.terminalReserved).length;
+  }
+
+  private prepareCausalStart(lifecycle: AcceptedNativeLifecycleInput | null): NativeCausalClaim | null {
+    if (lifecycle?.kind !== "agent_start" && lifecycle?.kind !== "manual_compaction_start") return null;
+    const claims = this.causalClaimsFor(lifecycle);
+    if (!claims || claims.length >= Number.MAX_SAFE_INTEGER) return null;
+    const claim: NativeCausalClaim = {
+      startOutcome: "pending",
+      terminalReserved: false,
+      terminalOutcome: null,
+      terminalFanoutComplete: false,
+    };
+    claims.push(claim);
+    this.syncCausalClaimCounts();
+    return claim;
+  }
+
+  private reserveCausalTerminal(lifecycle: AcceptedNativeLifecycleInput | null): NativeCausalClaim | null {
+    if (lifecycle?.kind !== "agent_settled" && lifecycle?.kind !== "manual_compaction_end") return null;
+    const claim = this.causalClaimsFor(lifecycle)?.find((candidate) => !candidate.terminalReserved) ?? null;
+    if (!claim) return null;
+    claim.terminalReserved = true;
+    claim.terminalOutcome = "pending";
+    claim.terminalFanoutComplete = false;
+    this.syncCausalClaimCounts();
+    return claim;
+  }
+
+  private removeCausalClaim(lifecycle: AcceptedNativeLifecycleInput | null, claim: NativeCausalClaim): void {
+    const claims = this.causalClaimsFor(lifecycle);
+    const index = claims?.indexOf(claim) ?? -1;
+    if (claims && index >= 0) claims.splice(index, 1);
+    this.syncCausalClaimCounts();
+  }
+
+  private completeCommittedCausalClaim(lifecycle: AcceptedNativeLifecycleInput | null, claim: NativeCausalClaim): void {
+    if (claim.startOutcome !== "committed" || claim.terminalOutcome !== "committed" || !claim.terminalFanoutComplete) return;
+    this.removeCausalClaim(lifecycle, claim);
+    this.settleProjectedActivityIfIdle();
+  }
+
+  private resolveCausalStart(
+    lifecycle: AcceptedNativeLifecycleInput | null,
+    claim: NativeCausalClaim,
+    outcome: ProjectedInputCommitOutcome,
+  ): void {
+    if (outcome === "rejected") {
+      this.removeCausalClaim(lifecycle, claim);
+      return;
+    }
+    claim.startOutcome = "committed";
+    this.completeCommittedCausalClaim(lifecycle, claim);
+  }
+
+  private resolveCausalTerminal(
+    lifecycle: AcceptedNativeLifecycleInput | null,
+    claim: NativeCausalClaim,
+    outcome: ProjectedInputCommitOutcome,
+  ): void {
+    if (outcome === "rejected") {
+      claim.terminalReserved = false;
+      claim.terminalOutcome = null;
+      claim.terminalFanoutComplete = false;
+      this.syncCausalClaimCounts();
+      return;
+    }
+    claim.terminalOutcome = "committed";
+    this.completeCommittedCausalClaim(lifecycle, claim);
+  }
+
+  private projectedActivityIsIdle(): boolean {
+    return this.promptRunningCount === 0
+      && this.compactionRunningCount === 0
+      && this.nativeAgentTurnCount === 0
+      && this.reservedNativeTerminalCount === 0
+      && this.standaloneNativeCompactionCount === 0
+      && this.reservedStandaloneCompactionTerminalCount === 0
+      && this.projectedHub.getState().active;
+  }
+
+  private settleProjectedActivityIfIdle(): void {
+    if (!this.projectedActivityIsIdle()) return;
+    if (this.eventFanoutDepth > 0) {
+      this.deferredSettlementRequested = true;
+      return;
+    }
+    this.projectedHub.accept({ type: "wrapper_settled" });
+  }
+
+  private beginEventFanout(): void {
+    if (this.eventFanoutDepth < Number.MAX_SAFE_INTEGER) this.eventFanoutDepth += 1;
+  }
+
+  private endEventFanout(): void {
+    if (this.eventFanoutDepth > 0) this.eventFanoutDepth -= 1;
+    if (this.eventFanoutDepth !== 0 || !this.deferredSettlementRequested) return;
+    this.deferredSettlementRequested = false;
+    this.settleProjectedActivityIfIdle();
   }
 
   private applyForcedEmptySystemPrompt(): void {
@@ -285,8 +479,26 @@ export class AgentSessionWrapper {
     }
   }
 
+  private fanoutLegacyEvent(event: AgentEvent): void {
+    // Every observer registered at fanout start sees this exact raw object once.
+    // Listener mutation affects only later events, and listener failure cannot
+    // suppress another observer or terminal wrapper cleanup.
+    for (const listener of [...this.listeners]) {
+      try { listener(event); } catch { /* legacy listener failures are isolated */ }
+    }
+  }
+
   private emit(event: AgentEvent): void {
-    for (const l of this.listeners) l(event);
+    // Projection is authoritative and subscriber-independent. The barrier also
+    // covers wrapper-generated public events so a nested last-claim release
+    // cannot overtake the event that caused it.
+    this.beginEventFanout();
+    try {
+      this.projectedHub.accept(event);
+      this.fanoutLegacyEvent(event);
+    } finally {
+      this.endEventFanout();
+    }
   }
 
   private resetIdleTimer(): void {
@@ -335,19 +547,19 @@ export class AgentSessionWrapper {
     if (lifecycle) this.callLifecycle(lifecycle.kickoffDispatched);
 
     promptPromise.then(() => {
+      if (!streamingBehavior) this.emit({ type: "prompt_done" });
       this.releasePromptRun();
       this.resetIdleTimer();
-      if (!streamingBehavior) this.emit({ type: "prompt_done" });
       if (lifecycle) this.callLifecycle(lifecycle.targetSettled);
     }, (error) => {
-      this.releasePromptRun();
-      this.resetIdleTimer();
       invalidateSessionListCache();
       this.emit({
         type: "prompt_error",
         errorMessage: publicErrorMessage ?? (error instanceof Error ? error.message : String(error)),
       });
       if (!streamingBehavior) this.emit({ type: "prompt_done" });
+      this.releasePromptRun();
+      this.resetIdleTimer();
       if (lifecycle) this.callLifecycle(() => lifecycle.targetFailed(error));
     });
   }
@@ -379,26 +591,26 @@ export class AgentSessionWrapper {
         if (this.hostedKickoffState === "cancelled") return;
         this.hostedKickoffState = "failed";
         this.hostedKickoffLifecycle = null;
-        this.releasePromptRun();
-        this.resetIdleTimer();
         invalidateSessionListCache();
         this.emit({ type: "prompt_error", errorMessage: "Hosted target prompt failed" });
         this.emit({ type: "prompt_done" });
+        this.releasePromptRun();
+        this.resetIdleTimer();
         this.callLifecycle(() => lifecycle.targetFailed(error));
       }
     })();
     return true;
   }
 
-  private cancelHostedKickoffBeforeDispatch(): boolean {
+  private cancelHostedKickoffBeforeDispatch(settle = true): boolean {
     if (this.hostedKickoffState !== "scheduled") return false;
     this.hostedKickoffState = "cancelled";
     const lifecycle = this.hostedKickoffLifecycle;
     this.hostedKickoffLifecycle = null;
-    this.releasePromptRun();
-    this.resetIdleTimer();
     invalidateSessionListCache();
     this.emit({ type: "prompt_done" });
+    this.releasePromptRun(settle);
+    this.resetIdleTimer();
     if (lifecycle) {
       const error = new Error("Hosted target kickoff was stopped before dispatch");
       error.name = "AbortError";
@@ -568,15 +780,13 @@ export class AgentSessionWrapper {
       case "compact": {
         // Claim compaction before invoking the native async method: its public
         // isCompacting flag may not flip until after an initial await.
-        this.compactionRunningCount += 1;
-        this.publishRunningState();
+        this.claimCompactionRun();
         try {
           return await this.inner.compact(command.customInstructions as string | undefined);
         } finally {
-          this.compactionRunningCount = Math.max(0, this.compactionRunningCount - 1);
+          this.releaseCompactionRun();
           this.resetIdleTimer();
           invalidateSessionListCache();
-          this.publishRunningState();
         }
       }
 
@@ -671,6 +881,7 @@ export class AgentSessionWrapper {
 
       case "reload": {
         await this.waitForExtensionsBound();
+        this.clearProjectedExtensionState();
         this.extensionStatuses.clear();
         this.extensionWidgets.clear();
         await this.inner.reload();
@@ -710,8 +921,17 @@ export class AgentSessionWrapper {
     if (!this._alive) return;
     // Owner deletion or process cleanup must not let an unresolved extension
     // binding dispatch its hosted kickoff against a disposed native session.
-    this.cancelHostedKickoffBeforeDispatch();
+    this.cancelHostedKickoffBeforeDispatch(false);
     this._alive = false;
+    this.deferredSettlementRequested = false;
+    this.nativeCausalClaims = [];
+    this.standaloneCompactionCausalClaims = [];
+    this.syncCausalClaimCounts();
+    for (const setup of Array.from(this.pendingCustomUiSetups.values())) {
+      setup.destroyed = true;
+      setup.finish(undefined);
+    }
+    this.pendingCustomUiSetups.clear();
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
     this.unsubscribe?.();
@@ -721,6 +941,7 @@ export class AgentSessionWrapper {
     this.pendingUiResponses.clear();
     this.pendingUiRequests.clear();
     this.listeners = [];
+    this.projectedHub.close();
     if (!this.nativeDisposed) {
       this.nativeDisposed = true;
       try { this.inner.dispose(); } catch { /* disposal is best effort and idempotent here */ }
@@ -736,6 +957,15 @@ export class AgentSessionWrapper {
     const pending = this.pendingUiResponses.get(response.id);
     if (!pending) return;
     pending.resolve(response);
+  }
+
+  private clearProjectedExtensionState(): void {
+    for (const key of this.extensionStatuses.keys()) {
+      this.projectedHub.accept({ type: "extension_status_cleared", key });
+    }
+    for (const key of this.extensionWidgets.keys()) {
+      this.projectedHub.accept({ type: "extension_widget_cleared", key });
+    }
   }
 
   private getExtensionStatuses(): Array<{ key: string; text: string }> {
@@ -816,7 +1046,7 @@ export class AgentSessionWrapper {
     factory: unknown,
     options?: unknown,
   ): Promise<T> {
-    if (typeof factory !== "function") return Promise.resolve(undefined as T);
+    if (typeof factory !== "function" || !this._alive) return Promise.resolve(undefined as T);
 
     const id = randomUUID();
     const width = this.getCustomUiWidth(options);
@@ -832,25 +1062,26 @@ export class AgentSessionWrapper {
       const finish = (value: T) => {
         if (completed) return;
         completed = true;
+        this.pendingCustomUiSetups.delete(id);
         resolve(value);
       };
+      const setup: PendingCustomUiSetup = {
+        finish: (value) => finish(value as T),
+        destroyed: false,
+      };
+      this.pendingCustomUiSetups.set(id, setup);
       const done = (value: T) => {
-        if (this.activeCustomUis.has(id)) {
-          this.closeCustomUi(id, value);
-        } else {
-          finish(value);
-        }
+        if (this.activeCustomUis.has(id)) this.closeCustomUi(id, value);
+        else finish(value);
       };
 
       Promise.resolve()
         .then(() => factory(tui, PLAIN_TEXT_THEME, CUSTOM_UI_KEYBINDINGS, done))
         .then((component) => {
-          if (completed) {
-            try {
-              (component as CustomUiComponent | undefined)?.dispose?.();
-            } catch {
-              // Ignore dispose errors from a component completed before mounting.
-            }
+          this.pendingCustomUiSetups.delete(id);
+          if (completed || setup.destroyed || !this._alive) {
+            try { (component as CustomUiComponent | undefined)?.dispose?.(); } catch { /* isolated extension cleanup */ }
+            finish(undefined as T);
             return;
           }
           if (!component || typeof component !== "object" || typeof (component as CustomUiComponent).render !== "function") {
@@ -867,7 +1098,11 @@ export class AgentSessionWrapper {
           this.emitCustomUiRender(id, custom);
         })
         .catch((error) => {
-          if (completed) return;
+          this.pendingCustomUiSetups.delete(id);
+          if (completed || setup.destroyed || !this._alive) {
+            finish(undefined as T);
+            return;
+          }
           this.emit({
             type: "extension_error",
             extensionPath: `custom-ui:${id}`,
@@ -886,7 +1121,7 @@ export class AgentSessionWrapper {
     timeout?: number,
     signal?: AbortSignal,
   ): Promise<T> {
-    if (signal?.aborted) return Promise.resolve(defaultValue);
+    if (!this._alive || signal?.aborted) return Promise.resolve(defaultValue);
 
     const id = randomUUID();
     const fullRequest = {
@@ -898,13 +1133,18 @@ export class AgentSessionWrapper {
 
     return new Promise((resolve) => {
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      let settled = false;
       const cleanup = () => {
         if (timeoutId) clearTimeout(timeoutId);
         signal?.removeEventListener("abort", onAbort);
-        this.pendingUiRequests.delete(id);
+        if (this.pendingUiRequests.delete(id)) {
+          this.projectedHub.accept({ type: "extension_dialog_closed", id });
+        }
         this.pendingUiResponses.delete(id);
       };
       const settle = (value: T) => {
+        if (settled) return;
+        settled = true;
         cleanup();
         resolve(value);
       };
@@ -1051,6 +1291,7 @@ export class AgentSessionWrapper {
       },
       switchSession: async () => ({ cancelled: true }),
       reload: async () => {
+        this.clearProjectedExtensionState();
         this.extensionStatuses.clear();
         this.extensionWidgets.clear();
         await this.inner.reload({
