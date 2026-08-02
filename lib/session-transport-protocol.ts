@@ -90,6 +90,12 @@ export function parseSessionTransportResumeText(
   }
 }
 
+export function encodeSessionTransportResumeFrame(frame: SessionTransportResumeFrame): string {
+  const parsed = parseSessionTransportResumeFrame(frame);
+  if (!parsed.ok) throw new Error(`invalid_session_transport_resume:${parsed.reason}`);
+  return JSON.stringify(parsed.frame);
+}
+
 const readyOutcomes = new Set<SessionTransportReadyOutcome>([
   "exact",
   "empty",

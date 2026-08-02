@@ -552,7 +552,10 @@ export class ProjectedSessionEventHub {
     }
     this.listeners.delete(bufferListener);
     if (!this.closed) this.listeners.add(listener);
-    const catchUp = buffered.length === 0 ? selected : { ...selected, units: [...selected.units, ...buffered], cursor: this.sequence };
+    // Selection defines the ready target. Reentrant publications buffered while
+    // diagnostics/listeners run are ordered post-target live units and must not
+    // rewrite that selected cursor, epoch, or outcome.
+    const catchUp = buffered.length === 0 ? selected : { ...selected, units: [...selected.units, ...buffered] };
     let removed = false;
     return {
       ...catchUp,
