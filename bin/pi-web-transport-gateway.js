@@ -156,6 +156,7 @@ function createPiWebTransportGateway(options = {}) {
 
   const gateway = {
     version: PI_WEB_TRANSPORT_GATEWAY_VERSION,
+    ticketContextVersion: 1,
     serverInstanceId,
     isSameHostOrigin: isSameHostBrowserOrigin,
 
@@ -182,7 +183,7 @@ function createPiWebTransportGateway(options = {}) {
       };
     },
 
-    issueTicket(channel) {
+    issueTicket(channel, ticketContext) {
       assertOpen();
       if (!isValidChannelName(channel)) throw gatewayError("invalid_channel");
       const registration = channels.get(channel);
@@ -203,6 +204,7 @@ function createPiWebTransportGateway(options = {}) {
         version: PI_WEB_TRANSPORT_GATEWAY_VERSION,
         registration,
         expiresAt,
+        ticketContext,
         timeout: undefined,
       };
       record.timeout = scheduleTimeout(() => {
@@ -248,6 +250,7 @@ function createPiWebTransportGateway(options = {}) {
         handler: record.registration.handler,
         channel: record.registration.channel,
         expiresAt: record.expiresAt,
+        ticketContext: record.ticketContext,
       };
     },
 

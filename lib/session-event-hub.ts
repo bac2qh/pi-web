@@ -163,16 +163,25 @@ export function createSnapshotTransfer(
     runtimeRefreshRequired: true,
   };
   const end: SnapshotTransferFrame = { protocol: PROJECTED_SESSION_PROTOCOL, version: PROJECTED_SESSION_VERSION, streamEpoch, sequence, type: "snapshot_end", transferId };
-  if (utf8Bytes(encodeProjectedSessionFrame(start)) > encodedUnitByteLimit || utf8Bytes(encodeProjectedSessionFrame(end)) > encodedUnitByteLimit) {
+  const canonicalUnit = (unit: SnapshotTransferFrame): SnapshotTransferFrame => {
+    const parsed = parseProjectedSessionFrame(unit);
+    if (!parsed.ok || (parsed.frame.type !== "snapshot_start" && parsed.frame.type !== "snapshot_chunk" && parsed.frame.type !== "snapshot_end")) {
+      throw new Error("invalid_snapshot_transfer_unit");
+    }
+    return parsed.frame;
+  };
+  const canonicalStart = canonicalUnit(start);
+  const canonicalEnd = canonicalUnit(end);
+  if (utf8Bytes(encodeProjectedSessionFrame(canonicalStart)) > encodedUnitByteLimit || utf8Bytes(encodeProjectedSessionFrame(canonicalEnd)) > encodedUnitByteLimit) {
     throw new Error("snapshot_transfer_metadata_exceeds_unit_limit");
   }
-  const units: SnapshotTransferFrame[] = [freezeCanonicalData(start)];
+  const units: SnapshotTransferFrame[] = [canonicalStart];
   for (let offset = 0, partIndex = 0; offset < bytes.byteLength; offset += rawChunkSize, partIndex += 1) {
-    const unit = chunkTemplate(partIndex, base64Url(bytes.subarray(offset, Math.min(bytes.byteLength, offset + rawChunkSize))));
+    const unit = canonicalUnit(chunkTemplate(partIndex, base64Url(bytes.subarray(offset, Math.min(bytes.byteLength, offset + rawChunkSize)))));
     if (utf8Bytes(encodeProjectedSessionFrame(unit)) > encodedUnitByteLimit) throw new Error("snapshot_transfer_unit_exceeds_limit");
-    units.push(freezeCanonicalData(unit));
+    units.push(unit);
   }
-  units.push(freezeCanonicalData(end));
+  units.push(canonicalEnd);
   return Object.freeze(units) as unknown as SnapshotTransferFrame[];
 }
 

@@ -143,6 +143,7 @@ function createPiWebUpgradeHandler({ gateway, webSocketServer, diagnostics }) {
           .then(() => authorization.handler(webSocket, {
             channel: authorization.channel,
             serverInstanceId: gateway.serverInstanceId,
+            ticketContext: authorization.ticketContext,
           }))
           .catch(closeAfterHandlerFailure);
       });

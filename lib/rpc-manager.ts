@@ -1,7 +1,7 @@
 import { createAgentSessionFromServices, createAgentSessionServices, getAgentDir, initTheme, SessionManager, Theme } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
-import { resolve as resolvePath } from "node:path";
+import { isAbsolute, resolve as resolvePath } from "node:path";
 import { invalidateModelsCache } from "./models-cache";
 import { cacheSessionPath, invalidateSessionListCache } from "./session-reader";
 import { cloneSessionBranch } from "./session-clone";
@@ -1485,6 +1485,29 @@ export async function getOrCreateRpcSession(
   return starting;
 }
 
+function normalizedExistingSessionPath(value: string): string | null {
+  if (!value || value.includes("\0") || !isAbsolute(value)) return null;
+  const normalized = resolvePath(value);
+  return Buffer.byteLength(normalized, "utf8") <= 4_096 ? normalized : null;
+}
+
+/** Baseline identity invariant for every existing-file startup initiator. */
+export function assertExistingRpcSessionIdentity(
+  session: AgentSessionWrapper,
+  realSessionId: string,
+  expected: { sessionId: string; sessionFile: string; cwd: string },
+): void {
+  const actualFile = normalizedExistingSessionPath(session.sessionFile);
+  const expectedFile = normalizedExistingSessionPath(expected.sessionFile);
+  const actualCwd = normalizedExistingSessionPath(session.inner.sessionManager.getCwd());
+  const expectedCwd = normalizedExistingSessionPath(expected.cwd);
+  if (realSessionId !== expected.sessionId || session.sessionId !== expected.sessionId
+    || !actualFile || !expectedFile || actualFile !== expectedFile
+    || !actualCwd || !expectedCwd || actualCwd !== expectedCwd) {
+    throw new Error("rpc_existing_session_identity_mismatch");
+  }
+}
+
 /**
  * Get or create an AgentSession for the given session.
  * For new sessions (sessionFile === ""), pi generates its own id.
@@ -1537,6 +1560,18 @@ export async function startRpcSession(
     }
 
     const wrapper = new AgentSessionWrapper(inner);
+    if (sessionFile) {
+      try {
+        assertExistingRpcSessionIdentity(wrapper, inner.sessionId as string, {
+          sessionId,
+          sessionFile,
+          cwd,
+        });
+      } catch (error) {
+        wrapper.destroy();
+        throw error;
+      }
+    }
     // When all tools are disabled, clear the system prompt entirely.
     // pi's buildSystemPrompt always produces a non-empty prompt even with no tools;
     // keep this forced after extension resource discovery and reloads as well.

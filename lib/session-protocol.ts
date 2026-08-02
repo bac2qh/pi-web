@@ -388,6 +388,10 @@ function isUniqueSortedKeys(items: Array<{ key: string }>): boolean {
 }
 
 const deeplyFrozenCanonicalData = new WeakSet<object>();
+// Only parser-reconstructed, deeply frozen frame identities receive transport
+// provenance. `freezeCanonicalData()` remains a general immutability helper and
+// deliberately cannot make caller-owned proxies eligible for the fast path.
+const canonicalProjectedSessionFrames = new WeakSet<object>();
 
 /** Freeze a canonical data graph without invoking caller-controlled properties. */
 export function freezeCanonicalData<T>(value: T): T {
@@ -542,11 +546,199 @@ export function parseProjectedSessionFrame(input: unknown): SessionFrameParseRes
     case "snapshot_end": valid = keys("transferId") && validEpoch(f.transferId); break;
     default: return { ok: false, reason: "unknown_type" };
   }
-  return valid ? { ok: true, frame: f as ProjectedSessionFrame } : { ok: false, reason: "malformed" };
+  if (!valid) return { ok: false, reason: "malformed" };
+  // `f` is a freshly reconstructed ordinary/null-prototype/array graph. Freeze
+  // it before exposure, then brand only that new identity. Never brand `input`:
+  // a caller-owned proxy can change traps after any finite validation pass.
+  const frame = freezeCanonicalData(f as ProjectedSessionFrame);
+  canonicalProjectedSessionFrames.add(frame);
+  return { ok: true, frame };
 }
 
 export function encodeProjectedSessionFrame(frame: ProjectedSessionFrame): string {
   const parsed = parseProjectedSessionFrame(frame);
   if (!parsed.ok) throw new Error(`invalid_projected_session_frame:${parsed.reason}`);
   return JSON.stringify(parsed.frame);
+}
+
+export type BoundedProjectedSessionFrameEncoding =
+  | Readonly<{ ok: true; text: string; bytes: number }>
+  | Readonly<{ ok: false; reason: "over_limit" }>;
+
+/**
+ * Create an identity-cached projected-frame encoder with a fixed UTF-8 ceiling.
+ * The incremental serializer follows JSON.stringify's canonical output but
+ * stops at the first byte over the ceiling, so an oversized wire string is
+ * never constructed or retained.
+ */
+export function createBoundedProjectedSessionFrameEncoder(
+  byteLimit: number,
+): (frame: ProjectedSessionFrame) => BoundedProjectedSessionFrameEncoding {
+  if (!Number.isSafeInteger(byteLimit) || byteLimit <= 0) {
+    throw new Error("invalid_projected_session_encoding_limit");
+  }
+  const cache = new WeakMap<object, BoundedProjectedSessionFrameEncoding>();
+
+  return (frame: ProjectedSessionFrame): BoundedProjectedSessionFrameEncoding => {
+    const trustedCanonicalIdentity = !!frame && typeof frame === "object"
+      && canonicalProjectedSessionFrames.has(frame);
+    if (trustedCanonicalIdentity) {
+      const cached = cache.get(frame);
+      if (cached) return cached;
+    }
+
+    // Hub/parser-owned canonical frames may stop at one-over without cloning or
+    // visiting their tails. Every caller-owned identity, including one marked
+    // by the exported freeze helper, is first reconstructed by the strict
+    // parser. Serialization then uses that one stable frozen representation.
+    const parsed = trustedCanonicalIdentity ? null : parseProjectedSessionFrame(frame);
+    if (parsed && !parsed.ok) throw new Error(`invalid_projected_session_frame:${parsed.reason}`);
+    const input = parsed?.ok ? parsed.frame : frame;
+
+    const chunks: string[] = [];
+    let chunk = "";
+    let bytes = 0;
+    let exceeded = false;
+    const append = (piece: string, pieceBytes: number): boolean => {
+      if (bytes + pieceBytes > byteLimit) {
+        exceeded = true;
+        chunk = "";
+        chunks.length = 0;
+        return false;
+      }
+      bytes += pieceBytes;
+      chunk += piece;
+      if (chunk.length >= 8_192) {
+        chunks.push(chunk);
+        chunk = "";
+      }
+      return true;
+    };
+    const writeString = (value: string): boolean => {
+      if (!append("\"", 1)) return false;
+      for (let index = 0; index < value.length; index += 1) {
+        const code = value.charCodeAt(index);
+        if (code === 0x22) { if (!append("\\\"", 2)) return false; continue; }
+        if (code === 0x5c) { if (!append("\\\\", 2)) return false; continue; }
+        if (code === 0x08) { if (!append("\\b", 2)) return false; continue; }
+        if (code === 0x09) { if (!append("\\t", 2)) return false; continue; }
+        if (code === 0x0a) { if (!append("\\n", 2)) return false; continue; }
+        if (code === 0x0c) { if (!append("\\f", 2)) return false; continue; }
+        if (code === 0x0d) { if (!append("\\r", 2)) return false; continue; }
+        if (code < 0x20) {
+          if (!append(`\\u${code.toString(16).padStart(4, "0")}`, 6)) return false;
+          continue;
+        }
+        if (code >= 0xd800 && code <= 0xdbff) {
+          const low = value.charCodeAt(index + 1);
+          if (low >= 0xdc00 && low <= 0xdfff) {
+            if (!append(value.slice(index, index + 2), 4)) return false;
+            index += 1;
+          } else if (!append(`\\u${code.toString(16)}`, 6)) return false;
+          continue;
+        }
+        if (code >= 0xdc00 && code <= 0xdfff) {
+          if (!append(`\\u${code.toString(16)}`, 6)) return false;
+          continue;
+        }
+        const character = value[index];
+        const characterBytes = code <= 0x7f ? 1 : code <= 0x7ff ? 2 : 3;
+        if (!append(character, characterBytes)) return false;
+      }
+      return append("\"", 1);
+    };
+
+    const seen = new Set<object>();
+    let nodes = 0;
+    const write = (value: unknown, depth = 0): boolean => {
+      nodes += 1;
+      if (depth > DEFAULT_SESSION_STATE_DEPTH || nodes > DEFAULT_SESSION_STATE_NODES) {
+        throw new Error("invalid_canonical_projected_value");
+      }
+      if (value === null) return append("null", 4);
+      if (typeof value === "string") return writeString(value);
+      if (typeof value === "boolean") return append(value ? "true" : "false", value ? 4 : 5);
+      if (typeof value === "number") {
+        if (!Number.isFinite(value)) throw new Error("invalid_canonical_projected_value");
+        const encoded = JSON.stringify(value);
+        return append(encoded, encoded.length);
+      }
+      if (!value || typeof value !== "object" || seen.has(value)) {
+        throw new Error("invalid_canonical_projected_value");
+      }
+      seen.add(value);
+      try {
+        const prototype = Object.getPrototypeOf(value);
+        if (Array.isArray(value)) {
+          if (prototype !== Array.prototype) throw new Error("invalid_canonical_projected_value");
+          const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+          if (!lengthDescriptor || !("value" in lengthDescriptor)
+            || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0
+            || lengthDescriptor.value > DEFAULT_SESSION_STATE_NODES - nodes
+            || (lengthDescriptor.value > 0 && depth >= DEFAULT_SESSION_STATE_DEPTH)) {
+            throw new Error("invalid_canonical_projected_value");
+          }
+          const length = lengthDescriptor.value as number;
+          if (!append("[", 1)) return false;
+          for (let index = 0; index < length; index += 1) {
+            if (index > 0 && !append(",", 1)) return false;
+            const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+            if (!descriptor || !("value" in descriptor) || descriptor.enumerable !== true) {
+              throw new Error("invalid_canonical_projected_value");
+            }
+            if (!write(descriptor.value, depth + 1)) return false;
+          }
+          // Exact dense-key validation is deliberately deferred until the value
+          // fits; an oversized early element therefore never inspects its tail.
+          const keys = Reflect.ownKeys(value);
+          if (keys.length !== length + 1 || keys.some((key) => typeof key !== "string")) {
+            throw new Error("invalid_canonical_projected_value");
+          }
+          const names = new Set(keys as string[]);
+          if (!names.has("length")) throw new Error("invalid_canonical_projected_value");
+          for (let index = 0; index < length; index += 1) {
+            if (!names.has(String(index))) throw new Error("invalid_canonical_projected_value");
+          }
+          return append("]", 1);
+        }
+        if (prototype !== Object.prototype && prototype !== null) {
+          throw new Error("invalid_canonical_projected_value");
+        }
+        const keys = Reflect.ownKeys(value);
+        if (keys.some((key) => typeof key !== "string")
+          || keys.length > DEFAULT_SESSION_STATE_NODES - nodes
+          || (keys.length > 0 && depth >= DEFAULT_SESSION_STATE_DEPTH)) {
+          throw new Error("invalid_canonical_projected_value");
+        }
+        if (!append("{", 1)) return false;
+        for (let index = 0; index < keys.length; index += 1) {
+          const key = keys[index] as string;
+          if (index > 0 && !append(",", 1)) return false;
+          const descriptor = Object.getOwnPropertyDescriptor(value, key);
+          if (!descriptor || !("value" in descriptor) || descriptor.enumerable !== true
+            || descriptor.value === undefined) {
+            throw new Error("invalid_canonical_projected_value");
+          }
+          if (!writeString(key) || !append(":", 1) || !write(descriptor.value, depth + 1)) return false;
+        }
+        return append("}", 1);
+      } finally {
+        seen.delete(value);
+      }
+    };
+
+    try {
+      write(input);
+    } catch {
+      throw new Error("invalid_projected_session_frame:malformed");
+    }
+    let outcome: BoundedProjectedSessionFrameEncoding;
+    if (exceeded) {
+      outcome = Object.freeze({ ok: false, reason: "over_limit" as const });
+    } else {
+      outcome = Object.freeze({ ok: true, text: chunks.join("") + chunk, bytes });
+    }
+    if (trustedCanonicalIdentity) cache.set(frame, outcome);
+    return outcome;
+  };
 }

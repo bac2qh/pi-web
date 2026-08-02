@@ -6,6 +6,7 @@ export const PI_WEB_TRANSPORT_GATEWAY_SLOT = "__piWebTransportGatewayV1" as cons
 export type PiWebTransportChannelContext = {
   channel: string;
   serverInstanceId: string;
+  ticketContext?: unknown;
 };
 
 export type PiWebTransportChannelHandler = (
@@ -15,14 +16,16 @@ export type PiWebTransportChannelHandler = (
 
 export type PiWebTransportGatewayV1 = {
   readonly version: typeof PI_WEB_TRANSPORT_GATEWAY_VERSION;
+  readonly ticketContextVersion?: 1;
   readonly serverInstanceId: string;
   isSameHostOrigin(originHeader: string | null, hostHeader: string | null): boolean;
   registerChannel(channel: string, handler: PiWebTransportChannelHandler): () => boolean;
-  issueTicket(channel: string): { ticket: string; expiresAt: number };
+  issueTicket(channel: string, ticketContext?: unknown): { ticket: string; expiresAt: number };
   consumeTicket(ticket: string): {
     handler: PiWebTransportChannelHandler;
     channel: string;
     expiresAt: number;
+    ticketContext?: unknown;
   };
   reserveConnection(directPeerAddress: string | undefined): () => boolean;
   getStats(): {
