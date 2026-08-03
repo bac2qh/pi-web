@@ -1,4 +1,11 @@
+import fs from "node:fs";
 import { isAbsolute, resolve as resolvePath } from "node:path";
+import { authorizeFileRequest, normalizeAbsoluteFilePath } from "@/lib/file-authorization";
+import {
+  createFileWatchTicketContext,
+  ensureFileWatchChannel,
+} from "@/lib/file-watch-channel";
+import { FILE_WATCH_CHANNEL } from "@/lib/file-watch-protocol";
 import { ensureGlobalStatusChannel } from "@/lib/global-status-channel";
 import { GLOBAL_STATUS_CHANNEL } from "@/lib/global-status-protocol";
 import {
@@ -20,23 +27,47 @@ import { getWebSocketGateway, type PiWebTransportGatewayV1 } from "@/lib/websock
 export const dynamic = "force-dynamic";
 
 const TRANSPORT_HEADER = "X-Pi-Web-Transport";
-const MAX_REQUEST_BODY_BYTES = 1024;
+const MAX_LEGACY_REQUEST_BODY_BYTES = 1024;
+const MAX_FILE_WATCH_REQUEST_BODY_BYTES = 26_624;
 const MAX_SESSION_ID_CHARACTERS = 256;
 const MAX_SESSION_PATH_BYTES = 4096;
+const MAX_FILE_WATCH_PATH_BYTES = 4096;
 
 type BodyReadResult =
-  | { ok: true; value: unknown }
+  | { ok: true; value: unknown; byteLength: number }
   | { ok: false; tooLarge: boolean };
 
 type ParsedTicketRequest =
-  | { channel: string; sessionId?: never }
-  | { channel: typeof SESSION_TRANSPORT_CHANNEL; sessionId: string };
+  | { channel: string; sessionId?: never; path?: never }
+  | { channel: typeof SESSION_TRANSPORT_CHANNEL; sessionId: string; path?: never }
+  | { channel: typeof FILE_WATCH_CHANNEL; path: string; sessionId?: string };
 
 type SessionTicketIssuerOutcome =
   | { ok: true; ticket: string; expiresAt: number }
   | { ok: false; status: 404; error: "session_not_found" }
   | { ok: false; status: 409; error: "session_transport_unavailable" }
   | { ok: false; status: 503; error: "session_unavailable" | "transport_unavailable" };
+
+type FileWatchTicketIssuerOutcome =
+  | { ok: true; ticket: string; expiresAt: number }
+  | { ok: false; status: 400; error: "invalid_request" }
+  | { ok: false; status: 403; error: "access_denied" }
+  | { ok: false; status: 404; error: "file_unavailable" }
+  | { ok: false; status: 503; error: "transport_unavailable" };
+
+type FileWatchTicketIssuerDependencies = Readonly<{
+  authorize(filePath: string, sessionId: string | null): Promise<"allowed_root" | "allowed_session_reference" | "denied">;
+  stat(filePath: string): fs.Stats;
+  lstat(filePath: string): fs.Stats;
+  ensureChannel(gateway: PiWebTransportGatewayV1): unknown;
+}>;
+
+const defaultFileWatchTicketDependencies: FileWatchTicketIssuerDependencies = {
+  authorize: (filePath, sessionId) => authorizeFileRequest(filePath, sessionId, true),
+  stat: (filePath) => fs.statSync(filePath),
+  lstat: (filePath) => fs.lstatSync(filePath),
+  ensureChannel: ensureFileWatchChannel,
+};
 
 type SessionTicketIssuerDependencies = {
   ensureChannel(gateway: PiWebTransportGatewayV1): unknown;
@@ -129,9 +160,11 @@ function isSameHostRequestOrigin(originHeader: string | null, hostHeader: string
 
 async function readBoundedJson(req: Request): Promise<BodyReadResult> {
   const contentLength = req.headers.get("content-length");
+  let declaredByteLength = 0;
   if (contentLength !== null) {
     if (!/^\d+$/.test(contentLength)) return { ok: false, tooLarge: false };
-    if (Number(contentLength) > MAX_REQUEST_BODY_BYTES) {
+    declaredByteLength = Number(contentLength);
+    if (declaredByteLength > MAX_FILE_WATCH_REQUEST_BODY_BYTES) {
       return { ok: false, tooLarge: true };
     }
   }
@@ -147,7 +180,7 @@ async function readBoundedJson(req: Request): Promise<BodyReadResult> {
       const { done, value } = await reader.read();
       if (done) break;
       totalBytes += value.byteLength;
-      if (totalBytes > MAX_REQUEST_BODY_BYTES) {
+      if (totalBytes > MAX_FILE_WATCH_REQUEST_BODY_BYTES) {
         await reader.cancel();
         return { ok: false, tooLarge: true };
       }
@@ -168,9 +201,13 @@ async function readBoundedJson(req: Request): Promise<BodyReadResult> {
 
   try {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(body);
-    return { ok: true, value: JSON.parse(text) as unknown };
+    return {
+      ok: true,
+      value: JSON.parse(text) as unknown,
+      byteLength: Math.max(totalBytes, declaredByteLength),
+    };
   } catch {
-    return { ok: false, tooLarge: false };
+    return { ok: false, tooLarge: totalBytes > MAX_LEGACY_REQUEST_BODY_BYTES };
   }
 }
 
@@ -186,8 +223,16 @@ function parseTicketRequest(value: unknown): ParsedTicketRequest | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record).sort();
+  if ((keys.length === 2 && keys[0] === "channel" && keys[1] === "path")
+    || (keys.length === 3 && keys[0] === "channel" && keys[1] === "path" && keys[2] === "sessionId")) {
+    if (record.channel !== FILE_WATCH_CHANNEL || typeof record.path !== "string"
+      || (keys.length === 3 && !validSessionId(record.sessionId))) return null;
+    return keys.length === 3
+      ? { channel: FILE_WATCH_CHANNEL, path: record.path, sessionId: record.sessionId as string }
+      : { channel: FILE_WATCH_CHANNEL, path: record.path };
+  }
   if (keys.length === 1 && keys[0] === "channel" && typeof record.channel === "string"
-    && record.channel !== SESSION_TRANSPORT_CHANNEL) {
+    && record.channel !== SESSION_TRANSPORT_CHANNEL && record.channel !== FILE_WATCH_CHANNEL) {
     return { channel: record.channel };
   }
   if (keys.length === 2 && keys[0] === "channel" && keys[1] === "sessionId"
@@ -195,6 +240,14 @@ function parseTicketRequest(value: unknown): ParsedTicketRequest | null {
     return { channel: SESSION_TRANSPORT_CHANNEL, sessionId: record.sessionId };
   }
   return null;
+}
+
+function normalizedBoundedFileWatchPath(value: string): string | null {
+  if (value.length === 0 || value.includes("\0")
+    || Buffer.byteLength(value, "utf8") > MAX_FILE_WATCH_PATH_BYTES) return null;
+  const normalized = normalizeAbsoluteFilePath(value);
+  if (!normalized || Buffer.byteLength(normalized, "utf8") > MAX_FILE_WATCH_PATH_BYTES) return null;
+  return normalized;
 }
 
 function normalizedBoundedAbsolutePath(value: unknown): string | null {
@@ -375,6 +428,43 @@ export function createSessionTicketIssuer(
 
 const issueSessionTicket = createSessionTicketIssuer();
 
+export function createFileWatchTicketIssuer(
+  dependencies: FileWatchTicketIssuerDependencies = defaultFileWatchTicketDependencies,
+) {
+  return async (
+    gateway: PiWebTransportGatewayV1,
+    submittedPath: string,
+    sessionId: string | null,
+  ): Promise<FileWatchTicketIssuerOutcome> => {
+    if (gateway.ticketContextVersion !== 1) {
+      return { ok: false, status: 503, error: "transport_unavailable" };
+    }
+    const filePath = normalizedBoundedFileWatchPath(submittedPath);
+    if (!filePath) return { ok: false, status: 400, error: "invalid_request" };
+    let authorization: "allowed_root" | "allowed_session_reference" | "denied";
+    try { authorization = await dependencies.authorize(filePath, sessionId); }
+    catch { return { ok: false, status: 403, error: "access_denied" }; }
+    if (authorization === "denied") return { ok: false, status: 403, error: "access_denied" };
+
+    let observationClass: "ordinary" | "symlink";
+    try {
+      if (!dependencies.stat(filePath).isFile()) {
+        return { ok: false, status: 400, error: "invalid_request" };
+      }
+      observationClass = dependencies.lstat(filePath).isSymbolicLink() ? "symlink" : "ordinary";
+    } catch { return { ok: false, status: 404, error: "file_unavailable" }; }
+
+    try {
+      dependencies.ensureChannel(gateway);
+      const context = createFileWatchTicketContext(filePath, observationClass);
+      const { ticket, expiresAt } = gateway.issueTicket(FILE_WATCH_CHANNEL, context);
+      return { ok: true, ticket, expiresAt };
+    } catch { return { ok: false, status: 503, error: "transport_unavailable" }; }
+  };
+}
+
+const issueFileWatchTicket = createFileWatchTicketIssuer();
+
 export async function POST(req: Request) {
   if (req.headers.get(TRANSPORT_HEADER) !== "1") {
     return jsonResponse({ error: "transport_forbidden" }, 403);
@@ -410,7 +500,17 @@ export async function POST(req: Request) {
   }
 
   const parsed = parseTicketRequest(body.value);
+  const isExactFileWatchShape = parsed?.channel === FILE_WATCH_CHANNEL && "path" in parsed;
+  if (body.byteLength > MAX_LEGACY_REQUEST_BODY_BYTES && !isExactFileWatchShape) {
+    return jsonResponse({ error: "body_too_large" }, 413);
+  }
   if (!parsed) return jsonResponse({ error: "invalid_request" }, 400);
+
+  if (parsed.channel === FILE_WATCH_CHANNEL && "path" in parsed) {
+    const issued = await issueFileWatchTicket(gateway, parsed.path as string, parsed.sessionId ?? null);
+    if (!issued.ok) return jsonResponse({ error: issued.error }, issued.status);
+    return jsonResponse({ ticket: issued.ticket, expiresAt: issued.expiresAt }, 200);
+  }
 
   if (parsed.channel === SESSION_TRANSPORT_CHANNEL && "sessionId" in parsed) {
     const issued = await issueSessionTicket(gateway, parsed.sessionId as string);
