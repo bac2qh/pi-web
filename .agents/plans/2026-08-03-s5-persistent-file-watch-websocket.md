@@ -1,12 +1,12 @@
 # S5: Persistent File-Watch WebSocket
 
-Status: draft
+Status: approved
 
 ## Objective
 
 Complete only the S5 persistent file-watch migration authorized by the approved [Pi Web persistent-stream WebSocket orchestration master](./2026-07-30-persistent-stream-websocket-migration.md), starting from accepted S4B implementation commit `80eea2247860241f0632cd1fc272d25ddcbbbe5b` and final checkpoint commit `2d37c9888c34b112d069f4093d69136543986079`.
 
-Replace the four long-lived file-watch EventSources in `components/FileViewer.tsx` with one independently authorized same-port WebSocket for the currently mounted file viewer. Add the static metadata-bound `file-watch` gateway channel, factor and reuse the file API's exact allowed-root-or-session-reference authorization decision for every ticket, bind only the normalized authorized target in the one-use server-side ticket context, and allocate exactly one `fs.FSWatcher` only after successful ticket consumption and upgrade. Preserve every non-watch file API and image/audio/PDF/DOCX/text/Markdown/HTML rendering behavior, recover across modification, deletion/recreation, socket/server interruption, path/source-session changes, and unmount, then remove the persistent `watch` HTTP response and all file EventSource callers.
+Replace the four long-lived file-watch EventSources in `components/FileViewer.tsx` with one independently authorized same-port WebSocket for the currently mounted file viewer. Add the static metadata-bound `file-watch` gateway channel, factor and reuse the file API's exact allowed-root-or-session-reference authorization decision for every ticket, bind only the normalized authorized target in the one-use server-side ticket context, and allocate exactly one replacement `fs.FSWatcher` only after successful ticket consumption and upgrade. Preserve every non-watch file API and image/audio/PDF/DOCX/text/Markdown/HTML rendering behavior. Ordinary non-symlink targets must recover across modification, atomic replacement, deletion/recreation, socket/server interruption, path/source-session changes, and unmount. A final-component symlink retains the original route's one direct `fs.watch(filePath)` behavior without adding a second watcher, polling, stricter authorization, or a new guarantee for cross-directory referent and lexical-entry changes. Remove the persistent `watch` HTTP response and all file EventSource callers after parity passes.
 
 S5 does not add heartbeat/ping, change semantic idle, redesign admission or shutdown grace, migrate OAuth login SSE, alter session/global protocols or browser ownership, run final combined scale, update maintained product documentation, or claim user/visual acceptance. Success means:
 
@@ -15,7 +15,7 @@ S5 does not add heartbeat/ping, change semantic idle, redesign admission or shut
 - every ticket reauthorizes the current path through the same server decision used by file GET, binds a path-safe opaque context, and never starts or retains an `AgentSession`;
 - no watcher exists before ticket consumption and upgrade dispatch;
 - connected/change delivery is versioned, strict, path-free, bounded, stale-instance-safe, and sufficient to preserve all current refresh metadata and rendering behavior;
-- modify, atomic replace, delete, recreate, reconnect, path switch, viewer unmount, handler/watch failure, and server shutdown release or recover exactly as assigned without stale updates or duplicate watchers;
+- ordinary non-symlink modify, atomic replace, delete, recreate, reconnect, path switch, viewer unmount, handler/watch failure, and server shutdown release or recover exactly as assigned without stale updates or duplicate watchers; final-component symlinks preserve the existing direct-watch behavior and one-watcher bound;
 - every non-watch file list/read/download/meta/preview/upload behavior remains unchanged;
 - no persistent file-watch EventSource or `?type=watch` route remains, leaving short-lived OAuth login as the only production EventSource;
 - Chromium and Firefox prove live refresh, deletion/recreation, reconnect, topology, cleanup, and ordinary HTTP responsiveness with sanitized evidence.
@@ -45,27 +45,30 @@ Extend ticket parsing with only these exact request objects:
 { channel: "file-watch", path: string, sessionId: string }
 ```
 
-Reject missing/excess keys, relative/empty/NUL/control-bearing paths, malformed optional session IDs, unsupported content types, invalid transport headers/origins, overlong UTF-8 paths, directories, and unauthorized or unavailable targets before ticket issue. Normalize the accepted absolute path with the same POSIX/Windows rules used by file access. Support an exact maximum 4,096-byte normalized path; raise the ticket route's still-bounded JSON body ceiling only as much as necessary to carry that request, with exact boundary tests and no relaxation of shape/origin/channel checks.
+Reject missing/excess keys, relative/empty/NUL-bearing paths, malformed optional session IDs, unsupported content types, invalid transport headers/origins, overlong UTF-8 paths, directories, and unauthorized or unavailable targets before ticket issue. Do not reject a currently authorized POSIX path merely because its decoded filename contains another control character; existing platform/filesystem availability remains authoritative. Normalize the accepted absolute path with the same POSIX/Windows rules used by file access. Apply three separate byte limits: at most 4,096 UTF-8 bytes for the decoded submitted path string, at most 4,096 UTF-8 bytes after absolute normalization, and at most 26,624 bytes for the complete encoded file-watch ticket JSON body. The independent file-watch body ceiling admits the canonical browser `JSON.stringify` representation of every permitted maximum path plus the existing bounded optional session ID, including six-byte JSON escaping of one-byte controls and lone surrogates; the conservative realizable upper case is at most 26,161 bytes, not the body ceiling itself. Semantically equivalent JSON inflated beyond the ceiling by redundant escapes or whitespace may be rejected before decoded path validation; the protocol does not promise every possible JSON spelling. Preserve the existing 1,024-byte effective request ceiling for every pre-existing running/session/unknown ticket shape; only an exact parsed `file-watch` shape may use the larger ceiling. These bounds do not relax exact body shape, content-type, origin, transport-header, channel, or existing session-request validation.
+
+Test the limits independently: accept a conservative canonical worst-case request; use representative alternate escapes to prove decoded and normalized path limits are evaluated after parsing; and use permitted JSON whitespace padding around an otherwise exact object to prove complete encoded-body acceptance at exactly 26,624 bytes and rejection at 26,625 bytes. Do not require a canonical or alternate-escape request to reach the larger body ceiling.
 
 Reauthorize every ticket request, including reconnects. Ensure the static `file-watch` channel before issue and place only a frozen, versioned, owner-branded authorized target context in the gateway ticket record. The response remains only `{ticket, expiresAt}`; the WebSocket URL contains only the opaque ticket. The context must not expose the path or optional source session to the client, diagnostics, close reason, or errors.
 
-Require a regular file at ticket issue to preserve current watch admission. If the connected target is later deleted, keep the accepted directory watcher alive for recreation; if the socket is lost while the file is absent, bounded client ticket retries may receive a finite unavailable response until recreation makes a new ticket possible.
+Require `stat` to resolve to a regular file at ticket issue, preserving current watch admission, and use `lstat` only to classify whether the final path component is a symlink. Freeze that path-safe observation class in the ticket context; do not resolve or expose the referent as a second authorization or watcher target. If an ordinary connected target is later deleted, keep its accepted directory watcher alive for recreation. If any socket is lost while its file is absent, ongoing client ticket retries may receive a finite unavailable response until recreation makes a new ticket possible. A reconnect reauthorizes and reclassifies the current path.
 
 ### 2. Add a strict static protocol and subscription-owned watcher channel
 
-Add a small V1 file-watch protocol with static channel name `file-watch`. Frames are strict, exact-key, JSON text frames and contain only finite metadata needed by viewers:
+Add a small V1 file-watch protocol with static channel name `file-watch` and protocol literal `pi-web-file-watch`. Both server frames are strict exact-key JSON text objects containing only `protocol`, `version`, `serverInstanceId`, `type`, `changeCount`, `exists`, and `size`:
 
-- one first `connected` frame after watcher allocation and initial target observation;
-- zero or more `change` frames carrying a connection-local monotonic change count plus `exists` and bounded nonnegative `size` metadata;
-- protocol/version/server-instance fields sufficient for stale-server rejection.
+- the one first `connected` frame follows watcher allocation and initial target observation, has `type: "connected"`, and has `changeCount: 0`;
+- zero or more `change` frames have `type: "change"` and a connection-local `changeCount` from 1 through `Number.MAX_SAFE_INTEGER`;
+- `exists` is Boolean; `size` is a nonnegative safe integer, is `0` when absent, and saturates at `Number.MAX_SAFE_INTEGER` if filesystem metadata exceeds the wire bound;
+- `serverInstanceId` is an opaque nonempty string of at most 128 characters; version is exactly numeric `1`.
 
-Do not serialize path, basename, session ID, ticket, mtime/timestamp, content, raw filesystem event, address, or raw error. The browser sends no file-watch application frame. Binary/client messages are policy failures rather than alternate control paths.
+Before increment overflow, close retryably and let reconnect reset the connection-local count rather than wrapping or emitting an unsafe integer. Do not serialize path, basename, session ID, ticket, mtime/timestamp, content, raw filesystem event, address, or raw error. The browser sends no file-watch application frame: binary input closes with `1003`, text/application input or malformed policy closes with `1008`, internal/watch failure uses retryable `1011`, server-owner replacement uses `1012`, and transient retry pressure may use `1013`. Unknown protocol/version is terminal for that mounted client instance rather than silently accepted.
 
 Register one HMR-safe production handler through a `Symbol.for` record matching the accepted running/session patterns. Validate the exact frozen ticket context before allocation. Only a successfully consumed and upgraded subscription may allocate one watcher. The subscription—not the browser page, path, optional source session, or AgentSession wrapper—owns the watcher, socket listeners, one bounded coalescing timer, send state, and cleanup.
 
-Watch the containing directory and filter to the exact target basename with platform-appropriate comparison so atomic replacement and recreation remain observable. A missing callback filename may trigger one bounded target restat, never sibling data delivery. Coalesce duplicate/burst events into the latest target observation with at most one pending timer and one latest pending change; do not busy poll or grow an event queue. Register the directory watcher before the initial stat, then send `connected` from the resulting current target state so attach cannot miss a change silently.
+For an ordinary final component, watch the containing directory and filter to the exact target basename with platform-appropriate comparison so atomic replacement and recreation remain observable. A missing callback filename may trigger one bounded target restat, never sibling data delivery. For a final-component symlink, call direct `fs.watch(filePath)` as the original SSE route does; this preserves its current referent-change behavior and OS limitations without a second lexical/referent watcher or polling. Both modes allocate exactly one watcher. Coalesce duplicate/burst events into the latest target observation with at most one pending timer and one latest pending change; do not busy poll or grow an event queue. Register the chosen watcher before the initial stat, then send `connected` from the resulting current target state so attach cannot miss an observable change silently.
 
-One idempotent cleanup path closes the watcher and timer exactly once on setup failure, malformed context, send failure, watcher error, socket close/error, path/viewer replacement through client close, and existing custom-server WebSocket termination. A watcher/internal failure closes the socket retryably. Keep output bounded by coalescing to one latest pending change and fail/reconnect rather than accumulating when send/buffer state is invalid. Existing server shutdown already terminates accepted Pi Web sockets; S5 proves that socket teardown synchronously releases watchers. General all-channel ownership joining, heartbeat, grace, and forced-shutdown policy remain S6.
+Install socket close/error/message listeners before any potentially deferred setup, and immediately before watcher allocation require the accepted socket still to be `OPEN` and the handler/server owner still current. If close or server shutdown wins after ticket consumption but before allocation, allocate nothing. One idempotent cleanup path closes the watcher and timer exactly once on setup failure, malformed context, send failure, watcher error, socket close/error, path/viewer replacement through client close, and existing custom-server WebSocket termination. A watcher/internal failure closes the socket retryably. Keep output bounded by coalescing to one latest pending change and fail/reconnect rather than accumulating when send/buffer state is invalid. Existing server shutdown already terminates accepted Pi Web sockets; S5 proves both immediate and deferred handler teardown synchronously release or avoid watchers. General all-channel ownership joining, heartbeat, grace, and forced-shutdown policy remain S6.
 
 ### 3. Add one stale-safe browser client and one mounted-viewer hook
 
@@ -75,10 +78,10 @@ Add a runtime-neutral `FileWatchClient` following the accepted global/session cl
 - page-derived `ws:`/`wss:` URL with only the opaque ticket;
 - strict ticket and frame parsing;
 - one monotonically increasing resource epoch guarding ticket promises, sockets, callbacks, timers, and path/source-session changes;
-- bounded exponential reconnect for ticket/socket/server/watcher interruption;
+- ongoing reconnect for retryable ticket/socket/server/watcher interruption using finite capped delays (250 ms, 500 ms, 1 s, 2 s, 4 s, 8 s, then 10 s for every later attempt) while the same viewer remains mounted;
 - backoff reset only after a valid `connected` frame, not TCP open;
 - stop that aborts bootstrap, cancels timers, closes the current socket, and suppresses every stale callback;
-- terminal handling for unsupported protocol until an explicit new client/path mount, while ordinary unavailable/malformed/close failures retry finitely.
+- terminal handling for unsupported protocol/version and policy failures until an explicit new client/path mount, while ordinary unavailable, network, server-owner, watcher, and retry-pressure failures continue indefinitely at the capped delay until stop or valid `connected` recovery.
 
 Expose connection state plus current change metadata through a small controller/hook seam. Use one common hook for the one mounted `FileViewer`; do not add file watches to `SessionRegistryProvider`, the global socket, or a page-wide path registry, and do not multiplex paths. AppShell already renders only the active internal file tab. Preserve its actual semantics: switching/closing the active tab unmounts the old viewer, while closing the right panel by CSS does not unmount an active viewer and therefore does not release its still-mounted watch.
 
@@ -91,7 +94,7 @@ Replace the duplicated EventSource effects with the common hook while retaining 
 - **PDF/DOCX:** preserve initial HTTP `meta`, PDF `read`, DOCX `preview`, sandbox/CSP, 10 MiB limit, size/error transitions, and iframe cache bust.
 - **Text/Markdown/HTML:** preserve initial `read`, Markdown default preview, HTML/Markdown toggles, syntax/wrap state, previous-content diff, and real change count; clear a prior deletion/read error after successful recreation.
 
-Start the watcher and ordinary initial HTTP load without allowing an attach gap or stale overwrite. A valid `connected` frame performs one current-path synchronization, but it must not fabricate a text diff/change count when content is unchanged. Guard every read/meta refresh by the current file path, source-session generation, and newest request token; stale initial or burst responses from an old path/socket may not update the new viewer. Coalesce refresh work so duplicate filesystem callbacks do not create an unbounded fetch queue. A later successful current response clears the corresponding transient deletion/read error.
+Start the watcher and ordinary initial HTTP load without allowing an attach gap or stale overwrite. A valid `connected` frame performs one current-path synchronization, but it must not fabricate a text diff/change count when content is unchanged. Guard every read/meta refresh by the current file path, source-session generation, and newest request token; stale initial or burst responses from an old path/socket may not update the new viewer. Capture the same resource epoch in native image `load`/`error`, audio metadata/error, and document iframe callbacks so a detached or superseded DOM resource cannot mutate the current path's size, duration, dimensions, load state, or error. Coalesce refresh work so duplicate filesystem callbacks do not create an unbounded fetch queue. A later successful current response clears the corresponding transient deletion/read error.
 
 Keep all content transport over the existing HTTP read/meta/preview/download APIs. WebSocket frames only trigger and annotate refresh; they never carry file bytes or rendered content.
 
@@ -166,12 +169,12 @@ No advisory reference-pointer companion exists for the master. The sibling Pi mo
 
 ### Resolved S5 decisions
 
-- **Watcher strategy:** one containing-directory watcher filtered to the authorized basename, with bounded event coalescing and target restat, is the required deletion/recreation seam.
+- **Watcher strategy:** replace, never supplement, the existing SSE-owned watcher. One containing-directory watcher filtered to the authorized basename, with bounded event coalescing and target restat, is the ordinary-file deletion/recreation seam. A final-component symlink retains one direct-path watcher matching the original route; no second watcher, polling, or stronger cross-directory guarantee enters S5.
 - **Reconnect while absent:** connected subscriptions remain through target absence; a lost subscription retries bootstrap until the regular file is available again.
 - **Panel semantics:** mounted lifetime is authoritative. An inactive file tab is unmounted; a panel hidden only by CSS remains mounted and watched.
 - **Wire content:** versioned connected/change metadata only. File content and paths remain HTTP/server-side.
 - **Initial convergence:** connected triggers a guarded current-path synchronization without a false diff; newest request/path generation wins.
-- **Body/path bounds:** permit a 4,096-byte normalized path with a correspondingly bounded ticket JSON body and exact tests.
+- **Body/path bounds:** enforce separate 4,096-byte decoded-path, 4,096-byte normalized-path, and 26,624-byte complete encoded-body limits with exact tests; the body cap guarantees canonical browser serialization, not arbitrarily whitespace/escape-inflated equivalent JSON.
 
 ## Test Strategy
 
@@ -179,20 +182,20 @@ No advisory reference-pointer companion exists for the master. The sibling Pi mo
 
 Require table tests for:
 
-- allowed-root and exact session-reference success; denied, missing, malformed, wrong, stale, sibling-prefix, list/reference, Windows, NUL/control, relative, directory, absent, 4,096-byte, and one-over cases;
-- exact ticket body keys, content type/header/origin, one-use/expiry/revocation, opaque context, reconnect reauthorization, no AgentSession startup, and zero watcher before consume/upgrade;
+- allowed-root and exact session-reference success; denied, missing, malformed, wrong, stale, sibling-prefix, list/reference, Windows, NUL rejection, non-NUL control-bearing path preservation, relative, directory, absent, decoded/normalized 4,096-byte, and one-over cases;
+- exact ticket body keys, content type/header/origin, 1,024-byte effective ceilings for every pre-existing ticket shape, the file-watch-only 26,624-byte ceiling, one-use/expiry/revocation, opaque context, reconnect reauthorization, no AgentSession startup, and zero watcher before consume/upgrade;
 - strict connected/change parsing, unknown version/type/excess keys, binary/client-message rejection, bounded count/size/server identity, and path/content absence;
-- ticket/bootstrap/socket failures, synchronous throws, epoch/stale callbacks, duplicate events, unsupported protocol, bounded reconnect, valid-connected backoff reset, stop/unmount/path/source-session change, and listener throws.
+- ticket/bootstrap/socket failures, synchronous throws, epoch/stale callbacks, duplicate events, unsupported protocol, ongoing capped reconnect, valid-connected backoff reset, stop/unmount/path/source-session change, and listener throws.
 
 ### Channel, filesystem, and server integration
 
 Use injected clocks/watchers plus real temporary filesystem/custom-server cases for:
 
-- exactly one watcher allocated after successful ticket consumption and handler dispatch;
+- exactly one watcher allocated after successful ticket consumption and handler dispatch, with ordinary targets using the parent directory and final-component symlinks using the original direct-path mode;
 - connected-first ordering with no attach gap;
 - modify, burst coalescing, atomic rename-save, delete, recreate, and modify-after-recreate; sibling changes ignored;
 - filename string/Buffer/null variants and platform-aware exact basename filtering;
-- setup/stat/send/buffer/watcher/socket errors, duplicate close, retryable close, HMR reuse/replacement, ticket revocation, and exact-once watcher/timer cleanup;
+- setup/stat/send/buffer/watcher/socket errors, duplicate close, retryable close, HMR reuse/replacement, ticket revocation, exact-once watcher/timer cleanup, and close/server shutdown winning before a deferred handler allocates;
 - mixed running/session/file-watch admission and release under existing 64/256 limits;
 - ordinary HTTP schedulability while watches are active;
 - custom-server close reducing active file watchers to zero without private Next cleanup or S6 grace behavior.
@@ -210,14 +213,14 @@ Add an actual React DOM harness with fake client and deferred HTTP responses. Co
 - PDF/DOCX meta, limit, preview/read URL, iframe/sandbox behavior and recovery;
 - text/Markdown/HTML initial/read/preview/wrap/diff/change-count behavior, unchanged connected sync without false diff, deletion error, and recreation success;
 - download, linked-file opening, and every non-watch file API remain unchanged;
-- StrictMode/unmount and late callbacks produce exact stop and no state update.
+- StrictMode/unmount and late fetch plus image/audio/document native callbacks produce exact stop and no state update.
 
 ### Browser evidence
 
 Run sanitized real Chromium and Firefox flows against the custom development server:
 
 1. text/Markdown, image, audio, PDF, and DOCX mounted viewers connect and refresh after modification;
-2. text and image at minimum pass delete, same-path recreate, and atomic replacement; document/media metadata remains correct;
+2. text/Markdown, image, audio, PDF, and DOCX each pass delete, same-path recreate, later modification, and reconnect in both browsers; ordinary non-symlink text/image also pass atomic replacement, while final-component symlinks receive a focused existing-direct-watch parity check without a new retarget/recreation guarantee;
 3. forced socket loss, offline/online, server restart, and ticket retry recover without stale watcher or stale path update;
 4. path and source-session changes during ticket/bootstrap/reconnect close the old subscription and authorize the new one;
 5. multiple internal file tabs still expose exactly one mounted viewer socket; repeated switching/closing cleans prior watchers; CSS-hidden mounted panel retains one until actual unmount;
@@ -267,7 +270,7 @@ Never log or emit path, basename, session ID, ticket, content, size values in di
 | S5-VC-002 | P0 | Authorization/ticket | Every ticket uses the exact shared allowed-root-or-session-reference decision, exact bounded body and same-host header/origin checks, regular-file admission, fresh reauthorization, and an opaque one-use bound context; no AgentSession starts. | Authorization/ticket matrices, wrapper-start counters, context inspection. | scrutiny | Weaker/duplicated authorization, retargetable context, path leak, wrapper creation, or stale authorization blocks. |
 | S5-VC-003 | P0 | Watch ownership/cleanup | No watcher exists before consumed upgrade dispatch; each subscription owns exactly one watcher and bounded timer/send state, all released exactly once on every failure, close, HMR/server teardown, path change, and unmount. | Fake watcher counters, real fs/custom-server integration, repeated teardown. | scrutiny | Pre-consume allocation, duplicate/stale watcher, leaked timer/socket, or non-owned cleanup blocks. |
 | S5-VC-004 | P0 | Protocol/client | Strict path-free connected/change frames, current-server/resource epoch, same-origin ticketing, page-derived WS URL, bounded reconnect/coalescing, and stale-callback suppression converge without carrying file content. | Protocol/client exhaustive tables and reconnect/path-switch flows. | scrutiny | Path/content leak, malformed acceptance, stale update, unbounded queue/retry, or wrong URL/ownership blocks. |
-| S5-VC-005 | P0 | Deletion/recreation | Modify, atomic replace, deletion, recreation, and later modification converge on the same authorized target without sibling events, busy polling, duplicate watchers, or stuck error UI. | Real fs tests and Chromium/Firefox text/image flows. | both | Missed recreation, sibling leakage, watcher duplication, or unrecoverable viewer blocks. |
+| S5-VC-005 | P0 | Deletion/recreation | Ordinary non-symlink modify, atomic replace, deletion, recreation, and later modification converge on the same authorized target without sibling events, busy polling, duplicate watchers, or stuck error UI; final-component symlinks retain one direct watcher and pre-migration semantics without a new dual-parent guarantee. | Real fs tests, focused symlink parity, and Chromium/Firefox all-variant flows. | both | Missed ordinary recreation, symlink regression, sibling leakage, watcher duplication, or unrecoverable viewer blocks. |
 | S5-VC-006 | P0 | Viewer compatibility/topology | Image/audio/PDF/DOCX/text/Markdown/HTML refresh semantics and non-watch HTTP behavior remain; exactly one socket exists per mounted active viewer, inactive tabs own none, and mounted CSS-hidden viewer behavior is preserved. | Mounted React tests, browser network inventory, capability checks. | both | Broken rendering/metadata/diff/download, duplicate/missing socket, or tab/panel lifetime regression blocks. |
 | S5-VC-007 | P0 | Persistent SSE removal | File `watch` HTTP mode and all four file EventSource callers are gone; no agent/file EventSource remains and OAuth login is the sole short-lived production EventSource. | Static inventory, route/source absence, browser network inventory. | both | Remaining persistent caller/route or OAuth removal blocks. |
 | S5-VC-008 | P0 | Server/admission/shutdown | File-watch sockets participate in existing 64/256 admission, HMR registration, same-port CLI/package behavior, and current server socket teardown without changing S6 policy. | Mixed-channel cap/re-admission, HMR, package, real-development, server-close watcher counters. | scrutiny | Leaked capacity/watcher, second port, private Next cleanup, or premature S6 redesign blocks. |
@@ -279,8 +282,8 @@ S5 completes the file-watch portion of ORCH-VC-006 and advances ORCH-VC-008/009/
 
 ## Assumptions, Risks, and Blockers
 
-- Parent-directory `fs.watch` is the chosen cross-recreation seam, but callback duplication/coalescing and filename availability vary by platform. Tests assert eventual target convergence and exact ownership, not one callback per write.
-- Existing read authorization is lexical and may follow symlinks. S5 must preserve exact parity and not claim a new realpath security property; a broader policy change requires separate authority.
+- Parent-directory `fs.watch` is the ordinary non-symlink cross-recreation seam, but callback duplication/coalescing and filename availability vary by platform. Tests assert eventual target convergence and exact ownership, not one callback per write.
+- Existing read authorization is lexical and may follow final-component symlinks. S5 preserves the original one direct-path watcher for that class and must not claim new realpath, retarget, or dual lexical/referent guarantees. This is a documented pre-existing OS-dependent limitation, not a new watcher or feature reduction; a broader symlink policy or observation redesign requires separate authority.
 - Ticket issue requires a current regular file. Reconnect while absent is expected to retry until recreation; the already-connected directory watcher remains the primary delete/recreate owner.
 - The gateway has no accepted-owner shutdown callback. Current server socket termination must demonstrably close watchers; generalized resource joining/grace remains S6.
 - Connected synchronization can race initial HTTP. Request generations and current-path checks are mandatory so no stale response or false diff survives.
