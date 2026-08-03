@@ -10,6 +10,7 @@ const jiti = createJiti(import.meta.url, {
 const { isExactCloneCommand } = await jiti.import("../hooks/useAgentSession.ts");
 const {
   canSubmitStreamingComposer,
+  isStoredDraftTheSubmittedComposer,
   isSubmittedComposerStateUnchanged,
 } = await jiti.import("./ChatInput.tsx");
 
@@ -62,12 +63,23 @@ test("allows exact clone through streaming controls even with attached images", 
   assert.equal(canSubmitStreamingComposer("", 0), false);
 });
 
-test("clears only the unchanged submitted composer state", () => {
+test("clone identity stays guarded while ordinary prompts detach before pending acceptance", async () => {
   const submittedImages = [{ data: "image", mimeType: "image/png", previewUrl: "blob:test" }];
 
   assert.equal(isSubmittedComposerStateUnchanged("/clone", submittedImages, "/clone", submittedImages), true);
   assert.equal(isSubmittedComposerStateUnchanged("new draft", submittedImages, "/clone", submittedImages), false);
   assert.equal(isSubmittedComposerStateUnchanged("/clone", [...submittedImages], "/clone", submittedImages), false);
+  assert.equal(isStoredDraftTheSubmittedComposer({ value: "/clone", images: [{ data: "image", mimeType: "image/png" }] }, "/clone", submittedImages), true);
+  assert.equal(isStoredDraftTheSubmittedComposer({ value: "new draft", images: [{ data: "image", mimeType: "image/png" }] }, "/clone", submittedImages), false);
+  assert.equal(isStoredDraftTheSubmittedComposer({ value: "/clone", images: [{ data: "different", mimeType: "image/png" }] }, "/clone", submittedImages), false);
+
+  const source = await readFile(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  const promptSubmission = source.slice(source.indexOf("if (pendingSubmissionRef.current) return", source.indexOf("const handleSend")), source.indexOf("const slashQuery"));
+  const detach = promptSubmission.indexOf('valueRef.current = ""');
+  const ordinaryAwait = promptSubmission.indexOf("await onSend");
+  assert.ok(detach >= 0 && ordinaryAwait > detach, "submitted state leaves the queue editor before the blocking POST");
+  assert.match(promptSubmission, /mergeFailedSubmissionText\(pending\.value, valueRef\.current\)/);
+  assert.match(promptSubmission, /pending\.images\.forEach\(revokeImagePreview\)/);
 });
 
 test("maps clone results before new-session creation and coalesces local submissions", async () => {

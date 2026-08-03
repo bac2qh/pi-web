@@ -14,6 +14,12 @@ const {
   shouldApplySidebarHttpRunningFallback,
 } = await jiti.import("./SessionSidebar.tsx");
 
+test("sidebar global status never acquires page session views or browser run ownership", async () => {
+  const sidebarSource = await readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8");
+  assert.match(sidebarSource, /useGlobalStatus\(\)/);
+  assert.doesNotMatch(sidebarSource, /useSessionViewTransport|SessionViewBinding|ensureVisible|beginPromptClaim/);
+});
+
 test("hosted session discovery reloads the ordinary list without navigation or selection", async () => {
   const [sidebarSource, channelSource] = await Promise.all([
     readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8"),

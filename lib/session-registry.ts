@@ -9,6 +9,8 @@ import {
 export type SessionOwnership = "visible" | "retained_hidden";
 export type SessionAcquireOptions = Readonly<{
   ownership: SessionOwnership;
+  /** Optional atomic current-and-future snapshot consumer installed before client start. */
+  onSnapshot?: (snapshot: SessionClientSnapshot) => void;
   onEffect?: (delivery: SessionEffectDelivery) => void;
 }>;
 
@@ -71,9 +73,11 @@ class RegistryHandle implements SessionRegistryHandle {
     readonly entry: Entry,
     readonly generation: number,
     ownership: SessionOwnership,
+    onSnapshot?: (snapshot: SessionClientSnapshot) => void,
     onEffect?: (delivery: SessionEffectDelivery) => void,
   ) {
     this.ownership = ownership;
+    if (onSnapshot) this.snapshotListeners.add(onSnapshot);
     if (onEffect) this.effectListeners.add(onEffect);
   }
 
@@ -129,14 +133,26 @@ export class SessionRegistry implements SessionRegistryController {
     if (this.disposed) throw new Error("session_registry_disposed");
     if (!isValidSessionTransportSessionId(sessionId)) throw new Error("invalid_session_transport_session_id");
     if (!options || !validOwnership(options.ownership)
+      || (options.onSnapshot !== undefined && typeof options.onSnapshot !== "function")
       || (options.onEffect !== undefined && typeof options.onEffect !== "function")) {
       throw new Error("invalid_session_acquire_options");
     }
 
     const existing = this.entries.get(sessionId);
     if (existing) {
-      const handle = new RegistryHandle(this, existing, existing.generation, options.ownership, options.onEffect);
+      const handle = new RegistryHandle(
+        this,
+        existing,
+        existing.generation,
+        options.ownership,
+        options.onSnapshot,
+        options.onEffect,
+      );
       existing.handles.add(handle);
+      if (options.onSnapshot) {
+        this.deliverCurrentSnapshot(handle, options.onSnapshot, existing.snapshot);
+        if (!this.isCurrent(handle, existing)) throw new Error("session_registry_acquire_invalidated");
+      }
       this.report("acquired", options.ownership);
       return handle;
     }
@@ -162,22 +178,50 @@ export class SessionRegistry implements SessionRegistryController {
       stopped: false,
       stopAttempted: false,
     };
-    const handle = new RegistryHandle(this, entry, entry.generation, options.ownership, options.onEffect);
+    let preStartSnapshotObserved = false;
+    const atomicSnapshotConsumer = options.onSnapshot
+      ? (next: SessionClientSnapshot) => {
+          preStartSnapshotObserved = true;
+          options.onSnapshot!(next);
+        }
+      : undefined;
+    const handle = new RegistryHandle(
+      this,
+      entry,
+      entry.generation,
+      options.ownership,
+      atomicSnapshotConsumer,
+      options.onEffect,
+    );
     entry.handles.add(handle);
     this.entries.set(sessionId, entry);
 
+    let unownedSnapshotCleanup: (() => void) | null = null;
+    let unownedEffectCleanup: (() => void) | null = null;
     try {
       const unsubscribeSnapshot = client.subscribe((next) => this.relaySnapshot(entry, next));
       if (typeof unsubscribeSnapshot !== "function") throw new Error("invalid_snapshot_cleanup");
+      unownedSnapshotCleanup = unsubscribeSnapshot;
+      if (!this.isCurrent(handle, entry)) throw new Error("session_registry_client_invalidated_during_subscribe");
       entry.unsubscribeSnapshot = unsubscribeSnapshot;
+      unownedSnapshotCleanup = null;
+      if (atomicSnapshotConsumer && !preStartSnapshotObserved) {
+        this.deliverCurrentSnapshot(handle, atomicSnapshotConsumer, entry.snapshot);
+      }
+      if (!this.isCurrent(handle, entry)) throw new Error("session_registry_client_invalidated_during_snapshot_delivery");
       const unsubscribeEffects = client.subscribeEffects((delivery) => this.relayEffect(entry, delivery));
       if (typeof unsubscribeEffects !== "function") throw new Error("invalid_effect_cleanup");
+      unownedEffectCleanup = unsubscribeEffects;
+      if (!this.isCurrent(handle, entry)) throw new Error("session_registry_client_invalidated_during_effect_subscribe");
       entry.unsubscribeEffects = unsubscribeEffects;
+      unownedEffectCleanup = null;
       client.start();
-      if (this.entries.get(sessionId) !== entry || !handle.active || entry.stopped) {
+      if (!this.isCurrent(handle, entry) || entry.stopped) {
         throw new Error("session_registry_client_invalidated_during_start");
       }
     } catch {
+      this.invokeCleanup(unownedSnapshotCleanup);
+      this.invokeCleanup(unownedEffectCleanup);
       this.deleteEntry(sessionId, entry);
       throw new Error("session_registry_client_setup_failed");
     }
@@ -218,6 +262,15 @@ export class SessionRegistry implements SessionRegistryController {
   }
 
   listenerThrew(): void { this.report("listener_threw"); }
+
+  private deliverCurrentSnapshot(
+    handle: RegistryHandle,
+    listener: (snapshot: SessionClientSnapshot) => void,
+    snapshot: SessionClientSnapshot,
+  ): void {
+    try { listener(snapshot); } catch { this.listenerThrew(); }
+    this.includeInQueuedSnapshots(handle, listener, snapshot);
+  }
 
   includeInQueuedSnapshots(
     handle: RegistryHandle,

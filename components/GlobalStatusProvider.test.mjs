@@ -37,18 +37,17 @@ test("sidebar consumes provider authority and owns no ticket, socket, or global 
   assert.doesNotMatch(sidebarSource, /new WebSocket|transport\/ticket|new EventSource/);
 });
 
-test("migration removes only global SSE and preserves later persistent streams plus OAuth", async () => {
-  await assert.rejects(
-    access(new URL("../app/api/agent/running/events/route.ts", import.meta.url)),
-  );
-  const [sessionRoute, sessionHook, fileViewer, modelsConfig] = await Promise.all([
-    source("../app/api/agent/[id]/events/route.ts"),
+test("agent SSE routes and callers are absent while S5 file watch and short-lived OAuth remain", async () => {
+  await Promise.all([
+    assert.rejects(access(new URL("../app/api/agent/running/events/route.ts", import.meta.url))),
+    assert.rejects(access(new URL("../app/api/agent/[id]/events/route.ts", import.meta.url))),
+  ]);
+  const [sessionHook, fileViewer, modelsConfig] = await Promise.all([
     source("../hooks/useAgentSession.ts"),
     source("./FileViewer.tsx"),
     source("./ModelsConfig.tsx"),
   ]);
-  assert.match(sessionRoute, /text\/event-stream/);
-  assert.match(sessionHook, /new EventSource\(`\/api\/agent\/\$\{encodeURIComponent\(sid\)\}\/events`\)/);
+  assert.doesNotMatch(sessionHook, /EventSource|\/api\/agent\/[^\n]*\/events/);
   assert.equal((fileViewer.match(/new EventSource\(/g) ?? []).length, 4);
   assert.equal((modelsConfig.match(/new EventSource\(/g) ?? []).length, 1);
 });

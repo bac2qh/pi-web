@@ -15,6 +15,7 @@ import { useAudio } from "@/hooks/useAudio";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { SessionStatsInfo } from "@/lib/pi-types";
+import type { SessionViewBinding, SessionViewTransportController } from "@/lib/session-view-transport";
 import {
   captureScrollDistance,
   getNextVisibleCount,
@@ -25,9 +26,13 @@ import {
 
 interface Props {
   session: SessionInfo | null;
+  sessionViewBinding: SessionViewBinding | null;
+  sessionViewTransport: SessionViewTransportController;
+  newScreenGeneration: number;
+  isNewScreenCurrent?: (generation: number) => boolean;
   newSessionCwd: string | null;
   onAgentEnd?: () => void;
-  onSessionCreated?: (session: SessionInfo) => void;
+  onSessionCreated?: (session: SessionInfo, generation: number, binding: SessionViewBinding) => void;
   onSessionForked?: (newSessionId: string) => void;
   onSessionCloned?: () => void;
   modelsRefreshKey?: number;
@@ -144,14 +149,13 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messag
   );
 }
 
-export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, onSessionCloned, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile }: Props) {
+export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, newScreenGeneration, isNewScreenCurrent, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, onSessionCloned, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile }: Props) {
   const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio } = useAudio();
   const isMobile = useIsMobile();
 
-  // Wrap onAgentEnd to play the completion sound. This is more reliable than
-  // wrapping handleAgentEventRef because useAgentSession overwrites that ref
-  // on every render (it syncs the latest callback), which would blow away an
-  // externally-installed wrapper after the first re-render.
+  // The page-level prompt lineage invokes this callback only for one visible
+  // settlement. Keep the latest audio implementation behind stable refs so a
+  // render cannot replace the completion wrapper mid-run.
   const playDoneSoundRef = useRef(playDoneSound);
   playDoneSoundRef.current = playDoneSound;
   const soundEnabledRef = useRef(soundEnabled);
@@ -186,7 +190,8 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     handleBuiltinSlashCommand,
     handleToolPresetChange, handleThinkingLevelChange, loadSlashCommands,
   } = useAgentSession({
-    session, newSessionCwd, onAgentEnd: wrappedOnAgentEnd, onSessionCreated, onSessionForked, onSessionCloned,
+    session, sessionViewBinding, sessionViewTransport, newScreenGeneration, isNewScreenCurrent,
+    newSessionCwd, onAgentEnd: wrappedOnAgentEnd, onSessionCreated, onSessionForked, onSessionCloned,
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen,
   });
 

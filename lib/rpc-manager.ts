@@ -84,6 +84,12 @@ type ExtensionBindingOptions = {
   forceEmptySystemPrompt?: boolean;
 };
 
+export type EnsuredSessionTransportTarget = Readonly<{
+  sessionId: string;
+  sessionFile: string;
+  cwd: string;
+}>;
+
 const CODING_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 export const RPC_SESSION_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -161,6 +167,7 @@ export class AgentSessionWrapper {
   private hostedKickoffLifecycle: HostedImplementationLifecycle | null = null;
   private nativeDisposed = false;
   private _alive = true;
+  private ensuredSessionTransportTarget: EnsuredSessionTransportTarget | null = null;
   private readonly projectedHub: ProjectedSessionEventHub;
 
   constructor(
@@ -191,6 +198,52 @@ export class AgentSessionWrapper {
 
   isAlive(): boolean {
     return this._alive;
+  }
+
+  /**
+   * Admit the exact newly ensured native owner to session-ticket bootstrap
+   * before its header has been persisted. The immutable identity is captured
+   * only by the server route that created this wrapper; callers still have to
+   * prove that this exact live wrapper remains the registry owner.
+   */
+  enableEnsuredSessionTransport(): void {
+    const manager = this.inner.sessionManager;
+    const sessionId = this.sessionId;
+    const managerSessionId = manager.getSessionId();
+    const sessionFile = normalizedExistingSessionPath(manager.getSessionFile() ?? "");
+    const cwd = normalizedExistingSessionPath(manager.getCwd());
+    const exposedSessionFile = this.sessionFile
+      ? normalizedExistingSessionPath(this.sessionFile)
+      : null;
+    if (!this._alive || !sessionId || managerSessionId !== sessionId
+      || !sessionFile || !cwd
+      || (this.sessionFile && exposedSessionFile !== sessionFile)) {
+      throw new Error("rpc_ensured_session_identity_unavailable");
+    }
+    this.ensuredSessionTransportTarget = Object.freeze({ sessionId, sessionFile, cwd });
+  }
+
+  hasEnsuredSessionTransportTarget(): boolean {
+    return this.ensuredSessionTransportTarget !== null;
+  }
+
+  getEnsuredSessionTransportTarget(): EnsuredSessionTransportTarget | null {
+    const target = this.ensuredSessionTransportTarget;
+    if (!target || !this._alive) return null;
+    try {
+      const manager = this.inner.sessionManager;
+      const exposedSessionFile = this.sessionFile
+        ? normalizedExistingSessionPath(this.sessionFile)
+        : null;
+      if (this.sessionId !== target.sessionId
+        || manager.getSessionId() !== target.sessionId
+        || normalizedExistingSessionPath(manager.getSessionFile() ?? "") !== target.sessionFile
+        || normalizedExistingSessionPath(manager.getCwd()) !== target.cwd
+        || (this.sessionFile && exposedSessionFile !== target.sessionFile)) return null;
+      return target;
+    } catch {
+      return null;
+    }
   }
 
   isRunning(): boolean {
@@ -1357,6 +1410,20 @@ function getLocks(): Map<string, Promise<RpcSessionStartResult>> {
 
 export function getRpcSession(sessionId: string): AgentSessionWrapper | undefined {
   return getRegistry().get(sessionId);
+}
+
+/** Exact registry-owner check used immediately before issuing capabilities. */
+export function isCurrentRpcSession(
+  sessionId: string,
+  session: AgentSessionWrapper,
+): boolean {
+  try {
+    return getRegistry().get(sessionId) === session
+      && session.isAlive()
+      && session.sessionId === sessionId;
+  } catch {
+    return false;
+  }
 }
 
 function getRunningProjection(): Set<string> {

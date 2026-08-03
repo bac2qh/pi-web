@@ -7,7 +7,12 @@ import {
   isCompatibleSessionHub,
 } from "@/lib/session-channel";
 import { SESSION_TRANSPORT_CHANNEL } from "@/lib/session-transport-protocol";
-import { getRpcSession, startRpcSession, type AgentSessionWrapper } from "@/lib/rpc-manager";
+import {
+  getRpcSession,
+  isCurrentRpcSession,
+  startRpcSession,
+  type AgentSessionWrapper,
+} from "@/lib/rpc-manager";
 import { readSessionHeader, resolveSessionPath } from "@/lib/session-reader";
 import type { SessionHeader } from "@/lib/types";
 import { getWebSocketGateway, type PiWebTransportGatewayV1 } from "@/lib/websocket-gateway";
@@ -38,6 +43,7 @@ type SessionTicketIssuerDependencies = {
   resolvePath(sessionId: string): Promise<string | null>;
   readHeader(sessionFile: string): SessionHeader | null;
   getSession(sessionId: string): AgentSessionWrapper | undefined;
+  isCurrentSession(sessionId: string, wrapper: AgentSessionWrapper): boolean;
   startSession: typeof startRpcSession;
 };
 
@@ -46,6 +52,7 @@ const defaultSessionTicketDependencies: SessionTicketIssuerDependencies = {
   resolvePath: resolveSessionPath,
   readHeader: readSessionHeader,
   getSession: getRpcSession,
+  isCurrentSession: isCurrentRpcSession,
   startSession: startRpcSession,
 };
 
@@ -213,6 +220,29 @@ function inspectWrapper(
   }
 }
 
+function inspectEnsuredWrapper(wrapper: AgentSessionWrapper, sessionId: string) {
+  try {
+    const target = wrapper.getEnsuredSessionTransportTarget();
+    if (!target || !wrapper.isAlive()
+      || target.sessionId !== sessionId || wrapper.sessionId !== sessionId
+      || normalizedBoundedAbsolutePath(target.sessionFile) !== target.sessionFile
+      || normalizedBoundedAbsolutePath(target.cwd) !== target.cwd) return null;
+    const manager = wrapper.inner.sessionManager;
+    const exposedFile = wrapper.sessionFile
+      ? normalizedBoundedAbsolutePath(wrapper.sessionFile)
+      : null;
+    if (manager.getSessionId() !== sessionId
+      || normalizedBoundedAbsolutePath(manager.getSessionFile()) !== target.sessionFile
+      || normalizedBoundedAbsolutePath(manager.getCwd()) !== target.cwd
+      || (wrapper.sessionFile && exposedFile !== target.sessionFile)) return null;
+    const hub = wrapper.getProjectedEventHub();
+    if (!isCompatibleSessionHub(hub) || hub.isClosed()) return null;
+    return hub;
+  } catch {
+    return null;
+  }
+}
+
 class SessionTargetConflict extends Error {
   readonly code = "session_target_conflict";
 }
@@ -231,6 +261,39 @@ export function createSessionTicketIssuer(
       dependencies.ensureChannel(gateway);
     } catch {
       return { ok: false, status: 503, error: "transport_unavailable" };
+    }
+
+    // A newly ensured native SessionManager has already allocated an exact
+    // owner, cwd, and session-file identity, but its header does not exist until
+    // the first prompt persists work. Admit only that explicitly marked live
+    // registry owner; persisted/discoverable sessions retain the existing path.
+    const ensured = dependencies.getSession(sessionId);
+    if (ensured) {
+      const ensuredHub = inspectEnsuredWrapper(ensured, sessionId);
+      if (ensuredHub) {
+        if (!dependencies.isCurrentSession(sessionId, ensured)) {
+          return { ok: false, status: 409, error: "session_transport_unavailable" };
+        }
+        try {
+          const context = createSessionTicketContext(ensured, ensuredHub);
+          if (!dependencies.isCurrentSession(sessionId, ensured)
+            || inspectEnsuredWrapper(ensured, sessionId) !== ensuredHub) {
+            return { ok: false, status: 409, error: "session_transport_unavailable" };
+          }
+          const { ticket, expiresAt } = gateway.issueTicket(SESSION_TRANSPORT_CHANNEL, context);
+          return { ok: true, ticket, expiresAt };
+        } catch {
+          return { ok: false, status: 503, error: "session_unavailable" };
+        }
+      }
+      try {
+        if (ensured.hasEnsuredSessionTransportTarget()) {
+          return { ok: false, status: 409, error: "session_transport_unavailable" };
+        }
+      } catch {
+        // A wrapper from an older compatible runtime has no pre-prompt marker;
+        // only the persisted-session authorization path may admit it.
+      }
     }
 
     let sessionFile: string;
@@ -293,10 +356,15 @@ export function createSessionTicketIssuer(
     }
 
     try {
-      if (!wrapper.isAlive() || hub.isClosed() || wrapper.getProjectedEventHub() !== hub) {
+      if (!dependencies.isCurrentSession(sessionId, wrapper)
+        || !wrapper.isAlive() || hub.isClosed() || wrapper.getProjectedEventHub() !== hub) {
         return { ok: false, status: 409, error: "session_transport_unavailable" };
       }
       const context = createSessionTicketContext(wrapper, hub);
+      if (!dependencies.isCurrentSession(sessionId, wrapper)
+        || !wrapper.isAlive() || hub.isClosed() || wrapper.getProjectedEventHub() !== hub) {
+        return { ok: false, status: 409, error: "session_transport_unavailable" };
+      }
       const { ticket, expiresAt } = gateway.issueTicket(SESSION_TRANSPORT_CHANNEL, context);
       return { ok: true, ticket, expiresAt };
     } catch {

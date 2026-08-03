@@ -6,7 +6,7 @@ import { createRoot } from "react-dom/client";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
-const { SessionRegistryProvider, useSessionRegistry } = await jiti.import("./SessionRegistryProvider.tsx");
+const { SessionRegistryProvider, useSessionRegistry, useSessionViewTransport } = await jiti.import("./SessionRegistryProvider.tsx");
 
 async function source(path) { return readFile(new URL(path, import.meta.url), "utf8"); }
 
@@ -88,11 +88,12 @@ test("page mounts exactly one inert registry provider in the literal root nestin
   assert.doesNotMatch(provider, /\.acquire\(|\.start\(|new WebSocket|transport\/ticket|useState/);
 });
 
-test("provider context exposes only the controller and mirrors no entry snapshots into React state", async () => {
+test("provider exposes the base registry and page view controller without mirroring entry snapshots into React state", async () => {
   const provider = await source("./SessionRegistryProvider.tsx");
-  assert.match(provider, /createContext<SessionRegistryController \| null>/);
-  assert.match(provider, /Provider value=\{registry\}/);
-  assert.doesNotMatch(provider, /getSnapshot|subscribeEffects|SessionClientSnapshot/);
+  assert.match(provider, /createContext<SessionRegistryContextValue \| null>/);
+  assert.match(provider, /Object\.freeze\(\{ registry, views \}\)/);
+  assert.match(provider, /useSessionViewTransport/);
+  assert.doesNotMatch(provider, /getSnapshot|subscribeEffects|SessionClientSnapshot|useState/);
 });
 
 test("actual React DOM StrictMode replay retains a usable registry and final unmount disposes it once", async () => {
@@ -107,6 +108,8 @@ test("actual React DOM StrictMode replay retains a usable registry and final unm
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   const controllers = [];
   let exposed = null;
+  let exposedViews = null;
+  const disposalOrder = [];
   function createRegistry() {
     const controller = {
       disposed: false,
@@ -121,13 +124,16 @@ test("actual React DOM StrictMode replay retains a usable registry and final unm
         this.disposeCalls += 1;
         if (this.disposed) throw new Error("duplicate dispose");
         this.disposed = true;
+        disposalOrder.push("registry");
       },
     };
     controllers.push(controller);
     return controller;
   }
+  const views = { disposeCalls: 0, select() { return null; }, beginPrompt() { throw new Error("unused"); }, dispose() { this.disposeCalls += 1; disposalOrder.push("views"); } };
   function Consumer() {
     exposed = useSessionRegistry();
+    exposedViews = useSessionViewTransport();
     return React.createElement("span", null, "mounted");
   }
 
@@ -137,11 +143,12 @@ test("actual React DOM StrictMode replay retains a usable registry and final unm
       root.render(React.createElement(
         StrictMode,
         null,
-        React.createElement(SessionRegistryProvider, { createRegistry }, React.createElement(Consumer)),
+        React.createElement(SessionRegistryProvider, { createRegistry, createViewTransport: () => views }, React.createElement(Consumer)),
       ));
     });
     await Promise.resolve();
     assert.ok(exposed);
+    assert.strictEqual(exposedViews, views);
     assert.equal(exposed.disposed, false, "StrictMode simulated cleanup is cancelled by replay setup");
     assert.doesNotThrow(() => exposed.acquire("synthetic", { ownership: "visible" }).release());
     assert.equal(exposed.acquireCalls, 1);
@@ -152,6 +159,8 @@ test("actual React DOM StrictMode replay retains a usable registry and final unm
     assert.equal(exposed.disposed, true);
     assert.equal(exposed.disposeCalls, 1);
     assert.equal(controllers.reduce((sum, controller) => sum + controller.disposeCalls, 0), 1);
+    assert.equal(views.disposeCalls, 1);
+    assert.deepEqual(disposalOrder, ["views", "registry"]);
   } finally {
     globalThis.window = previous.window;
     globalThis.document = previous.document;
@@ -159,18 +168,16 @@ test("actual React DOM StrictMode replay retains a usable registry and final unm
   }
 });
 
-test("current product, SSE, and reconciliation surfaces do not acquire or consume the registry", async () => {
-  const boundaries = await Promise.all([
-    "./AppShell.tsx", "./ChatWindow.tsx", "./SessionSidebar.tsx", "../hooks/useAgentSession.ts",
-  ].map(async (path) => [path, await source(path)]));
-  for (const [path, text] of boundaries) {
-    assert.doesNotMatch(text, /useSessionRegistry|SessionRegistry|\.acquire\(/, path);
-  }
-  const [hook, route] = await Promise.all([
-    source("../hooks/useAgentSession.ts"), source("../app/api/agent/[id]/events/route.ts"),
+test("AppShell consumes only the view controller while sidebar stays outside session-view ownership", async () => {
+  const [shell, chat, sidebar, hook] = await Promise.all([
+    source("./AppShell.tsx"), source("./ChatWindow.tsx"), source("./SessionSidebar.tsx"), source("../hooks/useAgentSession.ts"),
   ]);
-  assert.match(hook, /new EventSource\(`\/api\/agent\/\$\{encodeURIComponent\(sid\)\}\/events`\)/);
+  assert.match(shell, /useSessionViewTransport\(\)/);
+  assert.match(shell, /sessionViews\.prepareSelection\(session\.id\)/);
+  assert.match(chat, /sessionViewBinding/);
+  assert.match(hook, /binding\.waitUntilAttached\(\)/);
   assert.match(hook, /visibilitychange/);
   assert.match(hook, /setInterval/);
-  assert.match(route, /text\/event-stream/);
+  assert.doesNotMatch(sidebar, /useSessionViewTransport|SessionViewBinding|\.beginPrompt\(/);
+  assert.doesNotMatch(hook, /EventSource|\/events/);
 });
