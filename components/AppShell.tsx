@@ -21,6 +21,8 @@ import { buildAtMentionText, buildFileAtMentionsText } from "@/lib/file-fuzzy";
 import type { SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo } from "@/lib/pi-types";
+import { useSessionViewTransport } from "./SessionRegistryProvider";
+import type { SessionViewBinding } from "@/lib/session-view-transport";
 
 type SessionCopyField = "file" | "id";
 type TopPanel = "branches" | "system" | "session" | "display";
@@ -30,7 +32,10 @@ export function AppShell() {
   const searchParams = useSearchParams();
   const { isDark, toggleTheme } = useTheme();
   const isMobile = useIsMobile();
+  const sessionViews = useSessionViewTransport();
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
+  const [selectedSessionBinding, setSelectedSessionBinding] = useState<SessionViewBinding | null>(null);
+  const newScreenGenerationRef = useRef(1);
   // When user clicks +, we only store the cwd — no fake session id
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -178,7 +183,11 @@ export function AppShell() {
       return;
     }
     // Close any session that belongs to a different project — it no longer
-    // matches the selected project directory.
+    // matches the selected project directory. Releasing a page view never
+    // aborts or owns the server run.
+    sessionViews.select(null);
+    newScreenGenerationRef.current += 1;
+    setSelectedSessionBinding(null);
     setSelectedSession(null);
     setNewSessionCwd((prev) => {
       if (prev && prev !== cwd) return null;
@@ -190,7 +199,7 @@ export function AppShell() {
     setSystemPrompt(null);
     setActiveTopPanel(null);
     router.replace("/", { scroll: false });
-  }, [router, selectedSession]);
+  }, [router, selectedSession, sessionViews]);
 
   // Update browser tab title when workspace changes
   useEffect(() => {
@@ -199,6 +208,11 @@ export function AppShell() {
   }, [activeCwd]);
 
   const handleSelectSession = useCallback((session: SessionInfo, isRestore = false) => {
+    // Prepare B without touching A. The mounted hook installs B's snapshot and
+    // effect consumers, then atomically activates B before A is relabelled.
+    const binding = sessionViews.prepareSelection(session.id);
+    newScreenGenerationRef.current += 1;
+    setSelectedSessionBinding(binding);
     setNewSessionCwd(null);
     setSelectedSession(session);
     setSessionKey((k) => k + 1);
@@ -216,9 +230,12 @@ export function AppShell() {
     if (!isRestore) {
       router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
     }
-  }, [router, isMobile]);
+  }, [router, isMobile, sessionViews]);
 
   const handleNewSession = useCallback((_sessionId: string, cwd: string) => {
+    sessionViews.select(null);
+    newScreenGenerationRef.current += 1;
+    setSelectedSessionBinding(null);
     setSelectedSession(null);
     setNewSessionCwd(cwd);
     setSessionKey((k) => k + 1);
@@ -228,7 +245,7 @@ export function AppShell() {
     setActiveTopPanel(null);
     if (isMobile) setSidebarOpen(false);
     router.replace("/", { scroll: false });
-  }, [router, isMobile]);
+  }, [router, isMobile, sessionViews]);
 
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.)
   useGlobalKeyboardShortcuts({
@@ -251,14 +268,22 @@ export function AppShell() {
       .catch(() => {});
   }, []);
 
-  // Called by ChatWindow when a new session gets its real id from pi
-  const handleSessionCreated = useCallback((session: SessionInfo) => {
-    setNewSessionCwd(null);
-    setSelectedSession(session);
+  // A stale async new-session completion may refresh discovery but cannot
+  // steal a newer selected view or rewrite its URL.
+  const isNewScreenCurrent = useCallback((generation: number) => (
+    generation === newScreenGenerationRef.current
+  ), []);
+
+  const handleSessionCreated = useCallback((session: SessionInfo, generation: number, binding: SessionViewBinding) => {
     setRefreshKey((k) => k + 1);
     hydrateSelectedSession(session.id);
+    if (generation !== newScreenGenerationRef.current) return;
+    sessionViews.activate(binding, "visible");
+    setSelectedSessionBinding(binding);
+    setNewSessionCwd(null);
+    setSelectedSession(session);
     router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
-  }, [router, hydrateSelectedSession]);
+  }, [router, hydrateSelectedSession, sessionViews]);
 
   const handleAgentEnd = useCallback(() => {
     setRefreshKey((k) => k + 1);
@@ -266,6 +291,9 @@ export function AppShell() {
   }, []);
 
   const handleSessionForked = useCallback((newSessionId: string) => {
+    const binding = sessionViews.prepareSelection(newSessionId);
+    newScreenGenerationRef.current += 1;
+    setSelectedSessionBinding(binding);
     setRefreshKey((k) => k + 1);
     setSessionKey((k) => k + 1);
     setNewSessionCwd(null);
@@ -275,7 +303,7 @@ export function AppShell() {
     }));
     hydrateSelectedSession(newSessionId);
     router.replace(`?session=${encodeURIComponent(newSessionId)}`, { scroll: false });
-  }, [router, hydrateSelectedSession]);
+  }, [router, hydrateSelectedSession, sessionViews]);
 
   const handleSessionCloned = useCallback(() => {
     setRefreshKey((k) => k + 1);
@@ -289,6 +317,9 @@ export function AppShell() {
     setRefreshKey((k) => k + 1);
     if (selectedSession?.id === sessionId) {
       const cwd = selectedSession.cwd;
+      sessionViews.select(null);
+      newScreenGenerationRef.current += 1;
+      setSelectedSessionBinding(null);
       setSelectedSession(null);
       setNewSessionCwd(cwd ?? null);
       setSessionKey((k) => k + 1);
@@ -298,7 +329,7 @@ export function AppShell() {
       setActiveTopPanel(null);
       router.replace("/", { scroll: false });
     }
-  }, [selectedSession, router]);
+  }, [selectedSession, router, sessionViews]);
 
   const handleOpenFile = useCallback((filePath: string, fileName: string, sourceSessionId?: string | null) => {
     const tabId = `file:${filePath}`;
@@ -1032,6 +1063,10 @@ export function AppShell() {
             <ChatWindow
               key={sessionKey}
               session={selectedSession}
+              sessionViewBinding={selectedSessionBinding}
+              sessionViewTransport={sessionViews}
+              newScreenGeneration={newScreenGenerationRef.current}
+              isNewScreenCurrent={isNewScreenCurrent}
               newSessionCwd={effectiveNewSessionCwd}
               onAgentEnd={handleAgentEnd}
               onSessionCreated={handleSessionCreated}

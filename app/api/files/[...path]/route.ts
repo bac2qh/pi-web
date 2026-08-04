@@ -18,7 +18,7 @@ import {
   getImageMime,
 } from "@/lib/file-types";
 import { resolveDirentIsDirectory } from "@/lib/file-dirent";
-import { isFilePathReferencedBySession } from "@/lib/session-file-references";
+import { authorizeFileRequest } from "@/lib/file-authorization";
 import {
   inspectUploadTargets,
   parseUploadConflictStrategy,
@@ -33,7 +33,7 @@ const IGNORED_NAMES = new Set([
 
 const IGNORED_SUFFIXES = [".pyc"];
 
-const FILE_REQUEST_TYPES = ["list", "read", "download", "meta", "preview", "watch"] as const;
+const FILE_REQUEST_TYPES = ["list", "read", "download", "meta", "preview"] as const;
 type FileRequestType = typeof FILE_REQUEST_TYPES[number];
 const FILE_REQUEST_TYPE_SET = new Set<string>(FILE_REQUEST_TYPES);
 
@@ -400,13 +400,8 @@ export async function GET(
     }
     const sessionId = request.nextUrl.searchParams.get("sessionId");
 
-    const allowedRoots = await getAllowedFileRoots();
-    const allowedByRoot = isFilePathAllowed(filePath, allowedRoots);
-    const allowedBySessionReference =
-      !allowedByRoot &&
-      type !== "list" &&
-      await isFilePathReferencedBySession(filePath, sessionId);
-    if (!allowedByRoot && !allowedBySessionReference) {
+    const authorization = await authorizeFileRequest(filePath, sessionId, type !== "list");
+    if (authorization === "denied") {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
@@ -494,54 +489,6 @@ export async function GET(
           "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
           "Referrer-Policy": "no-referrer",
           "X-Content-Type-Options": "nosniff",
-        },
-      });
-    }
-
-    if (type === "watch") {
-      if (!stat.isFile()) {
-        return NextResponse.json({ error: "Not a file" }, { status: 400 });
-      }
-      let watcher: fs.FSWatcher | null = null;
-      const stream = new ReadableStream({
-        start(controller) {
-          const send = (eventName: string, data: Record<string, unknown>) => {
-            const payload = `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
-            try {
-              controller.enqueue(new TextEncoder().encode(payload));
-            } catch {
-              // client disconnected
-            }
-          };
-          // Send initial ping so client knows connection is live
-          send("connected", { filePath });
-          try {
-            watcher = fs.watch(filePath, () => {
-              try {
-                const s = fs.statSync(filePath);
-                send("change", { mtime: s.mtime.toISOString(), size: s.size });
-              } catch {
-                send("change", { mtime: new Date().toISOString(), size: 0 });
-              }
-            });
-            watcher.on("error", () => {
-              try { controller.close(); } catch { /* ignore */ }
-            });
-          } catch {
-            send("error", { message: "Failed to watch file" });
-            controller.close();
-          }
-        },
-        cancel() {
-          try { watcher?.close(); } catch { /* ignore */ }
-        },
-      });
-      return new Response(stream, {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache, no-transform",
-          Connection: "keep-alive",
-          "X-Accel-Buffering": "no",
         },
       });
     }

@@ -24,7 +24,7 @@ interface ModelOption {
 }
 
 interface Props {
-  onSend: (message: string, images?: AttachedImage[]) => void;
+  onSend: (message: string, images?: AttachedImage[]) => Promise<boolean> | boolean;
   onAbort: () => void;
   onSteer?: (message: string, images?: AttachedImage[]) => void;
   onFollowUp?: (message: string, images?: AttachedImage[]) => void;
@@ -77,10 +77,36 @@ export function isSubmittedComposerStateUnchanged(
   return currentValue === submittedValue && currentImages === submittedImages;
 }
 
+export function isStoredDraftTheSubmittedComposer(
+  stored: ReturnType<typeof getDraft>,
+  submittedValue: string,
+  submittedImages: readonly AttachedImage[],
+): boolean {
+  if (!stored || stored.value !== submittedValue || stored.images.length !== submittedImages.length) return false;
+  return stored.images.every((image, index) => (
+    image.data === submittedImages[index]?.data && image.mimeType === submittedImages[index]?.mimeType
+  ));
+}
+
 export function canSubmitStreamingComposer(value: string, imageCount: number): boolean {
   const message = value.trim();
   return Boolean(message) && (imageCount === 0 || isExactCloneCommand(message));
 }
+
+function mergeFailedSubmissionText(submitted: string, newer: string): string {
+  if (!newer) return submitted;
+  if (!submitted) return newer;
+  // Deterministic rollback: the failed original remains first, followed by
+  // the user's newer composer so neither can be mistaken for the other.
+  return `${submitted}\n\n${newer}`;
+}
+
+type PendingComposerSubmission = {
+  value: string;
+  images: AttachedImage[];
+  draftKey: string | undefined;
+  previewsOwned: boolean;
+};
 
 const TOOL_PRESETS = ["off", "default", "full"] as const;
 const TOOL_PRESET_MAP: Record<"off" | "default" | "full", "none" | "default" | "full"> = { off: "none", default: "default", full: "full" };
@@ -251,6 +277,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const draftKeyRef = useRef(draftKey);
   const valueRef = useRef(value);
   const attachedImagesRef = useRef(attachedImages);
+  const pendingSubmissionRef = useRef<PendingComposerSubmission | null>(null);
+  const mountedRef = useRef(true);
   valueRef.current = value;
   attachedImagesRef.current = attachedImages;
 
@@ -333,6 +361,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           })
       )
     );
+    if (!mountedRef.current) {
+      newImages.forEach(revokeImagePreview);
+      return;
+    }
     setAttachedImages((prev) => [...prev, ...newImages]);
   }, [isStreaming]);
 
@@ -375,6 +407,26 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     const previousDraftKey = draftKeyRef.current;
     if (previousDraftKey === draftKey) return;
 
+    // A materialized new session keeps this mounted composer. Move its live
+    // state from the blank-screen key to the real ID instead of loading the
+    // (normally empty) target key and erasing a follow-up typed during POST.
+    const promotesMountedNewSession = Boolean(
+      previousDraftKey?.startsWith("new:") && draftKey && !draftKey.startsWith("new:"),
+    );
+    if (promotesMountedNewSession) {
+      if (previousDraftKey) clearDraft(previousDraftKey);
+      if (draftKey) {
+        setDraft(draftKey, {
+          value: valueRef.current,
+          images: attachedImagesRef.current.map(imageToDraftImage),
+        });
+      }
+      draftKeyRef.current = draftKey;
+      const pending = pendingSubmissionRef.current;
+      if (pending && pending.draftKey === previousDraftKey) pending.draftKey = draftKey;
+      return;
+    }
+
     if (previousDraftKey) {
       setDraft(previousDraftKey, {
         value: valueRef.current,
@@ -400,8 +452,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, [value]);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       attachedImagesRef.current.forEach(revokeImagePreview);
+      const pending = pendingSubmissionRef.current;
+      if (pending?.previewsOwned) {
+        pending.previewsOwned = false;
+        pending.images.forEach(revokeImagePreview);
+      }
     };
   }, []);
 
@@ -437,8 +496,79 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         return;
       }
     }
-    onSend(msg, attachedImages.length ? attachedImages : undefined);
-    clearInput();
+    if (pendingSubmissionRef.current) return;
+    const pending: PendingComposerSubmission = {
+      value,
+      images: attachedImages,
+      draftKey: draftKeyRef.current,
+      previewsOwned: true,
+    };
+    pendingSubmissionRef.current = pending;
+
+    // The submitted composer is now owned by this pending attempt, not by the
+    // live queue editor. Detach it before onSend can optimistically expose
+    // steer/follow-up controls, leaving those controls empty for fresh input.
+    valueRef.current = "";
+    attachedImagesRef.current = [];
+    setValue("");
+    setAttachedImages([]);
+    setAtQuery(null);
+    if (pending.draftKey) clearDraft(pending.draftKey);
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
+
+    let accepted = false;
+    try {
+      accepted = await onSend(msg, pending.images.length ? pending.images : undefined);
+    } catch {
+      accepted = false;
+    }
+
+    if (accepted) {
+      if (pending.previewsOwned) {
+        pending.previewsOwned = false;
+        pending.images.forEach(revokeImagePreview);
+      }
+      if (pendingSubmissionRef.current === pending) pendingSubmissionRef.current = null;
+      return;
+    }
+
+    const currentDraftKey = draftKeyRef.current ?? pending.draftKey;
+    if (!mountedRef.current) {
+      const stored = currentDraftKey ? getDraft(currentDraftKey) : null;
+      if (currentDraftKey) {
+        setDraft(currentDraftKey, {
+          value: mergeFailedSubmissionText(pending.value, stored?.value ?? ""),
+          images: [
+            ...pending.images.map(imageToDraftImage),
+            ...(stored?.images ?? []),
+          ],
+        });
+      }
+      if (pending.previewsOwned) {
+        pending.previewsOwned = false;
+        pending.images.forEach(revokeImagePreview);
+      }
+      if (pendingSubmissionRef.current === pending) pendingSubmissionRef.current = null;
+      return;
+    }
+
+    const mergedValue = mergeFailedSubmissionText(pending.value, valueRef.current);
+    const mergedImages = [...pending.images, ...attachedImagesRef.current];
+    // Preview ownership transfers back to the mounted composer. Its ordinary
+    // remove/key-change/unmount paths now revoke each blob exactly once.
+    pending.previewsOwned = false;
+    valueRef.current = mergedValue;
+    attachedImagesRef.current = mergedImages;
+    setValue(mergedValue);
+    setAttachedImages(mergedImages);
+    setAtQuery(null);
+    if (currentDraftKey) {
+      setDraft(currentDraftKey, {
+        value: mergedValue,
+        images: mergedImages.map(imageToDraftImage),
+      });
+    }
+    if (pendingSubmissionRef.current === pending) pendingSubmissionRef.current = null;
   }, [value, attachedImages, isStreaming, onBuiltinCommand, onSend, clearInput, onAudioUnlock]);
 
   const slashQuery = value.startsWith("/") && !/\s/.test(value.slice(1))

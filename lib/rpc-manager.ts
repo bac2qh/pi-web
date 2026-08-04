@@ -1,7 +1,7 @@
 import { createAgentSessionFromServices, createAgentSessionServices, getAgentDir, initTheme, SessionManager, Theme } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
-import { resolve as resolvePath } from "node:path";
+import { isAbsolute, resolve as resolvePath } from "node:path";
 import { invalidateModelsCache } from "./models-cache";
 import { cacheSessionPath, invalidateSessionListCache } from "./session-reader";
 import { cloneSessionBranch } from "./session-clone";
@@ -14,6 +14,19 @@ import {
 import type { SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import type { AgentSessionLike, ExtensionUiContextLike, ToolInfo } from "./pi-types";
 import type { ExtensionUiRequest, ExtensionUiResponse, ExtensionWidgetItem } from "./types";
+import {
+  getProjectedSessionHub,
+  installProjectedSessionHubCapability,
+  type ProjectedInputCommitOutcome,
+  type ProjectedSessionEventHub,
+  type ProjectedSessionHubReader,
+} from "./session-event-hub";
+import type { AcceptedNativeLifecycleInput } from "./session-projector";
+import {
+  getWebSocketGateway,
+  requireOwnerLifecycleGateway,
+  type PiWebRuntimeOwnerToken,
+} from "./websocket-gateway";
 
 // ============================================================================
 // Types
@@ -45,6 +58,18 @@ type ActiveCustomUi = {
   settled: boolean;
 };
 
+type PendingCustomUiSetup = {
+  finish: (value: unknown) => void;
+  destroyed: boolean;
+};
+
+type NativeCausalClaim = {
+  startOutcome: "pending" | "committed";
+  terminalReserved: boolean;
+  terminalOutcome: "pending" | "committed" | null;
+  terminalFanoutComplete: boolean;
+};
+
 type ExtensionUiRequestBody = Record<string, unknown> & {
   method: ExtensionUiRequest["method"];
   timeout?: number;
@@ -64,8 +89,42 @@ type ExtensionBindingOptions = {
   forceEmptySystemPrompt?: boolean;
 };
 
+export type EnsuredSessionTransportTarget = Readonly<{
+  sessionId: string;
+  sessionFile: string;
+  cwd: string;
+}>;
+
 const CODING_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"];
-export const RPC_SESSION_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+export const RPC_SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+
+export type RpcSemanticIdleCategory = "startup" | "command" | "native_event" | "wrapper_event" | "settlement";
+export type RpcWrapperClock = Readonly<{
+  now: () => number;
+  schedule: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>;
+  cancel: (timer: ReturnType<typeof setTimeout>) => void;
+  diagnostic?: (entry: Readonly<{ category: RpcSemanticIdleCategory | "deferred_active" | "disposed" }>) => void;
+}>;
+
+export const RPC_RECOGNIZED_COMMAND_TYPES = Object.freeze([
+  "prompt", "abort", "get_state", "set_model", "clone", "fork", "navigate_tree",
+  "set_thinking_level", "compact", "set_session_name", "get_session_stats",
+  "get_last_assistant_text", "set_auto_compaction", "clear_queue", "steer", "follow_up",
+  "get_tools", "get_commands", "set_tools", "reload", "abort_compaction",
+  "extension_ui_response", "extension_ui_input", "set_auto_retry",
+] as const);
+const RECOGNIZED_RPC_COMMANDS = new Set<string>(RPC_RECOGNIZED_COMMAND_TYPES);
+const RPC_PUBLIC_ERROR_CLASSES = new Set([
+  "AbortError", "AggregateError", "Error", "EvalError", "RangeError",
+  "ReferenceError", "SyntaxError", "TypeError", "URIError",
+]);
+
+function rpcPublicErrorClass(error: unknown): string {
+  try {
+    const name = (error as { name?: unknown } | null)?.name;
+    return typeof name === "string" && RPC_PUBLIC_ERROR_CLASSES.has(name) ? name : "Error";
+  } catch { return "Error"; }
+}
 
 // Extensions require a complete Theme, while the web UI applies its own styling.
 class PlainTextTheme extends Theme {
@@ -117,26 +176,62 @@ export class AgentSessionWrapper {
   private pendingUiResponses = new Map<string, PendingUiResponse>();
   private pendingUiRequests = new Map<string, AgentEvent>();
   private activeCustomUis = new Map<string, ActiveCustomUi>();
+  private pendingCustomUiSetups = new Map<string, PendingCustomUiSetup>();
   private extensionStatuses = new Map<string, string>();
   private extensionWidgets = new Map<string, ExtensionWidgetItem>();
   private promptRunningCount = 0;
   private compactionRunningCount = 0;
+  private nativeAgentTurnCount = 0;
+  private reservedNativeTerminalCount = 0;
+  private standaloneNativeCompactionCount = 0;
+  private reservedStandaloneCompactionTerminalCount = 0;
+  private nativeCausalClaims: NativeCausalClaim[] = [];
+  private standaloneCompactionCausalClaims: NativeCausalClaim[] = [];
+  private eventFanoutDepth = 0;
+  private deferredSettlementRequested = false;
   private extensionsBound = false;
   private extensionBindingPromise: Promise<void> | null = null;
   private extensionBindingError: unknown = null;
   private forceEmptySystemPrompt = false;
   private unsubscribe: (() => void) | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private idleDeadline = 0;
+  private readonly wrapperClock: RpcWrapperClock;
+  private runtimeGenerationGuard: () => boolean = () => true;
+  private readonly runningPublicationIdentity = {};
   private onDestroyCallbacks = new Set<() => void>();
   private hostedKickoffState: "none" | "scheduled" | "dispatched" | "cancelled" | "failed" = "none";
   private hostedKickoffLifecycle: HostedImplementationLifecycle | null = null;
   private nativeDisposed = false;
+  private destroying = false;
   private _alive = true;
+  private ensuredSessionTransportTarget: EnsuredSessionTransportTarget | null = null;
+  private readonly projectedHub: ProjectedSessionEventHub;
 
   constructor(
     public readonly inner: AgentSessionLike,
     private readonly idleTimeoutMs = RPC_SESSION_IDLE_TIMEOUT_MS,
-  ) {}
+    clock: Partial<RpcWrapperClock> = {},
+  ) {
+    this.wrapperClock = {
+      now: clock.now ?? Date.now,
+      schedule: clock.schedule ?? setTimeout,
+      cancel: clock.cancel ?? clearTimeout,
+      diagnostic: clock.diagnostic,
+    };
+    // This wrapper-owned capability must exist before start() subscribes to Pi
+    // and before the wrapper can be published in the global registry.
+    this.projectedHub = installProjectedSessionHubCapability(this, {
+      initialQueue: {
+        steering: inner.getSteeringMessages(),
+        followUp: inner.getFollowUpMessages(),
+      },
+    });
+  }
+
+  getProjectedEventHub(): ProjectedSessionHubReader | null {
+    return getProjectedSessionHub(this);
+  }
 
   get sessionId(): string {
     return this.inner.sessionId;
@@ -147,31 +242,119 @@ export class AgentSessionWrapper {
   }
 
   isAlive(): boolean {
-    return this._alive;
+    return this._alive && this.runtimeGenerationGuard();
+  }
+
+  bindRuntimeGeneration(guard: () => boolean): void {
+    if (!this._alive || typeof guard !== "function" || !guard()) throw new Error("rpc_runtime_generation_closed");
+    this.runtimeGenerationGuard = guard;
+  }
+
+  private runtimeIsCurrent(): boolean {
+    return this._alive && this.runtimeGenerationGuard();
+  }
+
+  private reportIdle(category: RpcSemanticIdleCategory | "deferred_active" | "disposed"): void {
+    try { this.wrapperClock.diagnostic?.(Object.freeze({ category })); } catch { /* diagnostics are isolated */ }
+  }
+
+  /**
+   * Admit the exact newly ensured native owner to session-ticket bootstrap
+   * before its header has been persisted. The immutable identity is captured
+   * only by the server route that created this wrapper; callers still have to
+   * prove that this exact live wrapper remains the registry owner.
+   */
+  enableEnsuredSessionTransport(): void {
+    const manager = this.inner.sessionManager;
+    const sessionId = this.sessionId;
+    const managerSessionId = manager.getSessionId();
+    const sessionFile = normalizedExistingSessionPath(manager.getSessionFile() ?? "");
+    const cwd = normalizedExistingSessionPath(manager.getCwd());
+    const exposedSessionFile = this.sessionFile
+      ? normalizedExistingSessionPath(this.sessionFile)
+      : null;
+    if (!this._alive || !sessionId || managerSessionId !== sessionId
+      || !sessionFile || !cwd
+      || (this.sessionFile && exposedSessionFile !== sessionFile)) {
+      throw new Error("rpc_ensured_session_identity_unavailable");
+    }
+    this.ensuredSessionTransportTarget = Object.freeze({ sessionId, sessionFile, cwd });
+  }
+
+  hasEnsuredSessionTransportTarget(): boolean {
+    return this.ensuredSessionTransportTarget !== null;
+  }
+
+  getEnsuredSessionTransportTarget(): EnsuredSessionTransportTarget | null {
+    const target = this.ensuredSessionTransportTarget;
+    if (!target || !this._alive) return null;
+    try {
+      const manager = this.inner.sessionManager;
+      const exposedSessionFile = this.sessionFile
+        ? normalizedExistingSessionPath(this.sessionFile)
+        : null;
+      if (this.sessionId !== target.sessionId
+        || manager.getSessionId() !== target.sessionId
+        || normalizedExistingSessionPath(manager.getSessionFile() ?? "") !== target.sessionFile
+        || normalizedExistingSessionPath(manager.getCwd()) !== target.cwd
+        || (this.sessionFile && exposedSessionFile !== target.sessionFile)) return null;
+      return target;
+    } catch {
+      return null;
+    }
   }
 
   isRunning(): boolean {
-    return this._alive && (
-      this.promptRunningCount > 0
-      || this.compactionRunningCount > 0
-      || this.inner.isStreaming
-      || this.inner.isCompacting
-    );
+    return this.runtimeIsCurrent() && this.hasActiveLifecycleState();
+  }
+
+  private hasActiveLifecycleState(): boolean {
+    return this.promptRunningCount > 0 || this.compactionRunningCount > 0
+      || this.nativeAgentTurnCount > 0 || this.reservedNativeTerminalCount > 0
+      || this.standaloneNativeCompactionCount > 0 || this.reservedStandaloneCompactionTerminalCount > 0
+      || this.nativeCausalClaims.length > 0 || this.standaloneCompactionCausalClaims.length > 0
+      || this.eventFanoutDepth > 0 || this.deferredSettlementRequested
+      || this.projectedHub.getState().active || this.inner.isStreaming || this.inner.isCompacting;
   }
 
   start(): void {
     this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
-      this.resetIdleTimer();
-      if (event.type === "agent_end") {
-        invalidateSessionListCache();
+      if (!this.runtimeIsCurrent()) return;
+      this.touchSemanticIdle("native_event");
+      // One outer barrier covers canonical capture, projected publication,
+      // stable exact-raw fanout, receipt resolution, and causal release.
+      this.beginEventFanout();
+      try {
+        const prepared = this.projectedHub.prepareNativeInput(event);
+        const lifecycle = prepared?.lifecycle ?? null;
+        if (lifecycle?.kind === "agent_end") invalidateSessionListCache();
+
+        // Pending starts are causal claims before raw fanout so a nested terminal
+        // can reserve them. They become committed activity only if their exact
+        // projected start frame commits.
+        const startClaim = this.prepareCausalStart(lifecycle);
+        const terminalClaim = this.reserveCausalTerminal(lifecycle);
+        const receipt = prepared ? this.projectedHub.acceptPreparedNativeInput(prepared) : null;
+
+        // Capture/projection rejection never suppresses the exact original raw
+        // object or lets one hostile observer suppress another.
+        this.fanoutLegacyEvent(event);
+        if (terminalClaim) terminalClaim.terminalFanoutComplete = true;
+
+        const observeOutcome = (outcome: ProjectedInputCommitOutcome) => {
+          if (!this._alive) return;
+          if (startClaim) this.resolveCausalStart(lifecycle, startClaim, outcome);
+          if (terminalClaim) this.resolveCausalTerminal(lifecycle, terminalClaim, outcome);
+        };
+        if (receipt) receipt.whenResolved(observeOutcome);
+        else observeOutcome("rejected");
+        this.publishRunningState();
+      } finally {
+        this.endEventFanout();
       }
-      this.emit(event);
-      // Streaming / compaction / tool events flow through here; re-broadcast
-      // the running-status snapshot so the sidebar can update live.
-      notifyRunningChange();
     });
-    this.resetIdleTimer();
-    notifyRunningChange();
+    this.touchSemanticIdle("startup");
+    this.publishRunningState();
   }
 
   setForceEmptySystemPrompt(force: boolean): void {
@@ -181,10 +364,8 @@ export class AgentSessionWrapper {
 
   beginExtensionBinding(options: ExtensionBindingOptions = {}): void {
     void this.ensureExtensionsBound(options).catch((err) => {
-      const errorClass = err instanceof Error && /^[A-Za-z_$][A-Za-z0-9_$.-]{0,79}$/.test(err.name)
-        ? err.name
-        : "Error";
-      console.error(`[pi-web] session_start dispatch failed for session ${this.inner.sessionId} (${errorClass})`);
+      if (!this.runtimeIsCurrent()) return;
+      console.error(`[pi-web] extension_binding stage=failed errorClass=${rpcPublicErrorClass(err)}`);
     });
   }
 
@@ -198,7 +379,9 @@ export class AgentSessionWrapper {
 
     this.extensionBindingError = null;
     this.extensionBindingPromise = (async () => {
-      if (!this._alive) return;
+      if (!this.runtimeIsCurrent()) return;
+      const bindingGuard = this.runtimeGenerationGuard;
+      const bindingIsCurrent = () => this._alive && this.runtimeGenerationGuard === bindingGuard && bindingGuard();
       const uiContext = this.createExtensionUiContext();
       if (typeof this.inner.bindExtensions === "function") {
         const bindExtensions = this.inner.bindExtensions as (bindings: {
@@ -212,28 +395,31 @@ export class AgentSessionWrapper {
           uiContext,
           mode: "rpc",
           commandContextActions: this.createExtensionCommandContextActions(),
-          shutdownHandler: () => this.emit({
+          shutdownHandler: () => { if (bindingIsCurrent()) this.emit({
             type: "extension_ui_request",
             id: randomUUID(),
             method: "notify",
             notifyType: "warning",
             message: "Extension requested shutdown, but shutdown is not supported in pi-web.",
-          } as ExtensionUiRequest as AgentEvent),
-          onError: (error) => this.emit({
+          } as ExtensionUiRequest as AgentEvent); },
+          onError: (error) => { if (bindingIsCurrent()) this.emit({
             type: "extension_error",
             extensionPath: error.extensionPath,
             event: error.event,
             error: error.error,
-          }),
+          }); },
         });
+        if (!bindingIsCurrent()) return;
       } else {
+        if (!bindingIsCurrent()) return;
         this.inner.extensionRunner.setUIContext?.(uiContext, "rpc");
       }
+      if (!bindingIsCurrent()) return;
       this.extensionsBound = true;
       this.applyForcedEmptySystemPrompt();
-      console.log(`[pi-web] session_start dispatched to extensions for session ${this.inner.sessionId}`);
+      console.log("[pi-web] extension_binding stage=dispatched outcome=ok");
     })().catch((err) => {
-      this.extensionBindingError = err;
+      if (this.runtimeIsCurrent()) this.extensionBindingError = err;
       throw err;
     });
 
@@ -246,6 +432,7 @@ export class AgentSessionWrapper {
     } catch (err) {
       throw err instanceof Error ? err : new Error(String(err));
     }
+    if (!this.runtimeIsCurrent()) throw new Error("rpc_runtime_generation_closed");
     if (this.extensionBindingError) {
       throw this.extensionBindingError instanceof Error
         ? this.extensionBindingError
@@ -257,22 +444,163 @@ export class AgentSessionWrapper {
     return type === "prompt" || type === "steer" || type === "follow_up" || type === "get_commands";
   }
 
+  private publishRunningState(): void {
+    publishRunningSessionState(this.sessionId, this.isRunning(), this.runningPublicationIdentity);
+  }
+
   private async withFinalRunningNotification<T>(operation: () => Promise<T>): Promise<T> {
     try {
       return await operation();
     } finally {
-      notifyRunningChange();
+      this.publishRunningState();
     }
+  }
+
+  private acceptProjectedWrapperInput(event: AgentEvent, category: "wrapper_event" | "settlement" = "wrapper_event"): void {
+    if (!this.runtimeIsCurrent()) return;
+    this.touchSemanticIdle(category);
+    this.projectedHub.accept(event);
   }
 
   private claimPromptRun(): void {
     this.promptRunningCount += 1;
-    notifyRunningChange();
+    this.acceptProjectedWrapperInput({ type: "wrapper_activity_started", activity: "prompt" });
+    this.publishRunningState();
   }
 
-  private releasePromptRun(): void {
-    this.promptRunningCount = Math.max(0, this.promptRunningCount - 1);
-    notifyRunningChange();
+  private releasePromptRun(settle = true): void {
+    if (this.promptRunningCount === 0) return;
+    this.promptRunningCount -= 1;
+    this.touchSemanticIdle("settlement");
+    this.publishRunningState();
+    if (settle) this.settleProjectedActivityIfIdle();
+  }
+
+  private claimCompactionRun(): void {
+    this.compactionRunningCount += 1;
+    this.acceptProjectedWrapperInput({ type: "wrapper_activity_started", activity: "compaction" });
+    this.publishRunningState();
+  }
+
+  private releaseCompactionRun(settle = true): void {
+    if (this.compactionRunningCount === 0) return;
+    this.compactionRunningCount -= 1;
+    this.touchSemanticIdle("settlement");
+    this.publishRunningState();
+    if (settle) this.settleProjectedActivityIfIdle();
+  }
+
+  private causalClaimsFor(lifecycle: AcceptedNativeLifecycleInput | null): NativeCausalClaim[] | null {
+    if (lifecycle?.kind === "agent_start" || lifecycle?.kind === "agent_settled") return this.nativeCausalClaims;
+    if (lifecycle?.kind === "manual_compaction_start" || lifecycle?.kind === "manual_compaction_end") return this.standaloneCompactionCausalClaims;
+    return null;
+  }
+
+  private syncCausalClaimCounts(): void {
+    this.nativeAgentTurnCount = this.nativeCausalClaims.filter((claim) => !claim.terminalReserved).length;
+    this.reservedNativeTerminalCount = this.nativeCausalClaims.filter((claim) => claim.terminalReserved).length;
+    this.standaloneNativeCompactionCount = this.standaloneCompactionCausalClaims.filter((claim) => !claim.terminalReserved).length;
+    this.reservedStandaloneCompactionTerminalCount = this.standaloneCompactionCausalClaims.filter((claim) => claim.terminalReserved).length;
+  }
+
+  private prepareCausalStart(lifecycle: AcceptedNativeLifecycleInput | null): NativeCausalClaim | null {
+    if (lifecycle?.kind !== "agent_start" && lifecycle?.kind !== "manual_compaction_start") return null;
+    const claims = this.causalClaimsFor(lifecycle);
+    if (!claims || claims.length >= Number.MAX_SAFE_INTEGER) return null;
+    const claim: NativeCausalClaim = {
+      startOutcome: "pending",
+      terminalReserved: false,
+      terminalOutcome: null,
+      terminalFanoutComplete: false,
+    };
+    claims.push(claim);
+    this.syncCausalClaimCounts();
+    return claim;
+  }
+
+  private reserveCausalTerminal(lifecycle: AcceptedNativeLifecycleInput | null): NativeCausalClaim | null {
+    if (lifecycle?.kind !== "agent_settled" && lifecycle?.kind !== "manual_compaction_end") return null;
+    const claim = this.causalClaimsFor(lifecycle)?.find((candidate) => !candidate.terminalReserved) ?? null;
+    if (!claim) return null;
+    claim.terminalReserved = true;
+    claim.terminalOutcome = "pending";
+    claim.terminalFanoutComplete = false;
+    this.syncCausalClaimCounts();
+    return claim;
+  }
+
+  private removeCausalClaim(lifecycle: AcceptedNativeLifecycleInput | null, claim: NativeCausalClaim): void {
+    const claims = this.causalClaimsFor(lifecycle);
+    const index = claims?.indexOf(claim) ?? -1;
+    if (claims && index >= 0) claims.splice(index, 1);
+    this.syncCausalClaimCounts();
+    if (index >= 0) this.touchSemanticIdle("settlement");
+  }
+
+  private completeCommittedCausalClaim(lifecycle: AcceptedNativeLifecycleInput | null, claim: NativeCausalClaim): void {
+    if (claim.startOutcome !== "committed" || claim.terminalOutcome !== "committed" || !claim.terminalFanoutComplete) return;
+    this.removeCausalClaim(lifecycle, claim);
+    this.settleProjectedActivityIfIdle();
+  }
+
+  private resolveCausalStart(
+    lifecycle: AcceptedNativeLifecycleInput | null,
+    claim: NativeCausalClaim,
+    outcome: ProjectedInputCommitOutcome,
+  ): void {
+    if (outcome === "rejected") {
+      this.removeCausalClaim(lifecycle, claim);
+      return;
+    }
+    claim.startOutcome = "committed";
+    this.completeCommittedCausalClaim(lifecycle, claim);
+  }
+
+  private resolveCausalTerminal(
+    lifecycle: AcceptedNativeLifecycleInput | null,
+    claim: NativeCausalClaim,
+    outcome: ProjectedInputCommitOutcome,
+  ): void {
+    if (outcome === "rejected") {
+      claim.terminalReserved = false;
+      claim.terminalOutcome = null;
+      claim.terminalFanoutComplete = false;
+      this.syncCausalClaimCounts();
+      return;
+    }
+    claim.terminalOutcome = "committed";
+    this.completeCommittedCausalClaim(lifecycle, claim);
+  }
+
+  private projectedActivityIsIdle(): boolean {
+    return this.promptRunningCount === 0
+      && this.compactionRunningCount === 0
+      && this.nativeAgentTurnCount === 0
+      && this.reservedNativeTerminalCount === 0
+      && this.standaloneNativeCompactionCount === 0
+      && this.reservedStandaloneCompactionTerminalCount === 0
+      && this.projectedHub.getState().active;
+  }
+
+  private settleProjectedActivityIfIdle(): void {
+    if (!this.projectedActivityIsIdle()) return;
+    if (this.eventFanoutDepth > 0) {
+      this.deferredSettlementRequested = true;
+      return;
+    }
+    this.acceptProjectedWrapperInput({ type: "wrapper_settled" }, "settlement");
+    this.publishRunningState();
+  }
+
+  private beginEventFanout(): void {
+    if (this.eventFanoutDepth < Number.MAX_SAFE_INTEGER) this.eventFanoutDepth += 1;
+  }
+
+  private endEventFanout(): void {
+    if (this.eventFanoutDepth > 0) this.eventFanoutDepth -= 1;
+    if (this.eventFanoutDepth !== 0 || !this.deferredSettlementRequested) return;
+    this.deferredSettlementRequested = false;
+    this.settleProjectedActivityIfIdle();
   }
 
   private applyForcedEmptySystemPrompt(): void {
@@ -281,22 +609,54 @@ export class AgentSessionWrapper {
     }
   }
 
-  private emit(event: AgentEvent): void {
-    for (const l of this.listeners) l(event);
+  private fanoutLegacyEvent(event: AgentEvent): void {
+    // Every observer registered at fanout start sees this exact raw object once.
+    // Listener mutation affects only later events, and listener failure cannot
+    // suppress another observer or terminal wrapper cleanup.
+    for (const listener of [...this.listeners]) {
+      try { listener(event); } catch { /* legacy listener failures are isolated */ }
+    }
   }
 
-  private resetIdleTimer(): void {
-    if (!this._alive) return;
-    if (this.idleTimer) clearTimeout(this.idleTimer);
-    this.idleTimer = setTimeout(() => {
+  private emit(event: AgentEvent): void {
+    if (!this.runtimeIsCurrent()) return;
+    // Projection is authoritative and subscriber-independent. The barrier also
+    // covers wrapper-generated public events so a nested last-claim release
+    // cannot overtake the event that caused it.
+    this.touchSemanticIdle("wrapper_event");
+    this.beginEventFanout();
+    try {
+      this.projectedHub.accept(event);
+      this.fanoutLegacyEvent(event);
+    } finally {
+      this.endEventFanout();
+    }
+  }
+
+  private touchSemanticIdle(category: RpcSemanticIdleCategory): void {
+    if (this.destroying || !this.runtimeIsCurrent()) return;
+    this.reportIdle(category);
+    this.armIdleWindow();
+  }
+
+  private armIdleWindow(delay = this.idleTimeoutMs): void {
+    if (!this.runtimeIsCurrent()) return;
+    if (this.idleTimer) this.wrapperClock.cancel(this.idleTimer);
+    this.idleDeadline = this.wrapperClock.now() + delay;
+    this.idleTimer = this.wrapperClock.schedule(() => {
       this.idleTimer = null;
-      if (!this._alive) return;
-      if (this.isRunning()) {
-        this.resetIdleTimer();
+      if (!this.runtimeIsCurrent()) return;
+      const remaining = this.idleDeadline - this.wrapperClock.now();
+      if (remaining > 0) { this.armIdleWindow(remaining); return; }
+      if (this.hasActiveLifecycleState()) {
+        this.reportIdle("deferred_active");
+        this.armIdleWindow();
         return;
       }
+      this.reportIdle("disposed");
       this.destroy();
-    }, this.idleTimeoutMs);
+    }, delay);
+    this.idleTimer?.unref?.();
   }
 
   onEvent(listener: EventListener): () => void {
@@ -323,6 +683,7 @@ export class AgentSessionWrapper {
     lifecycle?: HostedImplementationLifecycle,
     publicErrorMessage?: string,
   ): void {
+    if (!this.runtimeIsCurrent()) throw new Error("rpc_runtime_generation_closed");
     const promptPromise = this.inner.prompt(message, {
       ...(promptImages?.length ? { images: promptImages } : {}),
       ...(streamingBehavior ? { streamingBehavior } : {}),
@@ -331,19 +692,19 @@ export class AgentSessionWrapper {
     if (lifecycle) this.callLifecycle(lifecycle.kickoffDispatched);
 
     promptPromise.then(() => {
-      this.releasePromptRun();
-      this.resetIdleTimer();
+      if (!this.runtimeIsCurrent()) return;
       if (!streamingBehavior) this.emit({ type: "prompt_done" });
+      this.releasePromptRun();
       if (lifecycle) this.callLifecycle(lifecycle.targetSettled);
     }, (error) => {
-      this.releasePromptRun();
-      this.resetIdleTimer();
+      if (!this.runtimeIsCurrent()) return;
       invalidateSessionListCache();
       this.emit({
         type: "prompt_error",
         errorMessage: publicErrorMessage ?? (error instanceof Error ? error.message : String(error)),
       });
       if (!streamingBehavior) this.emit({ type: "prompt_done" });
+      this.releasePromptRun();
       if (lifecycle) this.callLifecycle(() => lifecycle.targetFailed(error));
     });
   }
@@ -375,26 +736,24 @@ export class AgentSessionWrapper {
         if (this.hostedKickoffState === "cancelled") return;
         this.hostedKickoffState = "failed";
         this.hostedKickoffLifecycle = null;
-        this.releasePromptRun();
-        this.resetIdleTimer();
         invalidateSessionListCache();
         this.emit({ type: "prompt_error", errorMessage: "Hosted target prompt failed" });
         this.emit({ type: "prompt_done" });
+        this.releasePromptRun();
         this.callLifecycle(() => lifecycle.targetFailed(error));
       }
     })();
     return true;
   }
 
-  private cancelHostedKickoffBeforeDispatch(): boolean {
+  private cancelHostedKickoffBeforeDispatch(settle = true): boolean {
     if (this.hostedKickoffState !== "scheduled") return false;
     this.hostedKickoffState = "cancelled";
     const lifecycle = this.hostedKickoffLifecycle;
     this.hostedKickoffLifecycle = null;
-    this.releasePromptRun();
-    this.resetIdleTimer();
     invalidateSessionListCache();
     this.emit({ type: "prompt_done" });
+    this.releasePromptRun(settle);
     if (lifecycle) {
       const error = new Error("Hosted target kickoff was stopped before dispatch");
       error.name = "AbortError";
@@ -404,8 +763,10 @@ export class AgentSessionWrapper {
   }
 
   async send(command: Record<string, unknown>): Promise<unknown> {
-    this.resetIdleTimer();
     const type = command.type as string;
+    if (!RECOGNIZED_RPC_COMMANDS.has(type)) throw new Error(`Unsupported command: ${type}`);
+    if (!this.runtimeIsCurrent()) throw new Error("rpc_runtime_generation_closed");
+    this.touchSemanticIdle("command");
     if (type === "prompt") {
       // Claim each accepted prompt before extension binding can await. Clone is
       // synchronous, and per-invocation accounting prevents one overlapping
@@ -419,6 +780,10 @@ export class AgentSessionWrapper {
       }
     } else if (this.shouldWaitForExtensions(type)) {
       await this.waitForExtensionsBound();
+    }
+    if (!this.runtimeIsCurrent()) {
+      if (type === "prompt") this.releasePromptRun(false);
+      throw new Error("rpc_runtime_generation_closed");
     }
 
     switch (type) {
@@ -564,15 +929,12 @@ export class AgentSessionWrapper {
       case "compact": {
         // Claim compaction before invoking the native async method: its public
         // isCompacting flag may not flip until after an initial await.
-        this.compactionRunningCount += 1;
-        notifyRunningChange();
+        this.claimCompactionRun();
         try {
           return await this.inner.compact(command.customInstructions as string | undefined);
         } finally {
-          this.compactionRunningCount = Math.max(0, this.compactionRunningCount - 1);
-          this.resetIdleTimer();
+          this.releaseCompactionRun();
           invalidateSessionListCache();
-          notifyRunningChange();
         }
       }
 
@@ -667,9 +1029,12 @@ export class AgentSessionWrapper {
 
       case "reload": {
         await this.waitForExtensionsBound();
+        if (!this.runtimeIsCurrent()) throw new Error("rpc_runtime_generation_closed");
+        this.clearProjectedExtensionState();
         this.extensionStatuses.clear();
         this.extensionWidgets.clear();
         await this.inner.reload();
+        if (!this.runtimeIsCurrent()) throw new Error("rpc_runtime_generation_closed");
         if (typeof this.inner.bindExtensions !== "function") {
           this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
         }
@@ -703,12 +1068,21 @@ export class AgentSessionWrapper {
   }
 
   destroy(): void {
-    if (!this._alive) return;
+    if (!this._alive || this.destroying) return;
+    this.destroying = true;
     // Owner deletion or process cleanup must not let an unresolved extension
     // binding dispatch its hosted kickoff against a disposed native session.
-    this.cancelHostedKickoffBeforeDispatch();
-    this._alive = false;
-    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.cancelHostedKickoffBeforeDispatch(false);
+    this.deferredSettlementRequested = false;
+    this.nativeCausalClaims = [];
+    this.standaloneCompactionCausalClaims = [];
+    this.syncCausalClaimCounts();
+    for (const setup of Array.from(this.pendingCustomUiSetups.values())) {
+      setup.destroyed = true;
+      setup.finish(undefined);
+    }
+    this.pendingCustomUiSetups.clear();
+    if (this.idleTimer) this.wrapperClock.cancel(this.idleTimer);
     this.idleTimer = null;
     this.unsubscribe?.();
     this.unsubscribe = null;
@@ -717,6 +1091,8 @@ export class AgentSessionWrapper {
     this.pendingUiResponses.clear();
     this.pendingUiRequests.clear();
     this.listeners = [];
+    this._alive = false;
+    this.projectedHub.close();
     if (!this.nativeDisposed) {
       this.nativeDisposed = true;
       try { this.inner.dispose(); } catch { /* disposal is best effort and idempotent here */ }
@@ -725,13 +1101,22 @@ export class AgentSessionWrapper {
       try { callback(); } catch { /* cleanup listeners are isolated */ }
     }
     this.onDestroyCallbacks.clear();
-    notifyRunningChange();
+    publishRunningSessionState(this.sessionId, false, this.runningPublicationIdentity);
   }
 
   private resolveExtensionUiResponse(response: ExtensionUiResponse): void {
     const pending = this.pendingUiResponses.get(response.id);
     if (!pending) return;
     pending.resolve(response);
+  }
+
+  private clearProjectedExtensionState(): void {
+    for (const key of this.extensionStatuses.keys()) {
+      this.acceptProjectedWrapperInput({ type: "extension_status_cleared", key });
+    }
+    for (const key of this.extensionWidgets.keys()) {
+      this.acceptProjectedWrapperInput({ type: "extension_widget_cleared", key });
+    }
   }
 
   private getExtensionStatuses(): Array<{ key: string; text: string }> {
@@ -812,7 +1197,7 @@ export class AgentSessionWrapper {
     factory: unknown,
     options?: unknown,
   ): Promise<T> {
-    if (typeof factory !== "function") return Promise.resolve(undefined as T);
+    if (typeof factory !== "function" || !this.runtimeIsCurrent()) return Promise.resolve(undefined as T);
 
     const id = randomUUID();
     const width = this.getCustomUiWidth(options);
@@ -828,25 +1213,26 @@ export class AgentSessionWrapper {
       const finish = (value: T) => {
         if (completed) return;
         completed = true;
+        this.pendingCustomUiSetups.delete(id);
         resolve(value);
       };
+      const setup: PendingCustomUiSetup = {
+        finish: (value) => finish(value as T),
+        destroyed: false,
+      };
+      this.pendingCustomUiSetups.set(id, setup);
       const done = (value: T) => {
-        if (this.activeCustomUis.has(id)) {
-          this.closeCustomUi(id, value);
-        } else {
-          finish(value);
-        }
+        if (this.activeCustomUis.has(id)) this.closeCustomUi(id, value);
+        else finish(value);
       };
 
       Promise.resolve()
         .then(() => factory(tui, PLAIN_TEXT_THEME, CUSTOM_UI_KEYBINDINGS, done))
         .then((component) => {
-          if (completed) {
-            try {
-              (component as CustomUiComponent | undefined)?.dispose?.();
-            } catch {
-              // Ignore dispose errors from a component completed before mounting.
-            }
+          this.pendingCustomUiSetups.delete(id);
+          if (completed || setup.destroyed || !this._alive) {
+            try { (component as CustomUiComponent | undefined)?.dispose?.(); } catch { /* isolated extension cleanup */ }
+            finish(undefined as T);
             return;
           }
           if (!component || typeof component !== "object" || typeof (component as CustomUiComponent).render !== "function") {
@@ -863,7 +1249,11 @@ export class AgentSessionWrapper {
           this.emitCustomUiRender(id, custom);
         })
         .catch((error) => {
-          if (completed) return;
+          this.pendingCustomUiSetups.delete(id);
+          if (completed || setup.destroyed || !this._alive) {
+            finish(undefined as T);
+            return;
+          }
           this.emit({
             type: "extension_error",
             extensionPath: `custom-ui:${id}`,
@@ -882,7 +1272,7 @@ export class AgentSessionWrapper {
     timeout?: number,
     signal?: AbortSignal,
   ): Promise<T> {
-    if (signal?.aborted) return Promise.resolve(defaultValue);
+    if (!this.runtimeIsCurrent() || signal?.aborted) return Promise.resolve(defaultValue);
 
     const id = randomUUID();
     const fullRequest = {
@@ -894,13 +1284,18 @@ export class AgentSessionWrapper {
 
     return new Promise((resolve) => {
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      let settled = false;
       const cleanup = () => {
         if (timeoutId) clearTimeout(timeoutId);
         signal?.removeEventListener("abort", onAbort);
-        this.pendingUiRequests.delete(id);
+        if (this.pendingUiRequests.delete(id)) {
+          this.acceptProjectedWrapperInput({ type: "extension_dialog_closed", id });
+        }
         this.pendingUiResponses.delete(id);
       };
       const settle = (value: T) => {
+        if (settled) return;
+        settled = true;
         cleanup();
         resolve(value);
       };
@@ -959,6 +1354,7 @@ export class AgentSessionWrapper {
       },
       onTerminalInput: () => () => {},
       setStatus: (key, text) => {
+        if (!this.runtimeIsCurrent()) return;
         if (text === undefined) this.extensionStatuses.delete(key);
         else this.extensionStatuses.set(key, text);
         this.emit({
@@ -974,6 +1370,7 @@ export class AgentSessionWrapper {
       setWorkingIndicator: () => {},
       setHiddenThinkingLabel: () => {},
       setWidget: (key, content, options) => {
+        if (!this.runtimeIsCurrent()) return;
         if (content !== undefined && !Array.isArray(content)) return;
         if (content === undefined) {
           this.extensionWidgets.delete(key);
@@ -1036,25 +1433,29 @@ export class AgentSessionWrapper {
   private createExtensionCommandContextActions(): ExtensionCommandContextActionsLike {
     return {
       waitForIdle: async () => {
+        if (!this.runtimeIsCurrent()) return;
         const agent = this.inner.agent as { waitForIdle?: () => Promise<void> };
         await agent.waitForIdle?.();
       },
       newSession: async () => ({ cancelled: true }),
       fork: async () => ({ cancelled: true }),
       navigateTree: async (targetId, options) => {
+        if (!this.runtimeIsCurrent()) return { cancelled: true };
         const result = await this.inner.navigateTree(targetId, { summarize: options?.summarize });
-        return { cancelled: result.cancelled };
+        return this.runtimeIsCurrent() ? { cancelled: result.cancelled } : { cancelled: true };
       },
       switchSession: async () => ({ cancelled: true }),
       reload: async () => {
+        if (!this.runtimeIsCurrent()) return;
+        this.clearProjectedExtensionState();
         this.extensionStatuses.clear();
         this.extensionWidgets.clear();
         await this.inner.reload({
           beforeSessionStart: () => {
-            this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
+            if (this.runtimeIsCurrent()) this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
           },
         });
-        this.applyForcedEmptySystemPrompt();
+        if (this.runtimeIsCurrent()) this.applyForcedEmptySystemPrompt();
       },
     };
   }
@@ -1079,45 +1480,146 @@ export interface RpcSessionStartHooks {
   afterPublication?(published: RpcSessionStartResult): void;
 }
 
+type RpcRuntimeGeneration = {
+  identity: object;
+  gateway: object | null;
+  serverInstanceId: string;
+  token: PiWebRuntimeOwnerToken | null;
+  active: boolean;
+  registry: Map<string, AgentSessionWrapper>;
+  locks: Map<string, Promise<RpcSessionStartResult>>;
+};
+
 declare global {
   var __piSessions: Map<string, AgentSessionWrapper> | undefined;
   var __piStartLocks: Map<string, Promise<RpcSessionStartResult>> | undefined;
-  var __piRunningListeners: Set<(ids: string[]) => void> | undefined;
+  var __piRpcRuntimeGeneration: RpcRuntimeGeneration | undefined;
+  var __piWebActivateRpcRuntimeOwnerV1: (() => void) | undefined;
+  var __piRunningListeners: Set<(ids: RunningSessionIdsView) => void> | undefined;
+  var __piRunningSessionIds: Set<string> | undefined;
+  var __piRunningSessionPublishers: Map<string, object> | undefined;
   var __piSessionListRefreshListeners: Set<(generation: number) => void> | undefined;
   var __piSessionListRefreshGeneration: number | undefined;
-  var __piRpcCleanupRegistered: boolean | undefined;
+}
+
+function closeRpcRuntimeGeneration(generation: RpcRuntimeGeneration): void {
+  if (!generation.active) return;
+  generation.active = false;
+  invalidateHostedImplementationCapability();
+  for (const session of [...generation.registry.values()]) session.destroy();
+  generation.registry.clear();
+  generation.locks.clear();
+  if (globalThis.__piRpcRuntimeGeneration === generation) {
+    globalThis.__piSessions = generation.registry;
+    globalThis.__piStartLocks = generation.locks;
+  }
+}
+
+export function activateRpcRuntimeOwner(): RpcRuntimeGeneration {
+  let gateway;
+  try { gateway = getWebSocketGateway(); }
+  catch (error) {
+    if ((error as { code?: string }).code !== "gateway_unavailable") throw error;
+  }
+  const existing = globalThis.__piRpcRuntimeGeneration;
+  if (!gateway) {
+    if (existing?.active && existing.gateway === null) {
+      if (globalThis.__piSessions !== existing.registry) existing.registry = globalThis.__piSessions ?? new Map();
+      if (globalThis.__piStartLocks !== existing.locks) existing.locks = globalThis.__piStartLocks ?? new Map();
+      globalThis.__piSessions = existing.registry;
+      globalThis.__piStartLocks = existing.locks;
+      return existing;
+    }
+    if (existing?.active) closeRpcRuntimeGeneration(existing);
+    const generation: RpcRuntimeGeneration = {
+      identity: {}, gateway: null, serverInstanceId: "caller_owned", token: null, active: true,
+      registry: globalThis.__piSessions ?? new Map(), locks: globalThis.__piStartLocks ?? new Map(),
+    };
+    globalThis.__piRpcRuntimeGeneration = generation;
+    globalThis.__piSessions = generation.registry;
+    globalThis.__piStartLocks = generation.locks;
+    registerHostedImplementationCapability({ startTarget: startHostedImplementationTarget });
+    return generation;
+  }
+
+  const ownerGateway = requireOwnerLifecycleGateway(gateway);
+  if (existing?.active && existing.gateway === ownerGateway && existing.token?.isCurrent()) {
+    if (globalThis.__piSessions !== existing.registry) existing.registry = globalThis.__piSessions ?? new Map();
+    if (globalThis.__piStartLocks !== existing.locks) existing.locks = globalThis.__piStartLocks ?? new Map();
+    globalThis.__piSessions = existing.registry;
+    globalThis.__piStartLocks = existing.locks;
+    return existing;
+  }
+  if (existing?.active) closeRpcRuntimeGeneration(existing);
+  const generation: RpcRuntimeGeneration = {
+    identity: {}, gateway: ownerGateway, serverInstanceId: ownerGateway.serverInstanceId,
+    token: null, active: true, registry: new Map(), locks: new Map(),
+  };
+  const registration = ownerGateway.registerRuntimeOwner("rpc", () => closeRpcRuntimeGeneration(generation));
+  generation.token = registration.token;
+  globalThis.__piRpcRuntimeGeneration = generation;
+  globalThis.__piSessions = generation.registry;
+  globalThis.__piStartLocks = generation.locks;
+  registerHostedImplementationCapability({ startTarget: startHostedImplementationTarget });
+  return generation;
+}
+
+function runtimeGenerationIsCurrent(generation: RpcRuntimeGeneration): boolean {
+  return generation.active && globalThis.__piRpcRuntimeGeneration === generation
+    && (generation.token?.isCurrent() ?? true);
 }
 
 function getRegistry(): Map<string, AgentSessionWrapper> {
-  if (!globalThis.__piSessions) globalThis.__piSessions = new Map();
-  if (!globalThis.__piRpcCleanupRegistered) {
-    globalThis.__piRpcCleanupRegistered = true;
-    const cleanup = () => {
-      invalidateHostedImplementationCapability();
-      for (const session of [...(globalThis.__piSessions?.values() ?? [])]) session.destroy();
-    };
-    process.once("exit", cleanup);
-    process.once("SIGINT", cleanup);
-    process.once("SIGTERM", cleanup);
-  }
-  return globalThis.__piSessions;
-}
-
-function getLocks(): Map<string, Promise<RpcSessionStartResult>> {
-  if (!globalThis.__piStartLocks) globalThis.__piStartLocks = new Map();
-  return globalThis.__piStartLocks;
+  return activateRpcRuntimeOwner().registry;
 }
 
 export function getRpcSession(sessionId: string): AgentSessionWrapper | undefined {
   return getRegistry().get(sessionId);
 }
 
-export function getRunningRpcSessionIds(): string[] {
-  const ids = new Set<string>();
-  for (const [sessionId, session] of getRegistry()) {
-    if (session.isRunning()) ids.add(session.sessionId || sessionId);
+/** Exact registry-owner check used immediately before issuing capabilities. */
+export function isCurrentRpcSession(
+  sessionId: string,
+  session: AgentSessionWrapper,
+): boolean {
+  try {
+    return getRegistry().get(sessionId) === session
+      && session.isAlive()
+      && session.sessionId === sessionId;
+  } catch {
+    return false;
   }
-  return [...ids];
+}
+
+function getRunningProjection(): Set<string> {
+  if (!globalThis.__piRunningSessionIds) globalThis.__piRunningSessionIds = new Set();
+  return globalThis.__piRunningSessionIds;
+}
+
+function getRunningPublisherAuthority(): Map<string, object> {
+  if (!globalThis.__piRunningSessionPublishers) globalThis.__piRunningSessionPublishers = new Map();
+  return globalThis.__piRunningSessionPublishers;
+}
+
+export function getRunningRpcSessionIds(): string[] {
+  return [...getRunningProjection()].sort();
+}
+
+export type RunningSessionIdsView = Readonly<{
+  readonly size: number;
+  [Symbol.iterator](): IterableIterator<string>;
+}>;
+
+function createRunningSessionIdsView(projection = getRunningProjection()): RunningSessionIdsView {
+  return Object.freeze({
+    get size() { return projection.size; },
+    [Symbol.iterator]() { return projection.values(); },
+  });
+}
+
+/** Runtime read-only finite view; never exposes the authoritative Set's mutation methods. */
+export function getRunningRpcSessionProjection(): RunningSessionIdsView {
+  return createRunningSessionIdsView();
 }
 
 // ----------------------------------------------------------------------------
@@ -1126,7 +1628,7 @@ export function getRunningRpcSessionIds(): string[] {
 // authoritative for SessionInfo data.
 // ----------------------------------------------------------------------------
 
-function getRunningListeners(): Set<(ids: string[]) => void> {
+function getRunningListeners(): Set<(ids: RunningSessionIdsView) => void> {
   if (!globalThis.__piRunningListeners) globalThis.__piRunningListeners = new Set();
   return globalThis.__piRunningListeners;
 }
@@ -1137,7 +1639,7 @@ function getSessionListRefreshListeners(): Set<(generation: number) => void> {
 }
 
 /** Subscribe to running-session-id changes. Returns an unsubscribe function. */
-export function subscribeRunningSessions(listener: (ids: string[]) => void): () => void {
+export function subscribeRunningSessions(listener: (ids: RunningSessionIdsView) => void): () => void {
   const listeners = getRunningListeners();
   listeners.add(listener);
   return () => { listeners.delete(listener); };
@@ -1165,19 +1667,35 @@ export function notifySessionListRefresh(): void {
   }
 }
 
-let lastRunningSnapshot = "";
+/** Publish one wrapper's current running state into the HMR-stable ID-only projection. */
+export function publishRunningSessionState(
+  sessionId: string,
+  running: boolean,
+  publisherIdentity?: object,
+): void {
+  const projection = getRunningProjection();
+  const publishers = getRunningPublisherAuthority();
+  const currentPublisher = publishers.get(sessionId);
 
-/**
- * Recompute the running-session-id set and, if it changed since the last
- * notification, broadcast it to subscribers. Cheap to call often.
- */
-export function notifyRunningChange(): void {
-  const ids = getRunningRpcSessionIds();
-  const snapshot = JSON.stringify([...ids].sort());
-  if (snapshot === lastRunningSnapshot) return;
-  lastRunningSnapshot = snapshot;
+  if (running) {
+    if (publisherIdentity) publishers.set(sessionId, publisherIdentity);
+    if (projection.has(sessionId)) return;
+    projection.add(sessionId);
+  } else {
+    if (publisherIdentity) {
+      if (currentPublisher !== publisherIdentity) return;
+      publishers.delete(sessionId);
+    } else {
+      if (currentPublisher) return;
+    }
+    if (!projection.delete(sessionId)) return;
+  }
+
+  // Membership is the structural change detector. Subscribers receive a
+  // synchronous read-only view; listener failures are isolated.
+  const view = createRunningSessionIdsView();
   for (const listener of getRunningListeners()) {
-    try { listener(ids); } catch { /* ignore listener errors */ }
+    try { listener(view); } catch { /* ignore listener errors */ }
   }
 }
 
@@ -1192,8 +1710,9 @@ export async function getOrCreateRpcSession(
   prepare: () => Promise<PreparedRpcSession>,
   hooks: RpcSessionStartHooks = {},
 ): Promise<RpcSessionStartResult> {
-  const registry = getRegistry();
-  const locks = getLocks();
+  const generation = activateRpcRuntimeOwner();
+  const registry = generation.registry;
+  const locks = generation.locks;
 
   const existing = registry.get(sessionId);
   if (existing?.isAlive()) return { session: existing, realSessionId: existing.sessionId || sessionId };
@@ -1206,34 +1725,74 @@ export async function getOrCreateRpcSession(
     let published = false;
     try {
       prepared = await prepare();
+      prepared.session.bindRuntimeGeneration(() => runtimeGenerationIsCurrent(generation));
+      if (!runtimeGenerationIsCurrent(generation)) throw new Error("rpc_runtime_generation_closed");
       hooks.validatePrepared?.(prepared);
       hooks.beforePublication?.();
+      if (!runtimeGenerationIsCurrent(generation)) throw new Error("rpc_runtime_generation_closed");
 
       // No asynchronous gap is allowed from the final cancellation/validity
       // check through ownership publication.
       const session = prepared.session;
       const realSessionId = prepared.realSessionId;
       session.start();
+      // Native subscribe/running listeners may execute synchronously and begin
+      // shutdown while the registry is still empty.
+      if (!runtimeGenerationIsCurrent(generation)) throw new Error("rpc_runtime_generation_closed");
       const realSessionFile = session.sessionFile;
       if (realSessionFile) cacheSessionPath(realSessionId, realSessionFile);
+      if (!runtimeGenerationIsCurrent(generation)) throw new Error("rpc_runtime_generation_closed");
       session.onDestroy(() => {
         if (registry.get(realSessionId) === session) registry.delete(realSessionId);
       });
       registry.set(realSessionId, session);
       published = true;
       session.beginExtensionBinding({ forceEmptySystemPrompt: prepared.forceEmptySystemPrompt });
+      // bindExtensions dispatch is also synchronous until its first await. If it
+      // closes this generation, owner cleanup has already removed/disposed the wrapper.
+      if (!runtimeGenerationIsCurrent(generation) || !session.isAlive()) {
+        throw new Error("rpc_runtime_generation_closed");
+      }
 
       const result: RpcSessionStartResult = { session, realSessionId };
       try { hooks.afterPublication?.(result); } catch { /* target-owned after publication */ }
+      if (!runtimeGenerationIsCurrent(generation) || !session.isAlive()) {
+        throw new Error("rpc_runtime_generation_closed");
+      }
       return result;
     } catch (error) {
       if (prepared && !published) prepared.session.destroy();
       throw error;
     }
-  })().finally(() => locks.delete(sessionId));
+  })().finally(() => {
+    if (locks.get(sessionId) === starting) locks.delete(sessionId);
+  });
 
   locks.set(sessionId, starting);
   return starting;
+}
+
+function normalizedExistingSessionPath(value: string): string | null {
+  if (!value || value.includes("\0") || !isAbsolute(value)) return null;
+  const normalized = resolvePath(value);
+  return Buffer.byteLength(normalized, "utf8") <= 4_096 ? normalized : null;
+}
+
+/** Baseline identity invariant for every existing-file startup initiator. */
+export function assertExistingRpcSessionIdentity(
+  session: AgentSessionWrapper,
+  realSessionId: string,
+  expected: { sessionId: string; sessionFile: string; cwd: string },
+): void {
+  const actualFile = normalizedExistingSessionPath(session.sessionFile);
+  const expectedFile = normalizedExistingSessionPath(expected.sessionFile);
+  const actualCwd = normalizedExistingSessionPath(session.inner.sessionManager.getCwd());
+  const expectedCwd = normalizedExistingSessionPath(expected.cwd);
+  if (realSessionId !== expected.sessionId || session.sessionId !== expected.sessionId
+    || !actualFile || !expectedFile || actualFile !== expectedFile
+    || !actualCwd || !expectedCwd || actualCwd !== expectedCwd) {
+    throw new Error("rpc_existing_session_identity_mismatch");
+  }
 }
 
 /**
@@ -1288,6 +1847,18 @@ export async function startRpcSession(
     }
 
     const wrapper = new AgentSessionWrapper(inner);
+    if (sessionFile) {
+      try {
+        assertExistingRpcSessionIdentity(wrapper, inner.sessionId as string, {
+          sessionId,
+          sessionFile,
+          cwd,
+        });
+      } catch (error) {
+        wrapper.destroy();
+        throw error;
+      }
+    }
     // When all tools are disabled, clear the system prompt entirely.
     // pi's buildSystemPrompt always produces a non-empty prompt even with no tools;
     // keep this forced after extension resource discovery and reloads as well.
@@ -1368,6 +1939,7 @@ async function startHostedImplementationTarget(
   }
 }
 
-registerHostedImplementationCapability({
-  startTarget: startHostedImplementationTarget,
-});
+// Module imports never install process signal/exit handlers. The plain server calls this
+// cached public-to-this-process activator on every generation before Next preparation.
+globalThis.__piWebActivateRpcRuntimeOwnerV1 = () => { activateRpcRuntimeOwner(); };
+activateRpcRuntimeOwner();

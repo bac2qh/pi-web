@@ -15,6 +15,8 @@ import {
   isImagePath,
 } from "@/lib/file-types";
 import { encodeFilePathForApi, getFileName, getRelativeFilePath } from "@/lib/file-paths";
+import type { FileWatchFrame } from "@/lib/file-watch-protocol";
+import { useFileWatch } from "@/hooks/useFileWatch";
 
 interface Props {
   filePath: string;
@@ -31,7 +33,7 @@ interface FileData {
 
 function getFileApiUrl(
   filePath: string,
-  type: "read" | "download" | "meta" | "preview" | "watch",
+  type: "read" | "download" | "meta" | "preview",
   sourceSessionId?: string | null,
   params: Record<string, string | number | undefined> = {},
 ): string {
@@ -309,13 +311,21 @@ function DiffView({ oldContent, newContent }: { oldContent: string; newContent: 
   );
 }
 
+function useResourceEpoch(filePath: string, sourceSessionId?: string | null) {
+  const identity = `${filePath}\0${sourceSessionId ?? ""}`;
+  const current = useRef({ identity, epoch: 1 });
+  if (current.current.identity !== identity) current.current = { identity, epoch: current.current.epoch + 1 };
+  return current;
+}
+
 function ImageViewer({ filePath, cwd, sourceSessionId }: Props) {
   const [watching, setWatching] = useState(false);
   const [bust, setBust] = useState(0);
   const [size, setSize] = useState<number | null>(null);
   const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const esRef = useRef<EventSource | null>(null);
+  const resourceEpoch = useResourceEpoch(filePath, sourceSessionId);
+  const nativeResourceSerialRef = useRef(0);
 
   const ext = getFileName(filePath).toLowerCase().split(".").pop() ?? "";
 
@@ -325,33 +335,23 @@ function ImageViewer({ filePath, cwd, sourceSessionId }: Props) {
     setNaturalSize(null);
     setError(null);
     setWatching(false);
-
-    if (esRef.current) {
-      esRef.current.close();
-      esRef.current = null;
-    }
-
-    const es = new EventSource(getFileApiUrl(filePath, "watch", sourceSessionId));
-    esRef.current = es;
-
-    es.addEventListener("connected", () => setWatching(true));
-    es.addEventListener("change", (e) => {
-      try {
-        const d = JSON.parse((e as MessageEvent).data) as { size?: number };
-        if (typeof d.size === "number") setSize(d.size);
-      } catch { /* ignore */ }
-      setBust((b) => b + 1);
-    });
-    es.addEventListener("error", () => setWatching(false));
-    es.onerror = () => setWatching(false);
-
-    return () => {
-      es.close();
-      esRef.current = null;
-    };
   }, [filePath, sourceSessionId]);
 
+  const onWatchFrame = useCallback((frame: FileWatchFrame) => {
+    nativeResourceSerialRef.current += 1;
+    setWatching(true);
+    setSize(frame.size);
+    if (frame.exists) setError(null);
+    else setError("File not found");
+    setNaturalSize(null);
+    setBust((value) => value + 1);
+  }, []);
+  const watch = useFileWatch(filePath, sourceSessionId, onWatchFrame);
+  useEffect(() => setWatching(watch.connectionState === "connected"), [watch.connectionState]);
+
   const src = getFileApiUrl(filePath, "read", sourceSessionId, bust ? { v: bust } : undefined);
+  const renderResourceEpoch = resourceEpoch.current.epoch;
+  const renderResourceSerial = nativeResourceSerialRef.current;
 
   const formatSizeStr = size != null ? formatSize(size) : null;
 
@@ -417,10 +417,16 @@ function ImageViewer({ filePath, cwd, sourceSessionId }: Props) {
             src={src}
             alt={filePath}
             onLoad={(e) => {
+              if (renderResourceEpoch !== resourceEpoch.current.epoch
+                || renderResourceSerial !== nativeResourceSerialRef.current) return;
               const img = e.currentTarget;
+              setError(null);
               setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
             }}
-            onError={() => setError("Failed to load image")}
+            onError={() => {
+              if (renderResourceEpoch === resourceEpoch.current.epoch
+                && renderResourceSerial === nativeResourceSerialRef.current) setError("Failed to load image");
+            }}
             style={{
               maxWidth: "100%",
               maxHeight: "100%",
@@ -448,7 +454,8 @@ function AudioViewer({ filePath, cwd, sourceSessionId }: Props) {
   const [size, setSize] = useState<number | null>(null);
   const [duration, setDuration] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const esRef = useRef<EventSource | null>(null);
+  const resourceEpoch = useResourceEpoch(filePath, sourceSessionId);
+  const nativeResourceSerialRef = useRef(0);
 
   const ext = getFileName(filePath).toLowerCase().split(".").pop() ?? "";
 
@@ -458,35 +465,22 @@ function AudioViewer({ filePath, cwd, sourceSessionId }: Props) {
     setDuration(null);
     setError(null);
     setWatching(false);
-
-    if (esRef.current) {
-      esRef.current.close();
-      esRef.current = null;
-    }
-
-    const es = new EventSource(getFileApiUrl(filePath, "watch", sourceSessionId));
-    esRef.current = es;
-
-    es.addEventListener("connected", () => setWatching(true));
-    es.addEventListener("change", (e) => {
-      try {
-        const d = JSON.parse((e as MessageEvent).data) as { size?: number };
-        if (typeof d.size === "number") setSize(d.size);
-      } catch { /* ignore */ }
-      setDuration(null);
-      setError(null);
-      setBust((b) => b + 1);
-    });
-    es.addEventListener("error", () => setWatching(false));
-    es.onerror = () => setWatching(false);
-
-    return () => {
-      es.close();
-      esRef.current = null;
-    };
   }, [filePath, sourceSessionId]);
 
+  const onWatchFrame = useCallback((frame: FileWatchFrame) => {
+    nativeResourceSerialRef.current += 1;
+    setWatching(true);
+    setSize(frame.size);
+    setDuration(null);
+    setError(frame.exists ? null : "File not found");
+    setBust((value) => value + 1);
+  }, []);
+  const watch = useFileWatch(filePath, sourceSessionId, onWatchFrame);
+  useEffect(() => setWatching(watch.connectionState === "connected"), [watch.connectionState]);
+
   const src = getFileApiUrl(filePath, "read", sourceSessionId, bust ? { v: bust } : undefined);
+  const renderResourceEpoch = resourceEpoch.current.epoch;
+  const renderResourceSerial = nativeResourceSerialRef.current;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -548,8 +542,16 @@ function AudioViewer({ filePath, cwd, sourceSessionId }: Props) {
             controls
             preload="metadata"
             src={src}
-            onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
-            onError={() => setError("Failed to load audio")}
+            onLoadedMetadata={(e) => {
+              if (renderResourceEpoch !== resourceEpoch.current.epoch
+                || renderResourceSerial !== nativeResourceSerialRef.current) return;
+              setError(null);
+              setDuration(e.currentTarget.duration);
+            }}
+            onError={() => {
+              if (renderResourceEpoch === resourceEpoch.current.epoch
+                && renderResourceSerial === nativeResourceSerialRef.current) setError("Failed to load audio");
+            }}
             style={{ width: "100%" }}
           />
         </div>
@@ -563,7 +565,9 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
   const [bust, setBust] = useState(0);
   const [size, setSize] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const esRef = useRef<EventSource | null>(null);
+  const resourceEpoch = useResourceEpoch(filePath, sourceSessionId);
+  const nativeResourceSerialRef = useRef(0);
+  const refreshRef = useRef<() => void>(() => {});
 
   const ext = getFileExt(filePath);
   const isPdf = ext === "pdf";
@@ -572,55 +576,63 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
     : getFileApiUrl(filePath, "preview", sourceSessionId, bust ? { v: bust } : undefined);
 
   useEffect(() => {
+    let active = true;
+    let inFlight = false;
+    let pending = false;
+    let newestRequest = 0;
     setBust(0);
     setSize(null);
     setError(null);
     setWatching(false);
 
-    if (esRef.current) {
-      esRef.current.close();
-      esRef.current = null;
-    }
-
-    fetch(getFileApiUrl(filePath, "meta", sourceSessionId))
-      .then((r) => r.json())
-      .then((d: { size?: number; error?: string }) => {
-        if (d.error) setError(d.error);
-        if (typeof d.size === "number") {
-          setSize(d.size);
-          if (!isPdf && d.size > DOCX_PREVIEW_MAX_BYTES) {
-            setError("DOCX too large for preview (>10MB)");
-          }
-        }
-      })
-      .catch((e) => setError(String(e)));
-
-    const es = new EventSource(getFileApiUrl(filePath, "watch", sourceSessionId));
-    esRef.current = es;
-
-    es.addEventListener("connected", () => setWatching(true));
-    es.addEventListener("change", (e) => {
-      try {
-        const d = JSON.parse((e as MessageEvent).data) as { size?: number };
-        if (typeof d.size === "number") {
-          setSize(d.size);
-          if (!isPdf && d.size > DOCX_PREVIEW_MAX_BYTES) {
+    const refresh = () => {
+      if (!active) return;
+      if (inFlight) { pending = true; newestRequest += 1; return; }
+      inFlight = true;
+      const request = ++newestRequest;
+      void fetch(getFileApiUrl(filePath, "meta", sourceSessionId))
+        .then((response) => response.json())
+        .then((data: { size?: number; error?: string }) => {
+          if (!active || request !== newestRequest) return;
+          nativeResourceSerialRef.current += 1;
+          if (data.error) { setError(data.error); return; }
+          if (typeof data.size !== "number") { setError("Failed to load document metadata"); return; }
+          setSize(data.size);
+          if (!isPdf && data.size > DOCX_PREVIEW_MAX_BYTES) {
             setError("DOCX too large for preview (>10MB)");
             return;
           }
-        }
-      } catch { /* ignore */ }
-      setError(null);
-      setBust((b) => b + 1);
-    });
-    es.addEventListener("error", () => setWatching(false));
-    es.onerror = () => setWatching(false);
-
-    return () => {
-      es.close();
-      esRef.current = null;
+          setError(null);
+          setBust((value) => value + 1);
+        })
+        .catch(() => {
+          if (active && request === newestRequest) {
+            nativeResourceSerialRef.current += 1;
+            setError("Failed to load document metadata");
+          }
+        })
+        .finally(() => {
+          if (!active) return;
+          inFlight = false;
+          if (pending) { pending = false; refresh(); }
+        });
     };
+    refreshRef.current = refresh;
+    refresh();
+    return () => { active = false; newestRequest += 1; refreshRef.current = () => {}; };
   }, [filePath, isPdf, sourceSessionId]);
+
+  const onWatchFrame = useCallback((frame: FileWatchFrame) => {
+    nativeResourceSerialRef.current += 1;
+    setWatching(true);
+    setSize(frame.size);
+    if (!frame.exists) setError("File not found");
+    refreshRef.current();
+  }, []);
+  const watch = useFileWatch(filePath, sourceSessionId, onWatchFrame);
+  useEffect(() => setWatching(watch.connectionState === "connected"), [watch.connectionState]);
+  const renderResourceEpoch = resourceEpoch.current.epoch;
+  const renderResourceSerial = nativeResourceSerialRef.current;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -671,6 +683,14 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
             src={previewUrl}
             sandbox={isPdf ? undefined : ""}
             title={`Preview ${getFileName(filePath)}`}
+            onLoad={() => {
+              if (renderResourceEpoch === resourceEpoch.current.epoch
+                && renderResourceSerial === nativeResourceSerialRef.current) setError(null);
+            }}
+            onError={() => {
+              if (renderResourceEpoch === resourceEpoch.current.epoch
+                && renderResourceSerial === nativeResourceSerialRef.current) setError("Failed to load document preview");
+            }}
             style={{ width: "100%", height: "100%", border: "none", background: isPdf ? "var(--bg)" : "#eef1f5" }}
           />
         )}
@@ -703,35 +723,15 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
   const [wrapLines, setWrapLines] = useState(false);
   const [watching, setWatching] = useState(false);
   const [changeCount, setChangeCount] = useState(0);
-  const esRef = useRef<EventSource | null>(null);
+  const refreshRef = useRef<() => void>(() => {});
 
-  const fetchContent = useCallback((filePath: string, isRefresh = false) => {
-    return fetch(getFileApiUrl(filePath, "read", sourceSessionId))
-      .then((r) => r.json())
-      .then((d: FileData & { error?: string }) => {
-        if (d.error) {
-          setError(d.error);
-          return null;
-        }
-        if (isRefresh) {
-          setData((prev) => {
-            if (prev) setPrevContent(prev.content);
-            return d;
-          });
-          setChangeCount((c) => c + 1);
-        } else {
-          setData(d);
-        }
-        return d;
-      })
-      .catch((e) => {
-        setError(String(e));
-        return null;
-      });
-  }, [sourceSessionId]);
-
-  // Initial load + SSE watch setup
   useEffect(() => {
+    let active = true;
+    let inFlight = false;
+    let pending = false;
+    let newestRequest = 0;
+    let hasLoaded = false;
+    let acceptedData: FileData | null = null;
     setLoading(true);
     setError(null);
     setData(null);
@@ -742,40 +742,48 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
     setChangeCount(0);
     setWatching(false);
 
-    if (esRef.current) {
-      esRef.current.close();
-      esRef.current = null;
-    }
-
-    fetchContent(filePath).then((d) => {
-      if (d?.language === "markdown") setPreviewMode(true);
-    }).finally(() => setLoading(false));
-
-    // Set up SSE watch
-    const es = new EventSource(getFileApiUrl(filePath, "watch", sourceSessionId));
-    esRef.current = es;
-
-    es.addEventListener("connected", () => {
-      setWatching(true);
-    });
-
-    es.addEventListener("change", () => {
-      fetchContent(filePath, true);
-    });
-
-    es.addEventListener("error", () => {
-      setWatching(false);
-    });
-
-    es.onerror = () => {
-      setWatching(false);
+    const refresh = () => {
+      if (!active) return;
+      if (inFlight) { pending = true; newestRequest += 1; return; }
+      inFlight = true;
+      const request = ++newestRequest;
+      void fetch(getFileApiUrl(filePath, "read", sourceSessionId))
+        .then((response) => response.json())
+        .then((next: FileData & { error?: string }) => {
+          if (!active || request !== newestRequest) return;
+          if (next.error) { setError(next.error); return; }
+          const previous = acceptedData;
+          const changed = previous !== null && previous.content !== next.content;
+          acceptedData = next;
+          setError(null);
+          if (changed) {
+            setPrevContent(previous.content);
+            setChangeCount((count) => count + 1);
+          }
+          setData(next);
+          if (!hasLoaded && next.language === "markdown") setPreviewMode(true);
+          hasLoaded = true;
+        })
+        .catch(() => { if (active && request === newestRequest) setError("Failed to read file"); })
+        .finally(() => {
+          if (!active) return;
+          setLoading(false);
+          inFlight = false;
+          if (pending) { pending = false; refresh(); }
+        });
     };
+    refreshRef.current = refresh;
+    refresh();
+    return () => { active = false; newestRequest += 1; refreshRef.current = () => {}; };
+  }, [filePath, sourceSessionId]);
 
-    return () => {
-      es.close();
-      esRef.current = null;
-    };
-  }, [filePath, fetchContent, sourceSessionId]);
+  const onWatchFrame = useCallback((frame: FileWatchFrame) => {
+    setWatching(true);
+    if (!frame.exists) setError("File not found");
+    refreshRef.current();
+  }, []);
+  const watch = useFileWatch(filePath, sourceSessionId, onWatchFrame);
+  useEffect(() => setWatching(watch.connectionState === "connected"), [watch.connectionState]);
 
   if (loading) {
     return (

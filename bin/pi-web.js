@@ -14,6 +14,17 @@ const SIGNAL_EXIT_CODES = Object.freeze({
   SIGINT: 130,
   SIGTERM: 143,
 });
+const PUBLIC_ERROR_CLASSES = new Set([
+  "AbortError", "AggregateError", "Error", "EvalError", "RangeError",
+  "ReferenceError", "SyntaxError", "TypeError", "URIError",
+]);
+
+function publicErrorClass(error) {
+  try {
+    const name = error?.name;
+    return typeof name === "string" && name.length <= 32 && PUBLIC_ERROR_CLASSES.has(name) ? name : "Error";
+  } catch { return "Error"; }
+}
 
 function browserUrl(hostname, port) {
   const host = hostname ?? "localhost";
@@ -33,8 +44,8 @@ function openBrowser(url, options = {}) {
     detached: true,
   });
 
-  opener.on("error", (error) => {
-    warn(`Could not open browser automatically: ${error.message}`);
+  opener.on("error", () => {
+    warn("Could not open browser automatically.");
   });
   opener.unref();
   return opener;
@@ -123,7 +134,7 @@ async function runTerminalEntry(options = {}) {
         running = await runningPromise;
       } catch (error) {
         removeSignalHandlers();
-        logger.error("[pi-web] startup_failed", { errorName: error?.name ?? "Error" });
+        logger.error("[pi-web] startup_failed", { errorName: publicErrorClass(error) });
         terminate(1);
         return;
       }
@@ -132,7 +143,7 @@ async function runTerminalEntry(options = {}) {
         await running.close();
       } catch (error) {
         removeSignalHandlers();
-        logger.error("[pi-web] close_failed", { errorName: error?.name ?? "Error" });
+        logger.error("[pi-web] close_failed", { errorName: publicErrorClass(error) });
         terminate(1);
         return;
       }
@@ -181,7 +192,7 @@ async function runTerminalEntry(options = {}) {
     if (error?.code === "build_artifacts_missing") {
       logger.error("Build artifacts not found. Please report this issue.");
     } else {
-      logger.error("[pi-web] startup_failed", { errorName: error?.name ?? "Error" });
+      logger.error("[pi-web] startup_failed", { errorName: publicErrorClass(error) });
     }
     processRef.exitCode = 1;
     terminate(1);
@@ -191,7 +202,7 @@ async function runTerminalEntry(options = {}) {
 
 if (require.main === module) {
   void runTerminalEntry().catch((error) => {
-    console.error("[pi-web] terminal_failed", { errorName: error?.name ?? "Error" });
+    console.error("[pi-web] terminal_failed", { errorName: publicErrorClass(error) });
     process.exitCode = 1;
   });
 }
@@ -199,5 +210,6 @@ if (require.main === module) {
 module.exports = {
   browserUrl,
   openBrowser,
+  publicErrorClass,
   runPiWebCli,
 };
