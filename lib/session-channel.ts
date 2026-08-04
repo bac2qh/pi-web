@@ -18,6 +18,7 @@ import {
   type SessionTransportReadyFrame,
 } from "./session-transport-protocol";
 import type {
+  PiWebOwnerCloseReason,
   PiWebTransportChannelContext,
   PiWebTransportChannelHandler,
   PiWebTransportGatewayV1,
@@ -46,6 +47,12 @@ type SubscriberOwner = {
 
 export type SessionOwnerRegistry = Map<SessionTransportWrapper, SubscriberOwner>;
 
+type SessionRegistrationOwner = {
+  active: boolean;
+  subscribers: Set<(reason: PiWebOwnerCloseReason) => void>;
+  closeFallbacks: Set<() => void>;
+};
+
 type SessionRegistration = {
   protocol: "pi-web-session-channel";
   version: 1;
@@ -56,6 +63,7 @@ type SessionRegistration = {
   unregister: () => boolean;
   handler: PiWebTransportChannelHandler;
   ownerRegistry: SessionOwnerRegistry;
+  subscriptionOwner: SessionRegistrationOwner;
 };
 
 export type SessionChannelDiagnostic = Readonly<{
@@ -81,6 +89,7 @@ export type SessionChannelOptions = {
   diagnostic?: (entry: SessionChannelDiagnostic) => void;
   /** Optional bounded test observer; it receives counts only, never frame identities or content. */
   referenceObserver?: (state: SessionChannelReferenceState) => void;
+  subscriptionOwner?: SessionRegistrationOwner;
 };
 
 function finiteCountClass(count: number): "zero" | "one" | "many" {
@@ -192,6 +201,7 @@ export function createSessionChannelHandler(
   const scheduleTimeout = options.setTimeout ?? setTimeout;
   const cancelTimeout = options.clearTimeout ?? clearTimeout;
   const encodeFrame = createBoundedProjectedSessionFrameEncoder(outputByteLimit);
+  const registrationOwner = options.subscriptionOwner ?? { active: true, subscribers: new Set(), closeFallbacks: new Set() };
   const report = (entry: SessionChannelDiagnostic): void => {
     try { options.diagnostic?.(entry); } catch { /* diagnostics are isolated */ }
   };
@@ -202,6 +212,7 @@ export function createSessionChannelHandler(
     let resumeTimer: ReturnType<typeof setTimeout> | null = null;
     let owner: SubscriberOwner | null = null;
     let ownerCleanup: ((code: typeof SESSION_TRANSPORT_CLOSE.owner) => void) | null = null;
+    let registrationCleanup: ((reason: PiWebOwnerCloseReason) => void) | null = null;
     let unsubscribe: (() => void) | null = null;
     let resumeReceived = false;
     let paused = true;
@@ -228,6 +239,7 @@ export function createSessionChannelHandler(
       } catch { /* test observation is isolated */ }
     };
     const clearCloseFallback = (): void => {
+      registrationOwner.closeFallbacks.delete(clearCloseFallback);
       if (!closeFallback) return;
       cancelTimeout(closeFallback);
       closeFallback = null;
@@ -260,22 +272,24 @@ export function createSessionChannelHandler(
         return true;
       }
     };
-    const beginClose = (code: number, reason: string): void => {
+    const beginClose = (code: number, reason: string, allowTerminateFallback = true): void => {
       try {
         if (socket.readyState === 1) socket.close(code, reason);
-        else if (socket.readyState === 0 || socket.readyState === 2) socket.terminate();
+        else if (allowTerminateFallback && (socket.readyState === 0 || socket.readyState === 2)) socket.terminate();
       } catch {
-        try { if (socket.readyState !== 3) socket.terminate(); } catch { /* already closed */ }
+        if (allowTerminateFallback) try { if (socket.readyState !== 3) socket.terminate(); } catch { /* already closed */ }
       }
-      if (socket.readyState !== 3 && !closeFallback) {
+      if (allowTerminateFallback && socket.readyState !== 3 && !closeFallback) {
         closeFallback = scheduleTimeout(() => {
+          registrationOwner.closeFallbacks.delete(clearCloseFallback);
           closeFallback = null;
           try { if (socket.readyState !== 3) socket.terminate(); } catch { /* already closed */ }
         }, closeFallbackMs);
         closeFallback?.unref?.();
+        registrationOwner.closeFallbacks.add(clearCloseFallback);
       }
     };
-    const cleanup = (code: number, reason: string, initiateClose: boolean): void => {
+    const cleanup = (code: number, reason: string, initiateClose: boolean, allowTerminateFallback = true): void => {
       if (terminal) {
         if (!initiateClose) clearCloseFallback();
         return;
@@ -285,11 +299,13 @@ export function createSessionChannelHandler(
       unsubscribe?.();
       unsubscribe = null;
       if (owner && ownerCleanup) owner.subscribers.delete(ownerCleanup);
+      if (registrationCleanup) registrationOwner.subscribers.delete(registrationCleanup);
       owner = null;
       ownerCleanup = null;
+      registrationCleanup = null;
       releaseReferences();
       report({ kind: "close", outcome: reason });
-      if (initiateClose) beginClose(code, reason);
+      if (initiateClose) beginClose(code, reason, allowTerminateFallback);
       else clearCloseFallback();
     };
     const failSlow = (): void => cleanup(SESSION_TRANSPORT_CLOSE.slow, "slow", true);
@@ -409,7 +425,8 @@ export function createSessionChannelHandler(
           cleanup(SESSION_TRANSPORT_CLOSE.internal, "internal", true);
           return;
         }
-        if (!authorization.wrapper.isAlive() || authorization.hub.isClosed()
+        if (!registrationOwner.active || dispatchContext.ownerToken?.isCurrent() === false
+          || !authorization.wrapper.isAlive() || authorization.hub.isClosed()
           || authorization.wrapper.getProjectedEventHub() !== authorization.hub) {
           cleanup(SESSION_TRANSPORT_CLOSE.owner, "owner", true);
           return;
@@ -425,7 +442,8 @@ export function createSessionChannelHandler(
           cleanup(SESSION_TRANSPORT_CLOSE.owner, "owner", true);
           return;
         }
-        if (!authorization.wrapper.isAlive() || authorization.hub.isClosed()
+        if (!registrationOwner.active || dispatchContext.ownerToken?.isCurrent() === false
+          || !authorization.wrapper.isAlive() || authorization.hub.isClosed()
           || authorization.wrapper.getProjectedEventHub() !== authorization.hub || owner.dead) {
           cleanup(SESSION_TRANSPORT_CLOSE.owner, "owner", true);
           return;
@@ -452,6 +470,17 @@ export function createSessionChannelHandler(
 
     socket.once("close", onClose);
     socket.once("error", onError);
+    registrationCleanup = () => cleanup(
+      SESSION_TRANSPORT_CLOSE.owner,
+      "owner",
+      true,
+      false,
+    );
+    registrationOwner.subscribers.add(registrationCleanup);
+    if (!registrationOwner.active || dispatchContext.ownerToken?.isCurrent() === false) {
+      cleanup(SESSION_TRANSPORT_CLOSE.owner, "owner", true, false);
+      return;
+    }
     if (socket.readyState !== 1) {
       cleanup(1000, "client", false);
       return;
@@ -499,12 +528,14 @@ function isCompatibleRegistration(value: unknown): value is SessionRegistration 
     && typeof record.unregister === "function"
     && typeof record.handler === "function"
     && record.ownerRegistry instanceof Map
-    && !!record.gateway;
+    && !!record.subscriptionOwner && record.subscriptionOwner.subscribers instanceof Set
+    && record.subscriptionOwner.closeFallbacks instanceof Set && !!record.gateway;
 }
 
 export function ensureSessionChannel(
   gateway: PiWebTransportGatewayV1,
 ): { channel: typeof SESSION_TRANSPORT_CHANNEL; reused: boolean } {
+  if (gateway.ownerLifecycleVersion !== 1) throw new Error("session_owner_lifecycle_unavailable");
   const scope = globalThis as unknown as Record<PropertyKey, unknown>;
   const existing = scope[SESSION_REGISTRATION_SYMBOL];
   let ownerRegistry: SessionOwnerRegistry = new Map();
@@ -520,8 +551,15 @@ export function ensureSessionChannel(
     existing.active = false;
     existing.unregister();
   }
-  handler ??= createSessionChannelHandler(ownerRegistry);
-  const unregister = gateway.registerChannel(SESSION_TRANSPORT_CHANNEL, handler);
+  const subscriptionOwner: SessionRegistrationOwner = { active: true, subscribers: new Set(), closeFallbacks: new Set() };
+  handler = createSessionChannelHandler(ownerRegistry, { subscriptionOwner });
+  const ownerClose = (reason: PiWebOwnerCloseReason) => {
+    subscriptionOwner.active = false;
+    // The gateway alone owns registration-replacement fallback and shutdown suppresses it.
+    for (const cancel of [...subscriptionOwner.closeFallbacks]) cancel();
+    for (const close of [...subscriptionOwner.subscribers]) close(reason);
+  };
+  const unregister = gateway.registerChannel(SESSION_TRANSPORT_CHANNEL, handler, ownerClose);
   const record: SessionRegistration = {
     protocol: "pi-web-session-channel",
     version: 1,
@@ -532,6 +570,7 @@ export function ensureSessionChannel(
     unregister,
     handler,
     ownerRegistry,
+    subscriptionOwner,
   };
   scope[SESSION_REGISTRATION_SYMBOL] = record;
   return { channel: SESSION_TRANSPORT_CHANNEL, reused: false };

@@ -12,6 +12,7 @@ import {
   type FileWatchFrame,
 } from "./file-watch-protocol";
 import type {
+  PiWebOwnerCloseReason,
   PiWebTransportChannelContext,
   PiWebTransportChannelHandler,
   PiWebTransportGatewayV1,
@@ -51,7 +52,7 @@ type FileWatchDependencies = Readonly<{
 
 type RegistrationOwner = {
   active: boolean;
-  subscribers: Set<(code: number) => void>;
+  subscribers: Set<(reason: PiWebOwnerCloseReason) => void>;
 };
 
 type FileWatchRegistration = {
@@ -122,12 +123,12 @@ function boundedSize(stat: fs.Stats): number {
   return Math.min(Number.MAX_SAFE_INTEGER, Math.floor(size));
 }
 
-function closeSocket(socket: WebSocket, code: number): void {
+function closeSocket(socket: WebSocket, code: number, allowTerminate: boolean): void {
   try {
     if (socket.readyState === 1) socket.close(code);
-    else if (socket.readyState === 0 || socket.readyState === 2) socket.terminate();
+    else if (allowTerminate && (socket.readyState === 0 || socket.readyState === 2)) socket.terminate();
   } catch {
-    try { if (socket.readyState !== 3) socket.terminate(); } catch { /* already closed */ }
+    if (allowTerminate) try { if (socket.readyState !== 3) socket.terminate(); } catch { /* already closed */ }
   }
 }
 
@@ -159,7 +160,7 @@ export function createFileWatchChannelHandler(
     let coalescedEvents = 0;
     let changeCount = 0;
 
-    const cleanup = (code: number | null, outcome: string): void => {
+    const cleanup = (code: number | null, outcome: string, allowTerminate = true): void => {
       if (terminal) return;
       terminal = true;
       owner.subscribers.delete(ownerClose);
@@ -171,9 +172,13 @@ export function createFileWatchChannelHandler(
       watcher = null;
       try { currentWatcher?.close(); } catch { /* watcher already closed */ }
       report({ stage: "close", outcome, activeClass: "zero" });
-      if (code !== null) closeSocket(socket, code);
+      if (code !== null) closeSocket(socket, code, allowTerminate);
     };
-    const ownerClose = (code: number) => cleanup(code, "server");
+    const ownerClose = (reason: PiWebOwnerCloseReason) => cleanup(
+      FILE_WATCH_CLOSE.owner,
+      "server",
+      reason !== "server_shutdown",
+    );
     const fail = (outcome: string) => cleanup(FILE_WATCH_CLOSE.internal, outcome);
 
     const observe = (): { exists: boolean; size: number } => {
@@ -250,7 +255,10 @@ export function createFileWatchChannelHandler(
     try { await dependencies.beforeAllocate?.(); }
     catch { fail("watcher"); return; }
     if (terminal || socket.readyState !== 1) { cleanup(null, "client"); return; }
-    if (!ownerIsCurrent()) { cleanup(FILE_WATCH_CLOSE.owner, "server"); return; }
+    if (dispatchContext.ownerToken?.isCurrent() === false || !ownerIsCurrent()) {
+      cleanup(FILE_WATCH_CLOSE.owner, "server", false);
+      return;
+    }
 
     const watchTarget = authorization.observationClass === "symlink"
       ? authorization.filePath
@@ -265,9 +273,13 @@ export function createFileWatchChannelHandler(
         }
         scheduleChange();
       });
-      if (terminal || socket.readyState !== 1 || !ownerIsCurrent()) {
+      if (terminal || socket.readyState !== 1 || dispatchContext.ownerToken?.isCurrent() === false || !ownerIsCurrent()) {
         try { allocated.close(); } catch { /* setup loser */ }
-        if (!terminal) cleanup(ownerIsCurrent() ? null : FILE_WATCH_CLOSE.owner, ownerIsCurrent() ? "client" : "server");
+        if (!terminal) cleanup(
+          ownerIsCurrent() ? null : FILE_WATCH_CLOSE.owner,
+          ownerIsCurrent() ? "client" : "server",
+          ownerIsCurrent(),
+        );
         return;
       }
       watcher = allocated;
@@ -299,6 +311,7 @@ function isCompatibleRegistration(value: unknown): value is FileWatchRegistratio
 export function ensureFileWatchChannel(
   gateway: PiWebTransportGatewayV1,
 ): { channel: typeof FILE_WATCH_CHANNEL; reused: boolean } {
+  if (gateway.ownerLifecycleVersion !== 1) throw new Error("file_watch_owner_lifecycle_unavailable");
   const scope = globalThis as unknown as Record<PropertyKey, unknown>;
   const existing = scope[FILE_WATCH_REGISTRATION_SYMBOL];
   if (existing !== undefined) {
@@ -307,8 +320,6 @@ export function ensureFileWatchChannel(
       return { channel: FILE_WATCH_CHANNEL, reused: true };
     }
     existing.active = false;
-    existing.subscriptionOwner.active = false;
-    for (const close of [...existing.subscriptionOwner.subscribers]) close(FILE_WATCH_CLOSE.owner);
     existing.unregister();
   }
 
@@ -318,7 +329,12 @@ export function ensureFileWatchChannel(
     subscriptionOwner,
     isCurrentOwner: () => record.active && scope[FILE_WATCH_REGISTRATION_SYMBOL] === record,
   });
-  const unregister = gateway.registerChannel(FILE_WATCH_CHANNEL, handler);
+  const ownerClose = (reason: PiWebOwnerCloseReason) => {
+    subscriptionOwner.active = false;
+    // Registration-level network fallback belongs only to the gateway.
+    for (const close of [...subscriptionOwner.subscribers]) close(reason);
+  };
+  const unregister = gateway.registerChannel(FILE_WATCH_CHANNEL, handler, ownerClose);
   Object.assign(record, {
     protocol: "pi-web-file-watch-channel",
     version: 1,
