@@ -91,10 +91,11 @@ test("shared sidebar metadata stays operation-only, optimistic, and separate fro
   assert.doesNotMatch(routeSource, /pinnedSessionIds\s*[:=]\s*body|explicitlyHiddenSessionIds\s*[:=]\s*body/);
 });
 
-test("the shared row exposes keyboard, touch, pin, hide, restore, and hidden-state semantics", async () => {
-  const [sidebarSource, cssSource] = await Promise.all([
+test("the shared row exposes rename, keyboard, touch, pin, hide, restore, and no permanent deletion", async () => {
+  const [sidebarSource, cssSource, appShellSource] = await Promise.all([
     readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("./AppShell.tsx", import.meta.url), "utf8"),
   ]);
   const selectionControl = sidebarSource.slice(
     sidebarSource.indexOf('role="button"'),
@@ -103,11 +104,20 @@ test("the shared row exposes keyboard, touch, pin, hide, restore, and hidden-sta
   assert.match(selectionControl, /tabIndex=\{0\}/);
   assert.match(selectionControl, /event\.key === "Enter" \|\| event\.key === " "/);
   assert.match(sidebarSource, /className="session-row-select"/);
+  assert.match(sidebarSource, /title="Rename"/);
   assert.match(sidebarSource, /aria-pressed=\{isPinned\}/);
   assert.match(sidebarSource, /className="session-row-actions"/);
   assert.match(sidebarSource, /hiddenKind === "explicit" \? `Restore/);
   assert.match(sidebarSource, /Hidden by parent/);
   assert.match(sidebarSource, /onHideChange=\{hiddenSessionKinds\.get\(node\.session\.id\) === "inherited"/);
+  assert.match(sidebarSource, /paddingRight: onHideChange \? 54 : 25/);
+  assert.doesNotMatch(sidebarSource, /\bDelete\b/);
+  assert.doesNotMatch(sidebarSource, /onDeleted|onSessionDeleted|confirmDelete|deleting|handleDelete/);
+  assert.doesNotMatch(
+    sidebarSource,
+    /fetch\(`\/api\/sessions\/\$\{encodeURIComponent\(session\.id\)\}`,[\s\S]{0,100}method:\s*"DELETE"/,
+  );
+  assert.doesNotMatch(appShellSource, /handleSessionDeleted|onSessionDeleted/);
   assert.match(cssSource, /\.session-row:focus-within \.session-row-actions/);
   assert.match(cssSource, /any-pointer: coarse/);
   assert.match(cssSource, /\.session-row-compact-action:focus/);

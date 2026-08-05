@@ -16,3 +16,7 @@
 ## 2026-07-30
 
 - Added custom-server lifecycle memory after retaining the secure one-port gateway foundation, separating reusable owned cleanup from terminal-only process exit, and validating strict production same-process reuse.
+
+## 2026-08-05
+
+- Added session-removal policy memory after removing Pi Web's destructive session route and sidebar action in favor of reversible Hide/Restore, preserving the stale-extension-context rationale and the separate follow-up boundary for other native-disposal paths.

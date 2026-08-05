@@ -40,7 +40,7 @@ Browser             Pi Web Node/Next Server         AgentSession (in-process)
 ```
 app/api/
   sessions/route.ts               GET  list all sessions
-  sessions/[id]/route.ts          GET/PATCH/DELETE session
+  sessions/[id]/route.ts          GET/PATCH session
   sessions/[id]/context/route.ts  GET ?leafId= — context for a specific leaf
   sessions/[id]/export/route.ts   GET exported HTML for a session
   sidebar-state/route.ts          GET/PATCH shared pin and hidden-sidebar state
@@ -150,8 +150,8 @@ hooks/
 - **Clone** (`/clone`): creates a child `.jsonl` containing the complete displayed active branch through its current leaf, refreshes the sidebar, and leaves the source selected.
 - **In-session branch / Edit from here** (historical user message / BranchNavigator): calls `navigate_tree` within the same file. Multiple entries share the same `parentId`. Switching between them calls `/api/sessions/[id]/context?leafId=`.
 
-### Session files can be fully rewritten
-`parentSession` in the header is **display metadata only** — has zero effect on chat content. Safe to `writeFileSync` the entire file (pi does this itself during migrations). Used when cascade-reparenting children on delete.
+### Session parent metadata and removal
+`parentSession` in the header is **display metadata only** — it has zero effect on chat content. Pi may rewrite an entire session file during migrations, but Pi Web exposes no permanent session-delete control or `DELETE /api/sessions/[id]` handler. Hide/Restore is the web removal workflow and updates only sidebar metadata.
 
 ### ToolCall field normalization
 Pi stores toolCall blocks as `{type:"toolCall", id, name, arguments}` but `ToolCallContent` uses `{toolCallId, toolName, input}`. `normalizeToolCalls()` in `lib/normalize.ts` handles this — called in both `session-reader.ts` (file load) and `ChatWindow.handleAgentEvent()` (streaming).

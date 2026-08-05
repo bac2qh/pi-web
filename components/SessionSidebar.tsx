@@ -74,7 +74,6 @@ interface Props {
   initialSessionId?: string | null;
   onInitialRestoreDone?: () => void;
   refreshKey?: number;
-  onSessionDeleted?: (sessionId: string) => void;
   selectedCwd?: string | null;
   onCwdChange?: (cwd: string | null, projectRoot?: string | null) => void;
   onOpenFile?: (filePath: string, fileName: string) => void;
@@ -334,7 +333,7 @@ function PiAgentTitle() {
   );
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onAtMention, onAtMentions }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, onInitialRestoreDone, refreshKey, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onAtMention, onAtMentions }: Props) {
   const {
     runningSessionIds: globalRunningSessionIds,
     runningAuthoritative,
@@ -483,7 +482,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       if (shouldApplySidebarHttpRunningFallback(getCurrentGlobalStatusSnapshot)) {
         setFallbackRunningSessionIds(new Set(data.runningSessionIds ?? []));
       }
-      // Drop unread markers for sessions that no longer exist (e.g. deleted).
+      // Drop unread markers for sessions absent from the latest complete listing.
       const existingIds = new Set(data.sessions.map((s) => s.id));
       setUnreadSessionIds((prev) => {
         if (prev.size === 0) return prev;
@@ -1107,10 +1106,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                   sessionId: session.id,
                 })}
             onRenamed={loadSessions}
-            onDeleted={(id) => {
-              onSessionDeleted?.(id);
-              void loadSessions();
-            }}
           />
         ))}
       </SidebarSessionSection>
@@ -1143,10 +1138,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                   sessionId: session.id,
                 })}
             onRenamed={loadSessions}
-            onDeleted={(id) => {
-              onSessionDeleted?.(id);
-              void loadSessions();
-            }}
           />
         ))}
       </SidebarSessionSection>
@@ -1779,10 +1770,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             onSelectSession={handleSelectSessionFromList}
             onSidebarOperation={requestSidebarOperation}
             onRenamed={loadSessions}
-            onSessionDeleted={(id) => {
-              onSessionDeleted?.(id);
-              loadSessions();
-            }}
             depth={0}
           />
         ))}
@@ -1987,7 +1974,6 @@ function SessionTreeItem({
   onSelectSession,
   onSidebarOperation,
   onRenamed,
-  onSessionDeleted,
   depth,
 }: {
   node: SidebarSessionTreeNode;
@@ -2000,7 +1986,6 @@ function SessionTreeItem({
   onSelectSession: (s: SessionInfo) => void;
   onSidebarOperation: (operation: SidebarStateOperation) => void;
   onRenamed?: () => void;
-  onSessionDeleted?: (id: string) => void;
   depth: number;
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -2039,7 +2024,6 @@ function SessionTreeItem({
                 sessionId: node.session.id,
               })}
           onRenamed={onRenamed}
-          onDeleted={(id) => onSessionDeleted?.(id)}
           depth={depth}
           hasChildren={hasChildren}
           collapsed={collapsed}
@@ -2061,7 +2045,6 @@ function SessionTreeItem({
               onSelectSession={onSelectSession}
               onSidebarOperation={onSidebarOperation}
               onRenamed={onRenamed}
-              onSessionDeleted={onSessionDeleted}
               depth={depth + 1}
             />
           ))}
@@ -2147,7 +2130,6 @@ function SessionItem({
   onPinChange,
   onHideChange,
   onRenamed,
-  onDeleted,
   depth = 0,
   hasChildren = false,
   collapsed = false,
@@ -2165,7 +2147,6 @@ function SessionItem({
   onPinChange: () => void;
   onHideChange?: () => void;
   onRenamed?: () => void;
-  onDeleted?: (id: string) => void;
   depth?: number;
   hasChildren?: boolean;
   collapsed?: boolean;
@@ -2174,8 +2155,6 @@ function SessionItem({
   const [hovered, setHovered] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const title = session.name || session.firstMessage.slice(0, 50) || session.id.slice(0, 12);
@@ -2203,11 +2182,6 @@ function SessionItem({
     }
   }, [renameValue, session.id, session.name, onRenamed]);
 
-  const handleDeleteClick = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    setConfirmDelete(true);
-  }, []);
-
   const handlePinClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     onPinChange();
@@ -2217,23 +2191,6 @@ function SessionItem({
     e.stopPropagation();
     onHideChange?.();
   }, [onHideChange]);
-
-  const handleDeleteConfirm = useCallback(async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setConfirmDelete(false);
-    setDeleting(true);
-    try {
-      await fetch(`/api/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
-      onDeleted?.(session.id);
-    } catch {
-      setDeleting(false);
-    }
-  }, [session.id, onDeleted]);
-
-  const handleDeleteCancel = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    setConfirmDelete(false);
-  }, []);
 
   // Fixed-height outer wrapper — content swaps in place so the list never reflows
   const ITEM_HEIGHT = 54;
@@ -2251,60 +2208,15 @@ function SessionItem({
         paddingLeft: depth > 0 ? depth * 12 + 14 : 14,
         paddingRight: 8,
         cursor: "default",
-        background: confirmDelete
-          ? "rgba(239,68,68,0.06)"
-          : isSelected ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
-        borderLeft: confirmDelete
-          ? "2px solid #ef4444"
-          : isSelected ? "2px solid var(--accent)" : "2px solid transparent",
+        background: isSelected ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
+        borderLeft: isSelected ? "2px solid var(--accent)" : "2px solid transparent",
         transition: "background 0.1s",
-        opacity: deleting ? 0.5 : hiddenKind ? 0.68 : 1,
+        opacity: hiddenKind ? 0.68 : 1,
         gap: 6,
         overflow: "hidden",
       }}
     >
-      {confirmDelete ? (
-        /* ── Delete confirmation: same height, two flat buttons ── */
-        <>
-          <div style={{ flex: 1, minWidth: 0, fontSize: scaledMenuFontSize(12), color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            Delete <span style={{ fontWeight: 600 }}>&ldquo;{title.slice(0, 22)}{title.length > 22 ? "…" : ""}&rdquo;</span>?
-          </div>
-          <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
-            <button
-              onClick={handleDeleteConfirm}
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
-                height: 30, padding: "0 11px",
-                background: "#ef4444", border: "none",
-                borderRadius: 6, color: "#fff",
-                cursor: "pointer", fontSize: scaledMenuFontSize(12), fontWeight: 600,
-                whiteSpace: "nowrap",
-              }}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="3 6 5 6 21 6" />
-                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                <path d="M10 11v6M14 11v6" />
-                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-              </svg>
-              Delete
-            </button>
-            <button
-              onClick={handleDeleteCancel}
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "center",
-                height: 30, padding: "0 11px",
-                background: "var(--bg)", border: "1px solid var(--border)",
-                borderRadius: 6, color: "var(--text-muted)",
-                cursor: "pointer", fontSize: scaledMenuFontSize(12), fontWeight: 500,
-                whiteSpace: "nowrap",
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </>
-      ) : renaming ? (
+      {renaming ? (
         /* ── Rename: input fills the same row ── */
         <input
           ref={inputRef}
@@ -2394,7 +2306,7 @@ function SessionItem({
                 {title}
               </span>
             </div>
-            <div style={{ marginTop: 2, display: "flex", gap: 8, color: "var(--text-dim)", fontSize: scaledMenuFontSize(11), minWidth: 0, paddingRight: onHideChange ? 78 : 54 }}>
+            <div style={{ marginTop: 2, display: "flex", gap: 8, color: "var(--text-dim)", fontSize: scaledMenuFontSize(11), minWidth: 0, paddingRight: onHideChange ? 54 : 25 }}>
               {hiddenKind && (
                 <span style={{ color: hiddenKind === "explicit" ? "#d97706" : "var(--text-dim)", whiteSpace: "nowrap" }}>
                   {hiddenKind === "explicit" ? "Hidden" : "Hidden by parent"}
@@ -2464,7 +2376,7 @@ function SessionItem({
             </svg>
           </button>
 
-          {/* Rename, Hide/Restore, and Delete remain available on focus and touch. */}
+          {/* Rename and Hide/Restore remain available on focus and touch. */}
           <div className="session-row-actions" style={{ position: "absolute", right: hasChildren ? 56 : 34, bottom: 2, display: "flex", gap: 3, padding: 2, background: "var(--bg-hover)", borderRadius: 6, zIndex: 2 }}>
               <button
                 onClick={startRename}
@@ -2527,37 +2439,6 @@ function SessionItem({
                   )}
                 </button>
               )}
-              <button
-                onClick={handleDeleteClick}
-                title="Delete"
-                aria-label={`Delete ${title}`}
-                className="session-row-action"
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  width: 26, height: 24, padding: 0,
-                  background: "var(--bg-hover)", border: "1px solid var(--border)",
-                  borderRadius: 7, color: "var(--text-muted)",
-                  cursor: "pointer", flexShrink: 0,
-                  transition: "background 0.12s, color 0.12s, border-color 0.12s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "rgba(239,68,68,0.08)";
-                  e.currentTarget.style.color = "#ef4444";
-                  e.currentTarget.style.borderColor = "rgba(239,68,68,0.35)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                  e.currentTarget.style.color = "var(--text-muted)";
-                  e.currentTarget.style.borderColor = "var(--border)";
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="3 6 5 6 21 6" />
-                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                  <path d="M10 11v6M14 11v6" />
-                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                </svg>
-              </button>
           </div>
         </>
       )}

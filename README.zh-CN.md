@@ -47,7 +47,7 @@ PI_WEB_NO_OPEN=1 pi-web         # 适用于后台服务或开机自启
 
 - **数据目录**：默认读取 `~/.pi/agent/sessions` 下的会话文件。可通过环境变量 `PI_CODING_AGENT_DIR` 指定其他 pi agent 目录。
 - **会话文件**：路径形如 `~/.pi/agent/sessions/<编码后的工作目录>/<时间戳>_<uuid>.jsonl`。
-- **侧边栏状态**：固定会话和显式隐藏标记通过 pi agent 目录下的 `pi-web-sidebar.json` 在多个 pi-web 客户端之间共享。隐藏只影响显示，不会移动或重写会话 JSONL、改变固定状态，也不会停止正在运行的会话。
+- **侧边栏状态**：固定会话和显式隐藏标记通过 pi agent 目录下的 `pi-web-sidebar.json` 在多个 pi-web 客户端之间共享。隐藏只影响显示，不会移动或重写会话 JSONL、改变固定状态，也不会停止正在运行的会话。Pi Web 不提供永久删除会话的功能。
 - **模型配置**：Models 面板读写 pi agent 目录下的 `models.json`，模型列表和默认模型由 pi 的配置解析得到。
 - **文件访问**：文件浏览和预览面向当前选择的项目目录，以及会话中已出现过的工作目录。
 - **Git worktree**：什么时候显示切换器、新建目录在哪里、删除会影响什么，见 [pi-web 里的 Worktree](./docs/worktrees.zh-CN.md)。
@@ -85,7 +85,7 @@ app/
     home/           # 当前用户 home 目录
     models/         # 可用模型、默认模型、thinking levels
     models-config/  # 读写 models.json、测试模型
-    sessions/       # 会话读取、重命名、删除、上下文、HTML 导出
+    sessions/       # 会话读取、重命名、上下文、HTML 导出
     sidebar-state/  # 共享的固定/隐藏操作 API
     skills/         # skills 列表、搜索、安装、启停
 components/
