@@ -22,6 +22,14 @@ function transportSnapshot(connectionState = "idle", active = false, cursor = 0)
     errorClass: null, revision: cursor,
   });
 }
+function transportSnapshotWithState(connectionState, active, cursor, statePatch = {}, transportPatch = {}) {
+  const base = transportSnapshot(connectionState, active, cursor);
+  return protocol.freezeCanonicalData({
+    ...base,
+    ...transportPatch,
+    state: { ...base.state, ...statePatch, active },
+  });
+}
 class Handle {
   constructor(snapshot, owner = null, id = null) { this.snapshot = snapshot; this.owner = owner; this.id = id; this.snapshots = new Set(); this.effects = new Set(); this.releases = 0; }
   getSnapshot() { return this.snapshot; }
@@ -91,6 +99,60 @@ function findElement(root, predicate) {
 function elementText(root) {
   if (root.nodeType === 3) return root.nodeValue ?? "";
   return (root.childNodes ?? []).map(elementText).join("");
+}
+
+async function flushMountedWork() {
+  await React.act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await Promise.resolve();
+  });
+}
+
+async function mountExistingSessionHook(fetchImpl) {
+  const previous = {
+    window: globalThis.window,
+    document: globalThis.document,
+    fetch: globalThis.fetch,
+    act: globalThis.IS_REACT_ACT_ENVIRONMENT,
+  };
+  const dom = createMinimalDom();
+  globalThis.window = dom.window;
+  globalThis.document = dom.document;
+  globalThis.fetch = fetchImpl;
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const registry = new Registry();
+  registry.initialSnapshot = transportSnapshot("connected", false, 0);
+  const views = new SessionViewTransport(registry);
+  const binding = views.select("synthetic");
+  let latest = null;
+  function Consumer() {
+    latest = useAgentSession({
+      session: { id: "synthetic", path: "", cwd: "", created: "", modified: "", messageCount: 0, firstMessage: "" },
+      sessionViewBinding: binding,
+      sessionViewTransport: views,
+      newScreenGeneration: 1,
+      newSessionCwd: null,
+    });
+    return React.createElement("span", null, "hook");
+  }
+  const root = createRoot(dom.container);
+  await React.act(async () => root.render(React.createElement(Consumer)));
+  await flushMountedWork();
+  return {
+    dom,
+    registry,
+    latest: () => latest,
+    async cleanup() {
+      await React.act(async () => root.unmount());
+      views.dispose();
+      globalThis.window = previous.window;
+      globalThis.document = previous.document;
+      globalThis.fetch = previous.fetch;
+      globalThis.IS_REACT_ACT_ENVIRONMENT = previous.act;
+    },
+  };
 }
 
 test("mounted React DOM consumer receives canonical state before effect and provider releases view before registry", async () => {
@@ -803,6 +865,1137 @@ test("mounted slow transcript and leaf responses cannot erase a newer optimistic
     await React.act(async () => root.unmount());
   } finally {
     globalThis.window = previous.window; globalThis.document = previous.document; globalThis.fetch = previous.fetch; globalThis.IS_REACT_ACT_ENVIRONMENT = previous.act;
+  }
+});
+
+test("mounted live-tip transcript repair follows advancing non-null leaves with and without completion effects", async (t) => {
+  for (const scenario of [
+    { name: "prior tip with live completion", intermediateUserTip: false, deliverCompletion: true },
+    { name: "user tip with effect-less recovery", intermediateUserTip: true, deliverCompletion: false },
+  ]) {
+    await t.test(scenario.name, async () => {
+      const previous = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch, act: globalThis.IS_REACT_ACT_ENVIRONMENT };
+      const dom = createMinimalDom();
+      globalThis.window = dom.window; globalThis.document = dom.document; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+      const registry = new Registry();
+      registry.initialSnapshot = transportSnapshot("connected", false, 0);
+      const views = new SessionViewTransport(registry);
+      const binding = views.select("synthetic");
+      const baselineMessages = [
+        { role: "user", content: "baseline" },
+        { role: "assistant", model: "m", provider: "p", content: [{ type: "text", text: "baseline answer" }] },
+      ];
+      const completedMessages = [
+        ...baselineMessages,
+        { role: "user", content: "advance" },
+        { role: "assistant", model: "m", provider: "p", content: [{ type: "toolCall", toolCallId: "call", toolName: "tool", input: {} }] },
+        { role: "toolResult", toolCallId: "call", content: [{ type: "text", text: "result" }] },
+        { role: "assistant", model: "m", provider: "p", content: [{ type: "text", text: "final answer" }] },
+      ];
+      let transcript = { leafId: "prior-tip", messages: baselineMessages, entryIds: ["baseline-user", "prior-tip"] };
+      let rootRequests = 0;
+      const contextRequests = [];
+      globalThis.fetch = async (input, init = {}) => {
+        const url = String(input);
+        if (url.startsWith("/api/sessions/synthetic/state")) return Response.json({ running: false });
+        if (url.startsWith("/api/sessions/synthetic/context?")) {
+          contextRequests.push(url);
+          return Response.json({ context: { messages: baselineMessages, entryIds: ["baseline-user", "prior-tip"] } });
+        }
+        if (url.startsWith("/api/sessions/synthetic?")) {
+          rootRequests += 1;
+          return Response.json({
+            sessionId: "synthetic", filePath: "", tree: [], leafId: transcript.leafId,
+            context: { messages: transcript.messages, entryIds: transcript.entryIds, thinkingLevel: "off", model: null },
+          });
+        }
+        if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+        if (url === "/api/agent/synthetic" && init.method === "POST") return Response.json({ success: true, data: {} });
+        if (url === "/api/agent/synthetic") return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+        throw new Error(`unexpected ${url}`);
+      };
+      let latest = null;
+      function Consumer() {
+        latest = useAgentSession({
+          session: { id: "synthetic", path: "", cwd: "", created: "", modified: "", messageCount: 0, firstMessage: "" },
+          sessionViewBinding: binding, sessionViewTransport: views, newScreenGeneration: 1, newSessionCwd: null,
+        });
+        return React.createElement("span", null, "hook");
+      }
+      const root = createRoot(dom.container);
+      try {
+        await React.act(async () => root.render(React.createElement(Consumer)));
+        await flushMountedWork();
+        assert.equal(latest.activeLeafId, "prior-tip");
+        await React.act(async () => { assert.equal(await latest.handleSend("advance"), true); });
+        assert.equal(latest.messages.at(-1).content, "advance");
+
+        const handle = registry.handles.get("synthetic");
+        if (scenario.intermediateUserTip) {
+          transcript = {
+            leafId: "user-tip",
+            messages: [...baselineMessages, { role: "user", content: "advance" }],
+            entryIds: ["baseline-user", "prior-tip", "user-tip"],
+          };
+          await React.act(async () => handle.publish(transportSnapshotWithState("connected", true, 2, {
+            transcriptRevision: 1,
+            transcriptRefreshRequired: true,
+          })));
+          await flushMountedWork();
+          assert.equal(latest.activeLeafId, "user-tip", "a persisted user entry becomes the displayed live tip");
+          assert.equal(latest.messages.at(-1).content, "advance");
+        } else {
+          await React.act(async () => handle.publish(transportSnapshot("connected", true, 2)));
+        }
+
+        if (scenario.deliverCompletion) {
+          await React.act(async () => {
+            handle.effect({ streamEpoch: "epoch", sequence: 1, effect: { type: "message_completed", message: { role: "user", content: "advance" } } });
+            handle.effect({ streamEpoch: "epoch", sequence: 2, effect: { type: "message_completed", message: { role: "assistant", model: "m", provider: "p", content: [{ type: "text", text: "final answer" }] } } });
+          });
+          assert.equal(latest.messages.at(-1).content[0].text, "final answer", "projected completion remains immediate");
+        }
+
+        transcript = {
+          leafId: "assistant-tip",
+          messages: completedMessages,
+          entryIds: ["baseline-user", "prior-tip", "user-tip", "tool-call", "tool-result", "assistant-tip"],
+        };
+        const settled = scenario.deliverCompletion
+          ? transportSnapshotWithState("connected", false, 3, { transcriptRevision: 2, transcriptRefreshRequired: true })
+          : transportSnapshotWithState("recovering", false, 3, { transcriptRevision: 2, transcriptRefreshRequired: true }, { streamEpoch: "recovered" });
+        await React.act(async () => handle.publish(settled));
+        await flushMountedWork();
+        await flushMountedWork();
+
+        assert.equal(latest.activeLeafId, "assistant-tip");
+        assert.deepEqual(latest.messages, completedMessages);
+        assert.deepEqual(latest.entryIds, transcript.entryIds);
+        assert.equal(contextRequests.length, 0, "ordinary live-tip repair never falls back to prior-leaf context");
+        const minimumRootRequests = scenario.intermediateUserTip ? 3 : 2;
+        assert.ok(rootRequests >= minimumRootRequests && rootRequests <= minimumRootRequests + 1,
+          `bounded live-tip repair count: ${rootRequests}`);
+      } finally {
+        await React.act(async () => root.unmount());
+        views.dispose();
+        globalThis.window = previous.window; globalThis.document = previous.document; globalThis.fetch = previous.fetch; globalThis.IS_REACT_ACT_ENVIRONMENT = previous.act;
+      }
+    });
+  }
+});
+
+test("mounted new-session user tip remains live until effect-less assistant settlement", async () => {
+  const previous = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch, act: globalThis.IS_REACT_ACT_ENVIRONMENT };
+  const dom = createMinimalDom();
+  globalThis.window = dom.window; globalThis.document = dom.document; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const registry = new Registry();
+  registry.initialSnapshot = transportSnapshot("connected", false, 0);
+  const views = new SessionViewTransport(registry);
+  const userMessages = [{ role: "user", content: "first prompt" }];
+  const completedMessages = [
+    ...userMessages,
+    { role: "assistant", model: "m", provider: "p", content: [{ type: "toolCall", toolCallId: "first-call", toolName: "tool", input: {} }] },
+    { role: "toolResult", toolCallId: "first-call", content: [{ type: "text", text: "first result" }] },
+    { role: "assistant", model: "m", provider: "p", content: [{ type: "text", text: "first answer" }] },
+  ];
+  let transcript = { leafId: "user-tip", messages: userMessages, entryIds: ["user-tip"] };
+  let rootRequests = 0;
+  const contextRequests = [];
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+    if (url === "/api/agent/new") return Response.json({ sessionId: "materialized" });
+    if (url.startsWith("/api/sessions/materialized/context?")) {
+      contextRequests.push(url);
+      return Response.json({ context: { messages: userMessages, entryIds: ["user-tip"] } });
+    }
+    if (url.startsWith("/api/sessions/materialized?")) {
+      rootRequests += 1;
+      return Response.json({
+        sessionId: "materialized", filePath: "", tree: [], leafId: transcript.leafId,
+        context: { messages: transcript.messages, entryIds: transcript.entryIds, thinkingLevel: "off", model: null },
+      });
+    }
+    if (url === "/api/agent/materialized" && init.method === "POST") return Response.json({ success: true, data: {} });
+    if (url === "/api/agent/materialized") return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    throw new Error(`unexpected ${url}`);
+  };
+  let latest = null;
+  let promotions = 0;
+  function Consumer() {
+    latest = useAgentSession({
+      session: null, sessionViewBinding: null, sessionViewTransport: views,
+      newScreenGeneration: 1, newSessionCwd: "/synthetic",
+      onSessionCreated: () => { promotions += 1; },
+    });
+    return React.createElement("span", null, "new-hook");
+  }
+  const root = createRoot(dom.container);
+  try {
+    await React.act(async () => root.render(React.createElement(Consumer)));
+    await flushMountedWork();
+    await React.act(async () => { assert.equal(await latest.handleSend("first prompt"), true); });
+    const handle = registry.handles.get("materialized");
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", true, 1, {
+      transcriptRevision: 1,
+      transcriptRefreshRequired: true,
+    })));
+    await flushMountedWork();
+    assert.equal(latest.activeLeafId, "user-tip");
+    assert.deepEqual(latest.messages, userMessages);
+
+    transcript = { leafId: "assistant-tip", messages: completedMessages, entryIds: ["user-tip", "tool-call", "tool-result", "assistant-tip"] };
+    await React.act(async () => handle.publish(transportSnapshotWithState("recovering", false, 2, {
+      transcriptRevision: 2,
+      transcriptRefreshRequired: true,
+    }, { streamEpoch: "recovered" })));
+    await flushMountedWork();
+    await flushMountedWork();
+
+    assert.equal(latest.activeLeafId, "assistant-tip");
+    assert.deepEqual(latest.messages, completedMessages);
+    assert.deepEqual(latest.entryIds, transcript.entryIds);
+    assert.equal(contextRequests.length, 0);
+    assert.ok(rootRequests >= 2 && rootRequests <= 3, `bounded settlement repair count: ${rootRequests}`);
+    const settledRootRequests = rootRequests;
+    await React.act(async () => {
+      dom.window.dispatchEvent({ type: "online", bubbles: false });
+      dom.window.dispatchEvent({ type: "online", bubbles: false });
+    });
+    await flushMountedWork();
+    assert.equal(rootRequests, settledRootRequests, "quiescent sticky markers do not loop on recovery triggers");
+    assert.equal(promotions, 1);
+  } finally {
+    await React.act(async () => root.unmount());
+    views.dispose();
+    globalThis.window = previous.window; globalThis.document = previous.document; globalThis.fetch = previous.fetch; globalThis.IS_REACT_ACT_ENVIRONMENT = previous.act;
+  }
+});
+
+test("mounted queued root and ancestor context repairs re-evaluate explicit pin intent when they run", async () => {
+  const previous = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch, act: globalThis.IS_REACT_ACT_ENVIRONMENT };
+  const dom = createMinimalDom();
+  globalThis.window = dom.window; globalThis.document = dom.document; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const registry = new Registry();
+  registry.initialSnapshot = transportSnapshot("connected", false, 0);
+  const views = new SessionViewTransport(registry);
+  const binding = views.select("synthetic");
+  const latestMessages = [{ role: "user", content: "latest" }];
+  const ancestorMessages = [{ role: "user", content: "ancestor" }];
+  const descendantMessages = [
+    ...ancestorMessages,
+    { role: "user", content: "branch prompt" },
+    { role: "assistant", model: "m", provider: "p", content: [{ type: "text", text: "descendant" }] },
+  ];
+  let transcript = { leafId: "latest-tip", messages: latestMessages, entryIds: ["latest-tip"] };
+  let rootRequests = 0;
+  const contextRequests = [];
+  let deferContext = false;
+  let resolveDeferredContext;
+  const deferredContext = new Promise((resolve) => { resolveDeferredContext = resolve; });
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.startsWith("/api/sessions/synthetic/state")) return Response.json({ running: false });
+    if (url.startsWith("/api/sessions/synthetic/context?")) {
+      contextRequests.push(url);
+      if (deferContext) {
+        deferContext = false;
+        return deferredContext;
+      }
+      return Response.json({ context: { messages: ancestorMessages, entryIds: ["ancestor"] } });
+    }
+    if (url.startsWith("/api/sessions/synthetic?")) {
+      rootRequests += 1;
+      return Response.json({
+        sessionId: "synthetic", filePath: "", tree: [], leafId: transcript.leafId,
+        context: { messages: transcript.messages, entryIds: transcript.entryIds, thinkingLevel: "off", model: null },
+      });
+    }
+    if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+    if (url === "/api/agent/synthetic" && init.method === "POST") return Response.json({ success: true, data: {} });
+    if (url === "/api/agent/synthetic") return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    throw new Error(`unexpected ${url}`);
+  };
+  let latest = null;
+  function Consumer() {
+    latest = useAgentSession({
+      session: { id: "synthetic", path: "", cwd: "", created: "", modified: "", messageCount: 0, firstMessage: "" },
+      sessionViewBinding: binding, sessionViewTransport: views, newScreenGeneration: 1, newSessionCwd: null,
+    });
+    return React.createElement("span", null, "hook");
+  }
+  const root = createRoot(dom.container);
+  try {
+    await React.act(async () => root.render(React.createElement(Consumer)));
+    await flushMountedWork();
+    assert.equal(latest.activeLeafId, "latest-tip");
+
+    const handle = registry.handles.get("synthetic");
+    await React.act(async () => {
+      handle.publish(transportSnapshotWithState("connected", false, 1, {
+        transcriptRevision: 1,
+        transcriptRefreshRequired: true,
+      }));
+      await latest.handleNavigate("ancestor");
+    });
+    await flushMountedWork();
+    assert.equal(rootRequests, 1, "a queued live-root repair reroutes to the pin instead of issuing a stale root request");
+    assert.equal(latest.activeLeafId, "ancestor");
+    assert.deepEqual(latest.messages, ancestorMessages);
+
+    deferContext = true;
+    let oldContextNavigation;
+    await React.act(async () => {
+      oldContextNavigation = latest.handleNavigate("ancestor");
+      await Promise.resolve();
+    });
+    await React.act(async () => { assert.equal(await latest.handleSend("branch prompt"), true); });
+    transcript = { leafId: "descendant-tip", messages: descendantMessages, entryIds: ["ancestor", "branch-user", "descendant-tip"] };
+    await React.act(async () => registry.handles.get("synthetic").publish(transportSnapshotWithState("connected", false, 2, {
+      transcriptRevision: 2,
+      transcriptRefreshRequired: true,
+    })));
+    await flushMountedWork();
+    assert.equal(latest.activeLeafId, "descendant-tip", "live root repair is not blocked by an older in-flight context request");
+
+    await React.act(async () => {
+      resolveDeferredContext(Response.json({ context: { messages: ancestorMessages, entryIds: ["ancestor"] } }));
+      await oldContextNavigation;
+    });
+    await flushMountedWork();
+    await flushMountedWork();
+
+    assert.equal(latest.activeLeafId, "descendant-tip");
+    assert.deepEqual(latest.messages, descendantMessages);
+    assert.deepEqual(latest.entryIds, transcript.entryIds);
+    assert.equal(contextRequests.length, 2, "the pre-prompt ancestor request is rejected rather than retried after pin release");
+    assert.ok(rootRequests >= 2 && rootRequests <= 3, `bounded live-root convergence count: ${rootRequests}`);
+  } finally {
+    await React.act(async () => root.unmount());
+    views.dispose();
+    globalThis.window = previous.window; globalThis.document = previous.document; globalThis.fetch = previous.fetch; globalThis.IS_REACT_ACT_ENVIRONMENT = previous.act;
+  }
+});
+
+test("mounted post-prompt stale root keeps the optimistic exchange until a current live transcript covers it", async () => {
+  const previous = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch, act: globalThis.IS_REACT_ACT_ENVIRONMENT };
+  const dom = createMinimalDom();
+  globalThis.window = dom.window; globalThis.document = dom.document; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const registry = new Registry();
+  registry.initialSnapshot = transportSnapshot("connected", false, 0);
+  const views = new SessionViewTransport(registry);
+  const binding = views.select("synthetic");
+  const baselineMessages = [{ role: "user", content: "baseline" }];
+  const completedMessages = [
+    ...baselineMessages,
+    { role: "user", content: "advance" },
+    { role: "assistant", model: "m", provider: "p", content: [{ type: "text", text: "answer" }] },
+  ];
+  let transcript = { leafId: "baseline-tip", messages: baselineMessages, entryIds: ["baseline-tip"] };
+  let rootRequests = 0;
+  let deferNextRoot = false;
+  let resolveDeferredRoot;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.startsWith("/api/sessions/synthetic/state")) return Response.json({ running: false });
+    if (url.startsWith("/api/sessions/synthetic?")) {
+      rootRequests += 1;
+      if (deferNextRoot) {
+        deferNextRoot = false;
+        return new Promise((resolve) => { resolveDeferredRoot = resolve; });
+      }
+      return Response.json({
+        sessionId: "synthetic", filePath: "", tree: [], leafId: transcript.leafId,
+        context: { messages: transcript.messages, entryIds: transcript.entryIds, thinkingLevel: "off", model: null },
+      });
+    }
+    if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+    if (url === "/api/agent/synthetic" && init.method === "POST") return Response.json({ success: true, data: {} });
+    if (url === "/api/agent/synthetic") return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    throw new Error(`unexpected ${url}`);
+  };
+  let latest = null;
+  function Consumer() {
+    latest = useAgentSession({
+      session: { id: "synthetic", path: "", cwd: "", created: "", modified: "", messageCount: 0, firstMessage: "" },
+      sessionViewBinding: binding, sessionViewTransport: views, newScreenGeneration: 1, newSessionCwd: null,
+    });
+    return React.createElement("span", null, "hook");
+  }
+  const root = createRoot(dom.container);
+  try {
+    await React.act(async () => root.render(React.createElement(Consumer)));
+    await flushMountedWork();
+    await React.act(async () => { assert.equal(await latest.handleSend("advance"), true); });
+
+    deferNextRoot = true;
+    const handle = registry.handles.get("synthetic");
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", true, 1, {
+      transcriptRevision: 1,
+      transcriptRefreshRequired: true,
+    })));
+    await flushMountedWork();
+    assert.equal(rootRequests, 2, "the stale request starts after the prompt generation");
+
+    await React.act(async () => {
+      resolveDeferredRoot(Response.json({
+        sessionId: "synthetic", filePath: "", tree: [], leafId: "baseline-tip",
+        context: { messages: baselineMessages, entryIds: ["baseline-tip"], thinkingLevel: "off", model: null },
+      }));
+    });
+    await flushMountedWork();
+    assert.equal(latest.activeLeafId, "baseline-tip");
+    assert.equal(latest.messages.at(-1).content, "advance", "a current-token response still must contain the current prompt");
+
+    transcript = { leafId: "assistant-tip", messages: completedMessages, entryIds: ["baseline-tip", "advance-tip", "assistant-tip"] };
+    await React.act(async () => dom.window.dispatchEvent({ type: "online", bubbles: false }));
+    await flushMountedWork();
+    assert.equal(latest.activeLeafId, "assistant-tip");
+    assert.deepEqual(latest.messages, completedMessages);
+    assert.equal(rootRequests, 4, "urgent recovery plus one settlement refresh replace the delayed stale-response retry without looping");
+  } finally {
+    await React.act(async () => root.unmount());
+    views.dispose();
+    globalThis.window = previous.window; globalThis.document = previous.document; globalThis.fetch = previous.fetch; globalThis.IS_REACT_ACT_ENVIRONMENT = previous.act;
+  }
+});
+
+test("mounted prompt POST failure is covered by an accepted HTTP transcript without projected activity", async () => {
+  const previous = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch, act: globalThis.IS_REACT_ACT_ENVIRONMENT };
+  const dom = createMinimalDom();
+  globalThis.window = dom.window; globalThis.document = dom.document; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const registry = new Registry();
+  registry.initialSnapshot = transportSnapshot("connected", false, 0);
+  const views = new SessionViewTransport(registry);
+  const binding = views.select("synthetic");
+  const ancestorMessages = [{ role: "user", content: "ancestor" }];
+  const descendantMessages = [
+    ...ancestorMessages,
+    { role: "user", content: "persisted prompt" },
+    { role: "assistant", model: "m", provider: "p", content: [{ type: "text", text: "persisted answer" }] },
+  ];
+  let transcript = { leafId: "root-tip", messages: [{ role: "user", content: "root" }], entryIds: ["root-tip"] };
+  let resolvePromptResponse;
+  let markPromptStarted;
+  const promptStarted = new Promise((resolve) => { markPromptStarted = resolve; });
+  const promptResponse = new Promise((resolve) => { resolvePromptResponse = resolve; });
+  const contextRequests = [];
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.startsWith("/api/sessions/synthetic/state")) return Response.json({ running: false });
+    if (url.startsWith("/api/sessions/synthetic/context?")) {
+      contextRequests.push(url);
+      return Response.json({ context: { messages: ancestorMessages, entryIds: ["ancestor"] } });
+    }
+    if (url.startsWith("/api/sessions/synthetic?")) return Response.json({
+      sessionId: "synthetic", filePath: "", tree: [], leafId: transcript.leafId,
+      context: { messages: transcript.messages, entryIds: transcript.entryIds, thinkingLevel: "off", model: null },
+    });
+    if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+    if (url === "/api/agent/synthetic" && init.method === "POST") {
+      const command = typeof init.body === "string" ? JSON.parse(init.body) : {};
+      if (command.type === "prompt") {
+        markPromptStarted();
+        return promptResponse;
+      }
+      return Response.json({ success: true, data: {} });
+    }
+    if (url === "/api/agent/synthetic") return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    throw new Error(`unexpected ${url}`);
+  };
+  let latest = null;
+  function Consumer() {
+    latest = useAgentSession({
+      session: { id: "synthetic", path: "", cwd: "", created: "", modified: "", messageCount: 0, firstMessage: "" },
+      sessionViewBinding: binding, sessionViewTransport: views, newScreenGeneration: 1, newSessionCwd: null,
+    });
+    return React.createElement("span", null, "hook");
+  }
+  const root = createRoot(dom.container);
+  try {
+    await React.act(async () => root.render(React.createElement(Consumer)));
+    await flushMountedWork();
+    await React.act(async () => { await latest.handleNavigate("ancestor"); });
+
+    let sendPromise;
+    await React.act(async () => {
+      sendPromise = latest.handleSend("persisted prompt");
+      await promptStarted;
+    });
+    transcript = { leafId: "descendant-tip", messages: descendantMessages, entryIds: ["ancestor", "prompt-tip", "descendant-tip"] };
+    await React.act(async () => registry.handles.get("synthetic").publish(transportSnapshotWithState("connected", false, 1, {
+      transcriptRevision: 1,
+      transcriptRefreshRequired: true,
+    })));
+    await flushMountedWork();
+    assert.equal(latest.activeLeafId, "descendant-tip");
+    assert.deepEqual(latest.messages, descendantMessages);
+
+    let accepted;
+    await React.act(async () => {
+      resolvePromptResponse(Response.json({}, { status: 500 }));
+      accepted = await sendPromise;
+    });
+    assert.equal(accepted, true, "the persisted prompt proves execution despite the lost POST response");
+    assert.equal(latest.activeLeafId, "descendant-tip");
+    assert.deepEqual(latest.messages, descendantMessages);
+    assert.equal(contextRequests.length, 1, "failure coverage does not restore the ancestor pin");
+
+    await React.act(async () => dom.window.dispatchEvent({ type: "online", bubbles: false }));
+    await flushMountedWork();
+    assert.equal(latest.agentRunning, false, "idle runtime recovery settles the accepted HTTP-covered lineage");
+  } finally {
+    await React.act(async () => root.unmount());
+    views.dispose();
+    globalThis.window = previous.window; globalThis.document = previous.document; globalThis.fetch = previous.fetch; globalThis.IS_REACT_ACT_ENVIRONMENT = previous.act;
+  }
+});
+
+test("mounted urgent live repair cancels a delayed pinned-context retry", async () => {
+  const previous = {
+    window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch,
+    setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout, act: globalThis.IS_REACT_ACT_ENVIRONMENT,
+  };
+  const delayedRepairs = [];
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    if (delay === 250) {
+      const timer = { delayedRepair: true, callback, args, cancelled: false };
+      delayedRepairs.push(timer);
+      return timer;
+    }
+    return previous.setTimeout(callback, delay, ...args);
+  };
+  globalThis.clearTimeout = (timer) => {
+    if (timer?.delayedRepair) timer.cancelled = true;
+    else previous.clearTimeout(timer);
+  };
+  const dom = createMinimalDom();
+  globalThis.window = dom.window; globalThis.document = dom.document; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const registry = new Registry();
+  registry.initialSnapshot = transportSnapshot("connected", false, 0);
+  const views = new SessionViewTransport(registry);
+  const binding = views.select("synthetic");
+  const liveMessages = [{ role: "user", content: "live" }];
+  const descendantMessages = [
+    { role: "user", content: "ancestor" },
+    { role: "user", content: "branch prompt" },
+    { role: "assistant", model: "m", provider: "p", content: [{ type: "text", text: "branch answer" }] },
+  ];
+  let transcript = { leafId: "live-tip", messages: liveMessages, entryIds: ["live-tip"] };
+  let contextRequests = 0;
+  let rootRequests = 0;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.startsWith("/api/sessions/synthetic/state")) return Response.json({ running: false });
+    if (url.startsWith("/api/sessions/synthetic/context?")) {
+      contextRequests += 1;
+      return Response.json({}, { status: 503 });
+    }
+    if (url.startsWith("/api/sessions/synthetic?")) {
+      rootRequests += 1;
+      return Response.json({
+        sessionId: "synthetic", filePath: "", tree: [], leafId: transcript.leafId,
+        context: { messages: transcript.messages, entryIds: transcript.entryIds, thinkingLevel: "off", model: null },
+      });
+    }
+    if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+    if (url === "/api/agent/synthetic" && init.method === "POST") return Response.json({ success: true, data: {} });
+    if (url === "/api/agent/synthetic") return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    throw new Error(`unexpected ${url}`);
+  };
+  let latest = null;
+  function Consumer() {
+    latest = useAgentSession({
+      session: { id: "synthetic", path: "", cwd: "", created: "", modified: "", messageCount: 0, firstMessage: "" },
+      sessionViewBinding: binding, sessionViewTransport: views, newScreenGeneration: 1, newSessionCwd: null,
+    });
+    return React.createElement("span", null, "hook");
+  }
+  const root = createRoot(dom.container);
+  try {
+    await React.act(async () => root.render(React.createElement(Consumer)));
+    await flushMountedWork();
+    await React.act(async () => { await latest.handleNavigate("ancestor"); });
+    assert.equal(contextRequests, 1);
+    assert.equal(delayedRepairs.length, 1, "failed context repair installs one delayed retry");
+    assert.equal(delayedRepairs[0].cancelled, false);
+
+    await React.act(async () => { assert.equal(await latest.handleSend("branch prompt"), true); });
+    transcript = { leafId: "descendant-tip", messages: descendantMessages, entryIds: ["ancestor", "prompt-tip", "descendant-tip"] };
+    await React.act(async () => registry.handles.get("synthetic").publish(transportSnapshotWithState("recovering", false, 1, {
+      transcriptRevision: 1,
+      transcriptRefreshRequired: true,
+    }, { streamEpoch: "recovered" })));
+    await flushMountedWork();
+
+    assert.equal(delayedRepairs[0].cancelled, true, "the old context backoff cannot suppress urgent live convergence");
+    assert.equal(contextRequests, 1, "the cancelled context timer never executes");
+    assert.equal(rootRequests, 3, "the immediate live root and one settlement refresh run without advancing the delayed timer");
+    assert.equal(latest.activeLeafId, "descendant-tip");
+    assert.deepEqual(latest.messages, descendantMessages);
+  } finally {
+    await React.act(async () => root.unmount());
+    views.dispose();
+    globalThis.window = previous.window; globalThis.document = previous.document; globalThis.fetch = previous.fetch;
+    globalThis.setTimeout = previous.setTimeout; globalThis.clearTimeout = previous.clearTimeout; globalThis.IS_REACT_ACT_ENVIRONMENT = previous.act;
+  }
+});
+
+test("mounted prompt waits for native leaf navigation and current cancellation or error restores live intent", async (t) => {
+  for (const mode of ["success", "cancelled", "error"]) {
+    await t.test(mode, async () => {
+      const previous = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch, act: globalThis.IS_REACT_ACT_ENVIRONMENT };
+      const dom = createMinimalDom();
+      globalThis.window = dom.window; globalThis.document = dom.document; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+      const registry = new Registry();
+      registry.initialSnapshot = transportSnapshot("connected", false, 0);
+      const views = new SessionViewTransport(registry);
+      const binding = views.select("synthetic");
+      const liveMessages = [{ role: "user", content: "live" }];
+      const ancestorMessages = [{ role: "user", content: "ancestor" }];
+      let resolveNavigation;
+      let markNavigationStarted;
+      const navigationStarted = new Promise((resolve) => { markNavigationStarted = resolve; });
+      const navigationResponse = new Promise((resolve) => { resolveNavigation = resolve; });
+      let promptRequests = 0;
+      globalThis.fetch = async (input, init = {}) => {
+        const url = String(input);
+        if (url.startsWith("/api/sessions/synthetic/state")) return Response.json({ running: false });
+        if (url.startsWith("/api/sessions/synthetic/context?")) return Response.json({ context: { messages: ancestorMessages, entryIds: ["ancestor"] } });
+        if (url.startsWith("/api/sessions/synthetic?")) return Response.json({
+          sessionId: "synthetic", filePath: "", tree: [], leafId: "live-tip",
+          context: { messages: liveMessages, entryIds: ["live-tip"], thinkingLevel: "off", model: null },
+        });
+        if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+        if (url === "/api/agent/synthetic" && init.method === "POST") {
+          const command = typeof init.body === "string" ? JSON.parse(init.body) : {};
+          if (command.type === "navigate_tree") {
+            markNavigationStarted();
+            return navigationResponse;
+          }
+          if (command.type === "prompt") promptRequests += 1;
+          return Response.json({ success: true, data: {} });
+        }
+        if (url === "/api/agent/synthetic") return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+        throw new Error(`unexpected ${url}`);
+      };
+      let latest = null;
+      function Consumer() {
+        latest = useAgentSession({
+          session: { id: "synthetic", path: "", cwd: "", created: "", modified: "", messageCount: 0, firstMessage: "" },
+          sessionViewBinding: binding, sessionViewTransport: views, newScreenGeneration: 1, newSessionCwd: null,
+        });
+        return React.createElement("span", null, "hook");
+      }
+      const root = createRoot(dom.container);
+      try {
+        await React.act(async () => root.render(React.createElement(Consumer)));
+        await flushMountedWork();
+        let navigationPromise;
+        await React.act(async () => {
+          navigationPromise = latest.handleNavigate("ancestor");
+          await navigationStarted;
+        });
+        let sendPromise;
+        await React.act(async () => {
+          sendPromise = latest.handleSend("branch prompt");
+          await Promise.resolve();
+        });
+        assert.equal(promptRequests, 0, "the prompt cannot overtake native navigation");
+
+        let sendAccepted;
+        await React.act(async () => {
+          resolveNavigation(mode === "success"
+            ? Response.json({ success: true, data: {} })
+            : mode === "cancelled"
+              ? Response.json({ success: true, data: { cancelled: true } })
+              : Response.json({ error: "navigation failed" }, { status: 500 }));
+          await navigationPromise;
+          sendAccepted = await sendPromise;
+        });
+        await flushMountedWork();
+
+        assert.equal(sendAccepted, mode === "success");
+        assert.equal(promptRequests, mode === "success" ? 1 : 0);
+        if (mode === "success") {
+          assert.equal(latest.activeLeafId, "ancestor");
+          assert.equal(latest.messages.at(-1).content, "branch prompt");
+        } else {
+          assert.equal(latest.activeLeafId, "live-tip");
+          assert.deepEqual(latest.messages, liveMessages);
+        }
+      } finally {
+        await React.act(async () => root.unmount());
+        views.dispose();
+        globalThis.window = previous.window; globalThis.document = previous.document; globalThis.fetch = previous.fetch; globalThis.IS_REACT_ACT_ENVIRONMENT = previous.act;
+      }
+    });
+  }
+});
+
+test("mounted rapid native navigations serialize before the following prompt", async () => {
+  const contexts = {
+    first: [{ role: "user", content: "first branch" }],
+    second: [{ role: "user", content: "second branch" }],
+  };
+  const navigationTargets = [];
+  const navigationResolvers = [];
+  let promptRequests = 0;
+  const mounted = await mountExistingSessionHook(async (input, init = {}) => {
+    const url = String(input);
+    if (url.startsWith("/api/sessions/synthetic/state")) return Response.json({ running: false });
+    if (url.startsWith("/api/sessions/synthetic/context?")) {
+      const leafId = new URL(url, "http://synthetic").searchParams.get("leafId");
+      return Response.json({ context: { messages: contexts[leafId], entryIds: [leafId] } });
+    }
+    if (url.startsWith("/api/sessions/synthetic?")) return Response.json({
+      sessionId: "synthetic", filePath: "", tree: [], leafId: "live-tip",
+      context: { messages: [{ role: "user", content: "live" }], entryIds: ["live-tip"], thinkingLevel: "off", model: null },
+    });
+    if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+    if (url === "/api/agent/synthetic" && init.method === "POST") {
+      const command = typeof init.body === "string" ? JSON.parse(init.body) : {};
+      if (command.type === "navigate_tree") {
+        navigationTargets.push(command.targetId);
+        return new Promise((resolve) => navigationResolvers.push(resolve));
+      }
+      if (command.type === "prompt") promptRequests += 1;
+      return Response.json({ success: true, data: {} });
+    }
+    if (url === "/api/agent/synthetic") return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    let firstNavigation;
+    await React.act(async () => {
+      firstNavigation = mounted.latest().handleNavigate("first");
+      await Promise.resolve();
+    });
+    let secondNavigation;
+    await React.act(async () => {
+      secondNavigation = mounted.latest().handleNavigate("second");
+      await Promise.resolve();
+    });
+    let sendPromise;
+    await React.act(async () => {
+      sendPromise = mounted.latest().handleSend("branch prompt");
+      await Promise.resolve();
+    });
+    assert.deepEqual(navigationTargets, ["first"], "the second native navigation is queued behind the first");
+    assert.equal(promptRequests, 0);
+
+    await React.act(async () => {
+      navigationResolvers[0](Response.json({ success: true, data: {} }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    assert.deepEqual(navigationTargets, ["first", "second"]);
+    assert.equal(promptRequests, 0, "the prompt still waits for the latest requested branch");
+
+    let accepted;
+    await React.act(async () => {
+      navigationResolvers[1](Response.json({ success: true, data: {} }));
+      await firstNavigation;
+      await secondNavigation;
+      accepted = await sendPromise;
+    });
+    assert.equal(accepted, true);
+    assert.equal(promptRequests, 1);
+    assert.equal(mounted.latest().activeLeafId, "second");
+    assert.equal(mounted.latest().messages.at(-1).content, "branch prompt");
+  } finally {
+    await mounted.cleanup();
+  }
+});
+
+test("mounted identical prompt after selecting a user entry requires a distinct native sibling", async () => {
+  const baseUser = { role: "user", content: "base" };
+  const baseAssistant = { role: "assistant", model: "m", provider: "p", content: [{ type: "text", text: "base answer" }] };
+  const selectedUser = { role: "user", content: "replacement" };
+  const oldAssistant = { role: "assistant", model: "m", provider: "p", content: [{ type: "text", text: "old answer" }] };
+  const tree = [{
+    entry: { type: "message", id: "base-user", parentId: null, timestamp: "2026-01-01T00:00:00Z", message: baseUser },
+    children: [{
+      entry: { type: "message", id: "base-assistant", parentId: "base-user", timestamp: "2026-01-01T00:00:01Z", message: baseAssistant },
+      children: [{
+        entry: { type: "message", id: "selected-user", parentId: "base-assistant", timestamp: "2026-01-01T00:00:02Z", message: selectedUser },
+        children: [{
+          entry: { type: "message", id: "old-assistant", parentId: "selected-user", timestamp: "2026-01-01T00:00:03Z", message: oldAssistant },
+          children: [],
+        }],
+      }],
+    }],
+  }];
+  let transcript = {
+    leafId: "old-assistant",
+    messages: [baseUser, baseAssistant, selectedUser, oldAssistant],
+    entryIds: ["base-user", "base-assistant", "selected-user", "old-assistant"],
+  };
+  let resolvePromptResponse;
+  let markPromptStarted;
+  let promptRequests = 0;
+  const promptStarted = new Promise((resolve) => { markPromptStarted = resolve; });
+  const promptResponse = new Promise((resolve) => { resolvePromptResponse = resolve; });
+  const mounted = await mountExistingSessionHook(async (input, init = {}) => {
+    const url = String(input);
+    if (url.startsWith("/api/sessions/synthetic/state")) return Response.json({ running: false });
+    if (url.startsWith("/api/sessions/synthetic/context?")) return Response.json({
+      context: { messages: [baseUser, baseAssistant, selectedUser], entryIds: ["base-user", "base-assistant", "selected-user"] },
+    });
+    if (url.startsWith("/api/sessions/synthetic?")) return Response.json({
+      sessionId: "synthetic", filePath: "", tree, leafId: transcript.leafId,
+      context: { messages: transcript.messages, entryIds: transcript.entryIds, thinkingLevel: "off", model: null },
+    });
+    if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+    if (url === "/api/agent/synthetic" && init.method === "POST") {
+      const command = typeof init.body === "string" ? JSON.parse(init.body) : {};
+      if (command.type === "prompt") {
+        promptRequests += 1;
+        if (promptRequests === 1) {
+          markPromptStarted();
+          return promptResponse;
+        }
+      }
+      return Response.json({ success: true, data: {} });
+    }
+    if (url === "/api/agent/synthetic") return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    await React.act(async () => { await mounted.latest().handleNavigate("selected-user"); });
+    let sendPromise;
+    await React.act(async () => {
+      sendPromise = mounted.latest().handleSend("replacement");
+      await promptStarted;
+    });
+    await React.act(async () => mounted.registry.handles.get("synthetic").publish(transportSnapshotWithState("connected", false, 1, {
+      transcriptRevision: 1,
+      transcriptRefreshRequired: true,
+    })));
+    await flushMountedWork();
+    assert.equal(mounted.latest().messages.at(-1).role, "user", "the old identical entry cannot cover the optimistic replacement");
+
+    await React.act(async () => {
+      resolvePromptResponse(Response.json({}, { status: 500 }));
+      assert.equal(await sendPromise, false, "the old entry cannot convert a failed POST into acceptance");
+    });
+    await flushMountedWork();
+    assert.equal(mounted.latest().activeLeafId, "selected-user");
+    await React.act(async () => { assert.equal(await mounted.latest().handleSend("replacement"), true); });
+    const replacementAssistant = { role: "assistant", model: "m", provider: "p", content: [{ type: "text", text: "replacement answer" }] };
+    transcript = {
+      leafId: "replacement-assistant",
+      messages: [baseUser, baseAssistant, { role: "user", content: "replacement" }, replacementAssistant],
+      entryIds: ["base-user", "base-assistant", "replacement-user", "replacement-assistant"],
+    };
+    await React.act(async () => mounted.registry.handles.get("synthetic").publish(transportSnapshotWithState("connected", false, 2, {
+      transcriptRevision: 2,
+      transcriptRefreshRequired: true,
+    })));
+    await flushMountedWork();
+
+    assert.equal(mounted.latest().activeLeafId, "replacement-assistant");
+    assert.deepEqual(mounted.latest().messages, transcript.messages);
+    assert.ok(!mounted.latest().entryIds.includes("selected-user"), "the replacement is a sibling of the selected user entry");
+  } finally {
+    await mounted.cleanup();
+  }
+});
+
+test("mounted successful projected and built-in compaction retire the exact prompt floor", async (t) => {
+  for (const mode of ["projected", "builtin"]) {
+    await t.test(mode, async () => {
+      const baseline = [{ role: "user", content: "baseline" }];
+      const persistedPrompt = [...baseline, { role: "user", content: "compact me" }];
+      const compacted = [
+        { role: "custom", customType: "compaction", content: "summary", display: true },
+        { role: "assistant", model: "m", provider: "p", content: [{ type: "text", text: "retained suffix" }] },
+      ];
+      let transcript = { leafId: "baseline-tip", messages: baseline, entryIds: ["baseline-tip"] };
+      const mounted = await mountExistingSessionHook(async (input, init = {}) => {
+        const url = String(input);
+        if (url.startsWith("/api/sessions/synthetic/state")) return Response.json({ running: false });
+        if (url.startsWith("/api/sessions/synthetic?")) return Response.json({
+          sessionId: "synthetic", filePath: "", tree: [], leafId: transcript.leafId,
+          context: { messages: transcript.messages, entryIds: transcript.entryIds, thinkingLevel: "off", model: null },
+        });
+        if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+        if (url === "/api/agent/synthetic" && init.method === "POST") {
+          const command = typeof init.body === "string" ? JSON.parse(init.body) : {};
+          if (command.type === "compact") {
+            transcript = { leafId: "compaction-tip", messages: compacted, entryIds: ["compaction-tip", "retained-assistant"] };
+            return Response.json({ success: true, data: { tokensBefore: 10, estimatedTokensAfter: 5 } });
+          }
+          return Response.json({ success: true, data: {} });
+        }
+        if (url === "/api/agent/synthetic") return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+        throw new Error(`unexpected ${url}`);
+      });
+      try {
+        await React.act(async () => { assert.equal(await mounted.latest().handleSend("compact me"), true); });
+        transcript = { leafId: "prompt-tip", messages: persistedPrompt, entryIds: ["baseline-tip", "prompt-tip"] };
+        await React.act(async () => mounted.registry.handles.get("synthetic").publish(transportSnapshotWithState("connected", true, 1, {
+          transcriptRevision: 1,
+          transcriptRefreshRequired: true,
+        })));
+        await flushMountedWork();
+        assert.deepEqual(mounted.latest().messages, persistedPrompt, "the prompt floor is established before compaction");
+
+        if (mode === "projected") {
+          await React.act(async () => mounted.registry.handles.get("synthetic").publish(transportSnapshotWithState("connected", true, 2, {
+            transcriptRevision: 1,
+            transcriptRefreshRequired: true,
+            compaction: { active: true, reason: "threshold" },
+          })));
+          transcript = { leafId: "compaction-tip", messages: compacted, entryIds: ["compaction-tip", "retained-assistant"] };
+          await React.act(async () => mounted.registry.handles.get("synthetic").publish(transportSnapshotWithState("connected", false, 3, {
+            transcriptRevision: 2,
+            transcriptRefreshRequired: true,
+            compaction: { active: false, reason: "threshold", tokensBefore: 10, estimatedTokensAfter: 5 },
+          })));
+          await flushMountedWork();
+          await flushMountedWork();
+        } else {
+          let result;
+          await React.act(async () => { result = await mounted.latest().handleBuiltinSlashCommand("/compact"); });
+          assert.equal(result.handled, true);
+        }
+
+        assert.equal(mounted.latest().activeLeafId, "compaction-tip");
+        assert.deepEqual(mounted.latest().messages, compacted, "summary-only compaction converges without the exact user prompt");
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+  }
+});
+
+test("mounted recovery clone of an older completed compaction preserves the later prompt floor", async () => {
+  const baseline = [{ role: "user", content: "baseline" }];
+  const completed = [
+    ...baseline,
+    { role: "user", content: "later prompt" },
+    { role: "assistant", model: "m", provider: "p", content: [{ type: "text", text: "later answer" }] },
+  ];
+  let transcript = { leafId: "baseline-tip", messages: baseline, entryIds: ["baseline-tip"] };
+  let rootRequests = 0;
+  const oldCompaction = { active: false, reason: "threshold", tokensBefore: 40, estimatedTokensAfter: 20 };
+  const mounted = await mountExistingSessionHook(async (input, init = {}) => {
+    const url = String(input);
+    if (url.startsWith("/api/sessions/synthetic/state")) return Response.json({ running: false });
+    if (url.startsWith("/api/sessions/synthetic?")) {
+      rootRequests += 1;
+      return Response.json({
+        sessionId: "synthetic", filePath: "", tree: [], leafId: transcript.leafId,
+        context: { messages: transcript.messages, entryIds: transcript.entryIds, thinkingLevel: "off", model: null },
+      });
+    }
+    if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+    if (url === "/api/agent/synthetic" && init.method === "POST") return Response.json({ success: true, data: {} });
+    if (url === "/api/agent/synthetic") return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    await React.act(async () => mounted.registry.handles.get("synthetic").publish(transportSnapshotWithState("connected", false, 1, {
+      compaction: oldCompaction,
+    })));
+    await React.act(async () => { assert.equal(await mounted.latest().handleSend("later prompt"), true); });
+
+    await React.act(async () => mounted.registry.handles.get("synthetic").publish(transportSnapshotWithState("recovering", false, 2, {
+      transcriptRevision: 1,
+      transcriptRefreshRequired: true,
+      compaction: { ...oldCompaction },
+    }, { streamEpoch: "recovered" })));
+    await flushMountedWork();
+    await flushMountedWork();
+    assert.equal(mounted.latest().messages.at(-1).content, "later prompt", "semantic cloning of old compaction state cannot expose the stale root");
+
+    transcript = { leafId: "later-assistant", messages: completed, entryIds: ["baseline-tip", "later-user", "later-assistant"] };
+    await React.act(async () => mounted.dom.window.dispatchEvent({ type: "online", bubbles: false }));
+    await flushMountedWork();
+    await flushMountedWork();
+    assert.equal(mounted.latest().activeLeafId, "later-assistant");
+    assert.deepEqual(mounted.latest().messages, completed);
+    assert.ok(rootRequests >= 3 && rootRequests <= 5, `bounded stale-compaction recovery count: ${rootRequests}`);
+  } finally {
+    await mounted.cleanup();
+  }
+});
+
+test("mounted extension slash command preserves an explicit historical pin", async () => {
+  const latestMessages = [{ role: "user", content: "latest" }];
+  const ancestorMessages = [{ role: "user", content: "ancestor" }];
+  let rootRequests = 0;
+  let contextRequests = 0;
+  const mounted = await mountExistingSessionHook(async (input, init = {}) => {
+    const url = String(input);
+    if (url.startsWith("/api/sessions/synthetic/state")) return Response.json({ running: false });
+    if (url.startsWith("/api/sessions/synthetic/context?")) {
+      contextRequests += 1;
+      return Response.json({ context: { messages: ancestorMessages, entryIds: ["ancestor"] } });
+    }
+    if (url.startsWith("/api/sessions/synthetic?")) {
+      rootRequests += 1;
+      return Response.json({
+        sessionId: "synthetic", filePath: "", tree: [], leafId: "latest-tip",
+        context: { messages: latestMessages, entryIds: ["latest-tip"], thinkingLevel: "off", model: null },
+      });
+    }
+    if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+    if (url === "/api/agent/synthetic" && init.method === "POST") return Response.json({ success: true, data: {} });
+    if (url === "/api/agent/synthetic") return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    await React.act(async () => { await mounted.latest().handleNavigate("ancestor"); });
+    await React.act(async () => { assert.equal(await mounted.latest().handleSend("/extension-command"), true); });
+    await React.act(async () => mounted.registry.handles.get("synthetic").publish(transportSnapshotWithState("connected", false, 1, {
+      transcriptRevision: 1,
+      transcriptRefreshRequired: true,
+    })));
+    await flushMountedWork();
+
+    assert.equal(mounted.latest().activeLeafId, "ancestor");
+    assert.deepEqual(mounted.latest().messages, ancestorMessages);
+    assert.equal(rootRequests, 1, "command settlement cannot switch pinned context to the live root");
+    assert.ok(contextRequests >= 2 && contextRequests <= 3, `bounded pinned repair count: ${contextRequests}`);
+  } finally {
+    await mounted.cleanup();
+  }
+});
+
+test("mounted prompt failure restores only the current prior pin while navigation and canonical coverage win", async (t) => {
+  for (const mode of ["restore", "later-navigation", "covered"]) {
+    await t.test(mode, async () => {
+      const previous = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch, act: globalThis.IS_REACT_ACT_ENVIRONMENT };
+      const dom = createMinimalDom();
+      globalThis.window = dom.window; globalThis.document = dom.document; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+      const registry = new Registry();
+      registry.initialSnapshot = transportSnapshot("connected", false, 0);
+      const views = new SessionViewTransport(registry);
+      const binding = views.select("synthetic");
+      const rootMessages = [{ role: "user", content: "root" }];
+      const ancestorMessages = [{ role: "user", content: "ancestor" }];
+      const laterMessages = [{ role: "user", content: "later" }];
+      const descendantMessages = [
+        ...ancestorMessages,
+        { role: "user", content: "pending" },
+        { role: "assistant", model: "m", provider: "p", content: [{ type: "text", text: "covered descendant" }] },
+      ];
+      let transcript = { leafId: "root-tip", messages: rootMessages, entryIds: ["root-tip"] };
+      let rootRequests = 0;
+      const contextRequests = [];
+      let resolvePromptResponse;
+      let markPromptStarted;
+      const promptStarted = new Promise((resolve) => { markPromptStarted = resolve; });
+      const promptResponse = new Promise((resolve) => { resolvePromptResponse = resolve; });
+      globalThis.fetch = async (input, init = {}) => {
+        const url = String(input);
+        if (url.startsWith("/api/sessions/synthetic/state")) return Response.json({ running: false });
+        if (url.startsWith("/api/sessions/synthetic/context?")) {
+          const leafId = new URL(url, "http://synthetic").searchParams.get("leafId");
+          contextRequests.push(leafId);
+          const messages = leafId === "later" ? laterMessages : ancestorMessages;
+          return Response.json({ context: { messages, entryIds: [leafId] } });
+        }
+        if (url.startsWith("/api/sessions/synthetic?")) {
+          rootRequests += 1;
+          return Response.json({
+            sessionId: "synthetic", filePath: "", tree: [], leafId: transcript.leafId,
+            context: { messages: transcript.messages, entryIds: transcript.entryIds, thinkingLevel: "off", model: null },
+          });
+        }
+        if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+        if (url === "/api/agent/synthetic" && init.method === "POST") {
+          const command = typeof init.body === "string" ? JSON.parse(init.body) : {};
+          if (command.type === "prompt") {
+            markPromptStarted();
+            return promptResponse;
+          }
+          return Response.json({ success: true, data: {} });
+        }
+        if (url === "/api/agent/synthetic") return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+        throw new Error(`unexpected ${url}`);
+      };
+      let latest = null;
+      function Consumer() {
+        latest = useAgentSession({
+          session: { id: "synthetic", path: "", cwd: "", created: "", modified: "", messageCount: 0, firstMessage: "" },
+          sessionViewBinding: binding, sessionViewTransport: views, newScreenGeneration: 1, newSessionCwd: null,
+        });
+        return React.createElement("span", null, "hook");
+      }
+      const root = createRoot(dom.container);
+      try {
+        await React.act(async () => root.render(React.createElement(Consumer)));
+        await flushMountedWork();
+        await React.act(async () => { await latest.handleNavigate("ancestor"); });
+        assert.equal(latest.activeLeafId, "ancestor");
+
+        let sendPromise;
+        await React.act(async () => {
+          sendPromise = latest.handleSend("pending");
+          await promptStarted;
+        });
+        const handle = registry.handles.get("synthetic");
+        if (mode === "restore") {
+          transcript = { leafId: "other-live-tip", messages: rootMessages, entryIds: ["other-live-tip"] };
+          await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 1, {
+            transcriptRevision: 1,
+            transcriptRefreshRequired: true,
+          })));
+          await flushMountedWork();
+          assert.equal(latest.activeLeafId, "ancestor", "a current root transcript that omits the prompt cannot replace the optimistic branch");
+          assert.equal(latest.messages.at(-1).content, "pending", "the optimistic prompt remains visible until execution is decided");
+        } else if (mode === "later-navigation") {
+          await React.act(async () => { await latest.handleNavigate("later"); });
+          assert.equal(latest.activeLeafId, "later");
+        } else {
+          transcript = { leafId: "covered-tip", messages: descendantMessages, entryIds: ["ancestor", "pending", "covered-tip"] };
+          await React.act(async () => handle.publish(transportSnapshot("connected", true, 1)));
+        }
+
+        let accepted;
+        await React.act(async () => {
+          resolvePromptResponse(Response.json({}, { status: 500 }));
+          accepted = await sendPromise;
+        });
+        assert.equal(accepted, mode === "covered");
+
+        if (mode === "covered") {
+          await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 2, {
+            transcriptRevision: 1,
+            transcriptRefreshRequired: true,
+          })));
+          await flushMountedWork();
+          await flushMountedWork();
+          assert.equal(latest.activeLeafId, "covered-tip", "canonical coverage keeps descendant-following mode after an ambiguous POST failure");
+          assert.deepEqual(latest.messages, descendantMessages);
+          assert.deepEqual(contextRequests, ["ancestor"]);
+          assert.equal(rootRequests, 2);
+        } else if (mode === "restore") {
+          await flushMountedWork();
+          assert.equal(latest.activeLeafId, "ancestor");
+          assert.deepEqual(latest.messages, ancestorMessages);
+          assert.deepEqual(contextRequests, ["ancestor", "ancestor"]);
+        } else {
+          transcript = { leafId: "new-root", messages: rootMessages, entryIds: ["new-root"] };
+          await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 1, {
+            transcriptRevision: 1,
+            transcriptRefreshRequired: true,
+          })));
+          await flushMountedWork();
+          assert.equal(latest.activeLeafId, "later", "navigation after prompt start prevents restoration of the older pin");
+          assert.deepEqual(latest.messages, laterMessages);
+          assert.equal(rootRequests, 1, "background transcript repair remains routed to the later explicit pin");
+          assert.deepEqual(contextRequests, ["ancestor", "later", "later"]);
+        }
+      } finally {
+        await React.act(async () => root.unmount());
+        views.dispose();
+        globalThis.window = previous.window; globalThis.document = previous.document; globalThis.fetch = previous.fetch; globalThis.IS_REACT_ACT_ENVIRONMENT = previous.act;
+      }
+    });
   }
 });
 

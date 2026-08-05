@@ -6,6 +6,7 @@ export type SessionHttpObservation = Readonly<{
   sessionId: string;
   viewGeneration: number;
   transport: SessionClientSnapshot;
+  /** A concrete historical pin; null means follow the advancing live tip. */
   selectedLeafId: string | null;
   leafGeneration: number;
   promptUiGeneration: number;

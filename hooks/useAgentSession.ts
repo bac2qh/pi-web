@@ -311,6 +311,103 @@ export interface AttachedImage {
   previewUrl: string;
 }
 
+type PromptTranscriptFloor = {
+  runId: number;
+  leafGeneration: number;
+  priorEntryId: string | null;
+  userMessageKey: string;
+  priorMatchingUserMessages: number;
+  preexistingMatchingEntryIds: ReadonlySet<string>;
+  compactionAtStart: string;
+  observedCompactionStart: boolean;
+  covered: boolean;
+};
+
+type LeafNavigationOutcome = "succeeded" | "failed" | "superseded";
+type LeafIntent = {
+  pinnedLeafId: string | null;
+  promptBaseLeafId: string | null;
+  activeLeafId: string | null;
+};
+type PendingLeafNavigation = {
+  generation: number;
+  promise: Promise<LeafNavigationOutcome>;
+};
+
+function nativePromptBaseForTreeTarget(tree: SessionTreeNode[], targetId: string): string | null {
+  const pending = [...tree];
+  while (pending.length > 0) {
+    const node = pending.pop()!;
+    if (node.entry.id === targetId) {
+      const entry = node.entry;
+      return (entry.type === "message" && entry.message.role === "user")
+        || entry.type === "custom_message"
+        ? entry.parentId
+        : targetId;
+    }
+    pending.push(...node.children);
+  }
+  return targetId;
+}
+
+function matchingUserEntryIds(messages: AgentMessage[], entryIds: string[], key: string): ReadonlySet<string> {
+  const matching = new Set<string>();
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    const entryId = entryIds[index];
+    if (entryId && message.role === "user" && userMessageKey(message) === key) matching.add(entryId);
+  }
+  return matching;
+}
+
+function compactionFingerprint(compaction: SessionViewSnapshot["transport"]["state"]["compaction"]): string {
+  if (!compaction) return "none";
+  return JSON.stringify({
+    active: compaction.active,
+    reason: compaction.reason,
+    aborted: compaction.aborted ?? false,
+    hasError: compaction.errorMessage !== undefined,
+    tokensBefore: compaction.tokensBefore ?? null,
+    estimatedTokensAfter: compaction.estimatedTokensAfter ?? null,
+  });
+}
+
+function transcriptCoversPromptFloor(
+  messages: AgentMessage[],
+  entryIds: string[],
+  floor: PromptTranscriptFloor,
+): boolean {
+  const matchingIndexes: number[] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message.role === "user" && userMessageKey(message) === floor.userMessageKey) matchingIndexes.push(index);
+  }
+  const eligibleIndexes = floor.preexistingMatchingEntryIds.size === 0
+    ? matchingIndexes
+    : matchingIndexes.filter((index) => {
+      const entryId = entryIds[index];
+      return !!entryId && !floor.preexistingMatchingEntryIds.has(entryId);
+    });
+  if (floor.priorEntryId === null) {
+    return floor.preexistingMatchingEntryIds.size > 0
+      ? eligibleIndexes.length > 0
+      : matchingIndexes.length > floor.priorMatchingUserMessages;
+  }
+
+  const priorIndex = entryIds.indexOf(floor.priorEntryId);
+  if (priorIndex !== -1) return eligibleIndexes.some((index) => index > priorIndex);
+
+  // A compaction can replace the pre-prompt path with a summary while retaining
+  // the current user entry. In that transformed descendant, the exact prompt
+  // is the usable floor even though the prior displayed entry is no longer in
+  // the HTTP transcript.
+  const compactionIndex = messages.findIndex((message) => (
+    message.role === "custom"
+    && (message as { customType?: string }).customType === "compaction"
+  ));
+  return compactionIndex !== -1 && eligibleIndexes.some((index) => index > compactionIndex);
+}
+
 type SelectedModel = { provider: string; modelId: string };
 type ModelEntry = { id: string; name: string; provider: string };
 type ModelsResponse = {
@@ -385,6 +482,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const httpLiveSeededRef = useRef(false);
   const lastEffectRef = useRef<{ epoch: string; sequence: number } | null>(null);
   const httpReconciliationRef = useRef(new SessionHttpReconciliation());
+  const pinnedLeafIdRef = useRef<string | null>(null);
+  const pinnedPromptBaseLeafIdRef = useRef<string | null>(null);
+  const confirmedLeafIntentRef = useRef<LeafIntent>({
+    pinnedLeafId: null,
+    promptBaseLeafId: null,
+    activeLeafId: null,
+  });
   const leafGenerationRef = useRef(0);
   const promptUiGenerationRef = useRef(0);
   const transcriptRepairScheduledRef = useRef(false);
@@ -404,8 +508,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const newSessionPromotedRef = useRef(false);
   const promptRunIdRef = useRef(0);
   const optimisticUserMessageKeyRef = useRef<string | null>(null);
+  const promptTranscriptFloorRef = useRef<PromptTranscriptFloor | null>(null);
+  const pendingLeafNavigationRef = useRef<PendingLeafNavigation | null>(null);
   const loadSessionRef = useRef<((sid: string, showLoading?: boolean, includeState?: boolean) => Promise<unknown>) | null>(null);
-  const loadContextRef = useRef<((sid: string, leafId: string | null) => Promise<void>) | null>(null);
+  const loadContextRef = useRef<((sid: string, leafId: string) => Promise<void>) | null>(null);
   const reconcileAgentStateRef = useRef<((sid: string) => Promise<void>) | null>(null);
   const applyProjectedSnapshotRef = useRef<((snapshot: SessionViewSnapshot) => void) | null>(null);
   const applyProjectedEffectRef = useRef<((delivery: SessionEffectDelivery) => void) | null>(null);
@@ -422,16 +528,34 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       sessionId: sid,
       viewGeneration: snapshot.generation,
       transport: snapshot.transport,
-      selectedLeafId: activeLeafId,
+      selectedLeafId: pinnedLeafIdRef.current,
       leafGeneration: leafGenerationRef.current,
       promptUiGeneration: promptUiGenerationRef.current,
       promptRunGeneration: promptRunIdRef.current,
       promptLineage: viewBindingRef.current?.getPromptLineage() ?? null,
     });
-  }, [activeLeafId]);
+  }, []);
 
-  const scheduleHttpRepair = useCallback((resource: SessionHttpResource, delayMs = 0) => {
+  const scheduleHttpRepair = useCallback((requestedResource: SessionHttpResource, delayMs = 0) => {
+    const resource: SessionHttpResource = requestedResource === "runtime"
+      ? "runtime"
+      : pinnedLeafIdRef.current === null ? "transcript" : "context";
     const flag = resource === "runtime" ? runtimeRepairScheduledRef : transcriptRepairScheduledRef;
+    if (delayMs === 0) {
+      const delayedResources: SessionHttpResource[] = resource === "runtime"
+        ? ["runtime"]
+        : ["transcript", "context"];
+      let cancelledDelayedRepair = false;
+      for (const delayedResource of delayedResources) {
+        const timer = repairTimersRef.current[delayedResource];
+        if (timer === undefined) continue;
+        clearTimeout(timer);
+        delete repairTimersRef.current[delayedResource];
+        httpReconciliationRef.current.cancelSchedule(delayedResource);
+        cancelledDelayedRepair = true;
+      }
+      if (cancelledDelayedRepair) flag.current = false;
+    }
     if (flag.current || repairTimersRef.current[resource]
       || !httpReconciliationRef.current.requestSchedule(resource)) return;
     flag.current = true;
@@ -439,18 +563,28 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       delete repairTimersRef.current[resource];
       flag.current = false;
       httpReconciliationRef.current.cancelSchedule(resource);
+
+      // Leaf intent can change while a coalesced repair waits. Select the HTTP
+      // authority only when it actually runs so an old context cannot restore
+      // an ancestor and an old root repair cannot overwrite a later pin.
+      const pinnedLeafId = pinnedLeafIdRef.current;
+      const currentResource: SessionHttpResource = resource === "runtime"
+        ? "runtime"
+        : pinnedLeafId === null ? "transcript" : "context";
+      if (currentResource !== resource) httpReconciliationRef.current.markDirty(currentResource);
+
       // A scheduled marker may race an initial/requested repair that began
       // after scheduling. Coalesce rather than superseding that live request.
-      if (httpReconciliationRef.current.isInFlight(resource)) return;
+      if (httpReconciliationRef.current.isInFlight(currentResource)) return;
       const sid = sessionIdRef.current;
       if (!sid || !hookMountedRef.current) return;
-      if (resource === "runtime") void reconcileAgentStateRef.current?.(sid);
-      else if (resource === "context") void loadContextRef.current?.(sid, activeLeafId);
+      if (currentResource === "runtime") void reconcileAgentStateRef.current?.(sid);
+      else if (currentResource === "context" && pinnedLeafId !== null) void loadContextRef.current?.(sid, pinnedLeafId);
       else void loadSessionRef.current?.(sid, false, false);
     };
     if (delayMs > 0) repairTimersRef.current[resource] = setTimeout(run, delayMs);
     else queueMicrotask(run);
-  }, [activeLeafId]);
+  }, []);
 
   const retryFailedHttpRepair = useCallback((resource: SessionHttpResource, observation: SessionHttpObservation | null) => {
     if (!observation) return;
@@ -527,6 +661,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         scheduleHttpRepair(transcriptToken.selectedLeafId === null ? "transcript" : "context");
         return null;
       }
+      const promptFloor = promptTranscriptFloorRef.current;
+      const guardsCurrentPrompt = transcriptToken.selectedLeafId === null
+        && promptFloor !== null
+        && promptFloor.runId === transcriptToken.promptRunGeneration
+        && promptFloor.leafGeneration === transcriptToken.leafGeneration;
+      if (guardsCurrentPrompt && !transcriptCoversPromptFloor(d.context.messages, d.context.entryIds ?? [], promptFloor)) {
+        httpReconciliationRef.current.finish(transcriptToken, current, false);
+        retryFailedHttpRepair("transcript", current);
+        return null;
+      }
+      if (guardsCurrentPrompt) promptFloor.covered = true;
       setData(d);
       setActiveLeafId(d.leafId);
       setMessages(d.context.messages);
@@ -622,13 +767,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [currentHttpObservation, retryFailedHttpRepair, scheduleHttpRepair]);
   loadSessionRef.current = loadSession;
 
-  const loadContext = useCallback(async (sid: string, leafId: string | null) => {
+  const loadContext = useCallback(async (sid: string, leafId: string) => {
     const observation = currentHttpObservation(sid);
     if (!observation) return;
+    if (observation.selectedLeafId !== leafId) {
+      scheduleHttpRepair(observation.selectedLeafId === null ? "transcript" : "context");
+      return;
+    }
     const token = httpReconciliationRef.current.begin("context", observation);
     try {
-      const params = new URLSearchParams({ deferThinking: "1", deferMedia: "1" });
-      if (leafId) params.set("leafId", leafId);
+      const params = new URLSearchParams({ deferThinking: "1", deferMedia: "1", leafId });
       const url = `/api/sessions/${encodeURIComponent(sid)}/context?${params}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -813,6 +961,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setRetryInfo(projected.retry ? { ...projected.retry } : null);
     const compactionStarted = projected.compaction?.active === true
       && previous?.transport.state.compaction?.active !== true;
+    if (compactionStarted && promptTranscriptFloorRef.current) {
+      promptTranscriptFloorRef.current.observedCompactionStart = true;
+    }
     setIsCompacting(projected.compaction?.active ?? false);
     if (compactionStarted) {
       setCompactError(null);
@@ -824,6 +975,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       } else if (!projected.compaction.aborted
         && typeof projected.compaction.tokensBefore === "number"
         && typeof projected.compaction.estimatedTokensAfter === "number") {
+        const promptFloor = promptTranscriptFloorRef.current;
+        const completedCompaction = snapshot.transport.state.compaction;
+        if (promptFloor && (promptFloor.observedCompactionStart
+          || compactionFingerprint(completedCompaction) !== promptFloor.compactionAtStart)) {
+          promptTranscriptFloorRef.current = null;
+        }
         setCompactError(null);
         setCompactResult({
           reason: projected.compaction.reason,
@@ -1019,7 +1176,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (!sid) return;
       const observation = currentHttpObservation(sid);
       if (!observation) return;
-      const transcriptResource: SessionHttpResource = activeLeafId === null ? "transcript" : "context";
+      const transcriptResource: SessionHttpResource = observation.selectedLeafId === null ? "transcript" : "context";
       if (httpReconciliationRef.current.needsRepair(transcriptResource, observation)) {
         scheduleHttpRepair(transcriptResource);
       }
@@ -1039,7 +1196,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("online", reconcile);
     };
-  }, [activeLeafId, agentRunning, currentHttpObservation, scheduleHttpRepair]);
+  }, [agentRunning, currentHttpObservation, scheduleHttpRepair]);
 
   useEffect(() => {
     agentRunningRef.current = agentRunning;
@@ -1057,8 +1214,23 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const trimmedMessage = message.trim();
     if (!trimmedMessage && !images?.length) return false;
     if (agentRunning) return false;
+    while (pendingLeafNavigationRef.current) {
+      const transition = pendingLeafNavigationRef.current;
+      const outcome = await transition.promise;
+      if (outcome === "failed") return false;
+    }
+    if (agentRunningRef.current) return false;
     const isSlashCommandPrompt = !images?.length && trimmedMessage.startsWith("/");
+    const followsLiveTip = !isSlashCommandPrompt;
     const promptRunId = promptRunIdRef.current + 1;
+    const priorPinnedLeafId = pinnedLeafIdRef.current;
+    const priorPinnedPromptBaseLeafId = pinnedPromptBaseLeafIdRef.current;
+    if (followsLiveTip) {
+      pinnedLeafIdRef.current = null;
+      pinnedPromptBaseLeafIdRef.current = null;
+      leafGenerationRef.current += 1;
+    }
+    const promptLeafGeneration = leafGenerationRef.current;
 
     const imageBlocks = images?.map((img) => ({ type: "image" as const, source: { type: "base64" as const, media_type: img.mimeType, data: img.data } }));
     const userMsg: AgentMessage = {
@@ -1068,9 +1240,31 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         : message,
       timestamp: Date.now(),
     };
+    const promptUserMessageKey = userMessageKey(userMsg);
+    const promptBaseLeafId = priorPinnedLeafId !== null
+      ? priorPinnedPromptBaseLeafId
+      : activeLeafId;
+    const promptTranscriptFloor: PromptTranscriptFloor | null = isSlashCommandPrompt ? null : {
+      runId: promptRunId,
+      leafGeneration: promptLeafGeneration,
+      priorEntryId: promptBaseLeafId,
+      userMessageKey: promptUserMessageKey,
+      priorMatchingUserMessages: priorPinnedLeafId !== null && promptBaseLeafId === null
+        ? 0
+        : messages.reduce((count, priorMessage) => (
+          priorMessage.role === "user" && userMessageKey(priorMessage) === promptUserMessageKey ? count + 1 : count
+        ), 0),
+      preexistingMatchingEntryIds: matchingUserEntryIds(messages, entryIds, promptUserMessageKey),
+      compactionAtStart: compactionFingerprint(
+        viewBindingRef.current?.getSnapshot().transport.state.compaction ?? null,
+      ),
+      observedCompactionStart: false,
+      covered: false,
+    };
+    promptTranscriptFloorRef.current = promptTranscriptFloor;
     promptUiGenerationRef.current += 1;
     setMessages((prev) => [...prev, userMsg]);
-    optimisticUserMessageKeyRef.current = userMessageKey(userMsg);
+    optimisticUserMessageKeyRef.current = promptUserMessageKey;
     promptRunIdRef.current = promptRunId;
     promptClassificationRef.current = isSlashCommandPrompt ? "slash_command" : "prompt";
     agentRunningRef.current = true;
@@ -1149,7 +1343,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       return true;
     } catch (e) {
-      const failureOutcome = dispatchedClaim?.failed() ?? "rolled_back";
+      const transcriptCovered = promptTranscriptFloor !== null
+        && promptTranscriptFloorRef.current === promptTranscriptFloor
+        && promptTranscriptFloor.covered;
+      if (transcriptCovered && dispatchedClaim && sentSessionId) {
+        const settlementSessionId = sentSessionId;
+        dispatchedClaim.accepted(() => probePromptSettlement(settlementSessionId));
+      }
+      const failureOutcome = transcriptCovered ? "covered" : dispatchedClaim?.failed() ?? "rolled_back";
       if (failureOutcome === "covered") {
         // The exact page lineage already observed ordered canonical activity
         // or settlement. A lost/failed HTTP response cannot undo an executing
@@ -1161,6 +1362,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         return true;
       }
       currentPromptClaimRef.current = null;
+      if (promptTranscriptFloor !== null && promptTranscriptFloorRef.current === promptTranscriptFloor) {
+        promptTranscriptFloorRef.current = null;
+      }
+      const restorePinnedLeaf = followsLiveTip
+        && priorPinnedLeafId !== null
+        && leafGenerationRef.current === promptLeafGeneration;
+      if (restorePinnedLeaf) {
+        pinnedLeafIdRef.current = priorPinnedLeafId;
+        pinnedPromptBaseLeafIdRef.current = priorPinnedPromptBaseLeafId;
+        leafGenerationRef.current += 1;
+        setActiveLeafId(priorPinnedLeafId);
+      }
       const optimisticKey = optimisticUserMessageKeyRef.current;
       if (optimisticKey) {
         setMessages((prev) => {
@@ -1178,12 +1391,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setAgentPhase(null);
       dispatch({ type: "end" });
       promptClassificationRef.current = null;
+      if (restorePinnedLeaf) scheduleHttpRepair("context");
       if (selectedMaterializedView && (isNewScreenCurrent?.(newScreenGeneration) ?? false)) {
         sessionViewTransport.select(null);
       }
       return false;
     }
-  }, [isNew, newSessionCwd, newSessionModel, newScreenGeneration, isNewScreenCurrent, session, sessionViewBinding, sessionViewTransport, agentRunning, ensureNewSession, attachViewBinding, promoteNewSession, waitForPromptSettlement, probePromptSettlement, addNotice]);
+  }, [isNew, newSessionCwd, newSessionModel, newScreenGeneration, isNewScreenCurrent, session, sessionViewBinding, sessionViewTransport, agentRunning, activeLeafId, messages, entryIds, ensureNewSession, attachViewBinding, promoteNewSession, waitForPromptSettlement, probePromptSettlement, addNotice, scheduleHttpRepair]);
 
   const handleAbort = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -1215,27 +1429,92 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [onSessionForked]);
 
-  const handleNavigate = useCallback(async (entryId: string) => {
+  const navigateToLeaf = useCallback(async (leafId: string): Promise<LeafNavigationOutcome> => {
     const sid = sessionIdRef.current;
-    if (!sid) return;
-    sendAgentCommand(sid, { type: "navigate_tree", targetId: entryId }).catch(() => {});
+    if (!sid) return "failed";
+    const previousTransition = pendingLeafNavigationRef.current;
+    if (!previousTransition) {
+      confirmedLeafIntentRef.current = {
+        pinnedLeafId: pinnedLeafIdRef.current,
+        promptBaseLeafId: pinnedPromptBaseLeafIdRef.current,
+        activeLeafId,
+      };
+    }
+    const promptBaseLeafId = nativePromptBaseForTreeTarget(data?.tree ?? [], leafId);
+    pinnedLeafIdRef.current = leafId;
+    pinnedPromptBaseLeafIdRef.current = promptBaseLeafId;
     leafGenerationRef.current += 1;
-    promptUiGenerationRef.current += 1;
-    setActiveLeafId(entryId);
-    await loadContext(sid, entryId);
-  }, [loadContext]);
-
-  const handleLeafChange = useCallback(async (leafId: string | null) => {
-    leafGenerationRef.current += 1;
+    const navigationGeneration = leafGenerationRef.current;
     promptUiGenerationRef.current += 1;
     setActiveLeafId(leafId);
-    const sid = sessionIdRef.current;
-    if (!sid) return;
-    await loadContext(sid, leafId);
-    if (leafId) {
-      sendAgentCommand(sid, { type: "navigate_tree", targetId: leafId }).catch(() => {});
+
+    const finishNavigation = (succeeded: boolean): LeafNavigationOutcome => {
+      if (succeeded) {
+        confirmedLeafIntentRef.current = {
+          pinnedLeafId: leafId,
+          promptBaseLeafId,
+          activeLeafId: leafId,
+        };
+      }
+      const isCurrent = pendingLeafNavigationRef.current?.generation === navigationGeneration
+        && leafGenerationRef.current === navigationGeneration
+        && pinnedLeafIdRef.current === leafId;
+      if (!isCurrent) return "superseded";
+      pendingLeafNavigationRef.current = null;
+      if (succeeded) return "succeeded";
+
+      const confirmed = confirmedLeafIntentRef.current;
+      pinnedLeafIdRef.current = confirmed.pinnedLeafId;
+      pinnedPromptBaseLeafIdRef.current = confirmed.promptBaseLeafId;
+      leafGenerationRef.current += 1;
+      promptUiGenerationRef.current += 1;
+      setActiveLeafId(confirmed.activeLeafId);
+      scheduleHttpRepair(confirmed.pinnedLeafId === null ? "transcript" : "context");
+      return "failed";
+    };
+
+    const promise = (async (): Promise<LeafNavigationOutcome> => {
+      if (previousTransition) await previousTransition.promise;
+      try {
+        const result = await sendAgentCommand<{ cancelled?: boolean }>(sid, {
+          type: "navigate_tree",
+          targetId: leafId,
+        });
+        return finishNavigation(!result?.cancelled);
+      } catch {
+        return finishNavigation(false);
+      }
+    })();
+    pendingLeafNavigationRef.current = { generation: navigationGeneration, promise };
+    const contextRequest = loadContext(sid, leafId);
+    const [outcome] = await Promise.all([promise, contextRequest]);
+    return outcome;
+  }, [activeLeafId, data?.tree, loadContext, scheduleHttpRepair]);
+
+  const handleNavigate = useCallback(async (entryId: string) => {
+    await navigateToLeaf(entryId);
+  }, [navigateToLeaf]);
+
+  const handleLeafChange = useCallback(async (leafId: string | null) => {
+    if (leafId !== null) {
+      await navigateToLeaf(leafId);
+      return;
     }
-  }, [loadContext]);
+    const navigationGeneration = leafGenerationRef.current + 1;
+    pinnedLeafIdRef.current = null;
+    pinnedPromptBaseLeafIdRef.current = null;
+    leafGenerationRef.current = navigationGeneration;
+    promptUiGenerationRef.current += 1;
+    setActiveLeafId(null);
+    while (pendingLeafNavigationRef.current) {
+      const transition = pendingLeafNavigationRef.current;
+      await transition.promise;
+      if (pendingLeafNavigationRef.current === transition) pendingLeafNavigationRef.current = null;
+    }
+    if (leafGenerationRef.current !== navigationGeneration) return;
+    const sid = sessionIdRef.current;
+    if (sid) await loadSession(sid);
+  }, [loadSession, navigateToLeaf]);
 
   const handleModelChange = useCallback(async (provider: string, modelId: string) => {
     if (isNew) {
@@ -1270,6 +1549,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     try {
       const result = await sendAgentCommand<CompactCommandResult>(sid, { type: "compact" });
       setCompactResult(readCompactResult(result, "manual"));
+      promptTranscriptFloorRef.current = null;
       await loadSession(sid, true);
     } catch (e) {
       setCompactError(e instanceof Error ? e.message : String(e));
@@ -1385,6 +1665,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             ...(args ? { customInstructions: args } : {}),
           });
           setCompactResult(readCompactResult(result, "manual"));
+          promptTranscriptFloorRef.current = null;
           if (await loadSession(sid, true)) promoteNewSession();
           return complete({ handled: true, message: "Compacted context" });
         }
