@@ -22,3 +22,7 @@
 - Added session-removal policy memory after removing Pi Web's destructive session route and sidebar action in favor of reversible Hide/Restore, preserving the stale-extension-context rationale and the separate follow-up boundary for other native-disposal paths.
 - Added live-session transcript-reconciliation memory after separating displayed and pinned leaf intent, making root/context repair follow current intent, and hardening prompt persistence floors, navigation ordering, and compaction recovery without widening the server or protocol boundary.
 - Added running-session-status memory after moving global membership publication to stable fanout boundaries, making final idle receipt-aware, and preserving newer same-ID publisher authority across delayed and reentrant lifecycle work.
+
+## 2026-08-06
+
+- Updated custom-server transport memory after completing the global/session/file-watch WebSocket migration, bounded replay/backpressure/admission, 30-minute semantic idle, heartbeat, and owned-shutdown lifecycle; recorded that practical user acceptance does not imply the exact combined S7 load matrix was reconstructed.

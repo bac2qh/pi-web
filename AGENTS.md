@@ -15,19 +15,17 @@ Lint: `npm run lint`
 ## Architecture
 
 ```
-Browser             Pi Web Node/Next Server         AgentSession (in-process)
-  │                        │                               │
-  ├─ GET /api/sessions ────▶ reads ~/.pi/agent/sessions/   │
-  ├─ GET /api/sessions/[id] reads .jsonl file directly     │
-  ├─ GET /api/agent/running/events ───▶ running id SSE     │
-  │                        │                               │
-  ├─ send message ─────────▶ POST /api/agent/[id]          │
-  │                        │   startRpcSession() ─────────▶│ createAgentSession()
-  │                        │   session.send(cmd) ─────────▶│ session.prompt()
-  │                        │                               │
-  ├─ SSE connect ──────────▶ GET /api/agent/[id]/events    │
-  │                        │   session.onEvent() ◀─────────│ session.subscribe()
-  │◀── data: {...} ─────────│                               │
+Browser                 Pi Web Node/Next Server          AgentSession (in-process)
+  │                            │                                │
+  ├─ GET /api/sessions ────────▶ reads ~/.pi/agent/sessions/    │
+  ├─ GET /api/sessions/[id] ───▶ reads .jsonl directly          │
+  ├─ HTTP agent commands ──────▶ startRpcSession()/send() ─────▶│
+  │                            │                                │
+  ├─ POST /api/transport/ticket (running/session/file-watch)    │
+  ├─ WS /_pi/websocket ────────▶ one-use authorized upgrade     │
+  │◀─ running + sessions_changed frames                         │
+  │◀─ projected session deltas/replay/snapshots ◀───────────────│
+  │◀─ file connected/change metadata                            │
 ```
 
 **Session browsing** (read-only): reads `.jsonl` files through SDK `SessionManager` helpers and `lib/session-reader.ts` — no AgentSession created.  
@@ -46,8 +44,6 @@ app/api/
   sidebar-state/route.ts          GET/PATCH shared pin and hidden-sidebar state
   agent/new/route.ts              POST { cwd, message, toolNames?, provider?, modelId? }
   agent/[id]/route.ts             GET state | POST any command
-  agent/[id]/events/route.ts      GET SSE stream
-  agent/running/events/route.ts   GET SSE stream of currently-running session ids
   auth/all-providers/route.ts     GET API-key provider list
   auth/api-key/[provider]/route.ts GET/POST/DELETE provider API key status/storage
   auth/login/[provider]/route.ts  GET OAuth/device-code SSE | POST manual code
@@ -84,12 +80,18 @@ lib/
   tool-presets.ts     PRESET_NONE/DEFAULT/FULL + getPresetFromTools()
   types.ts            shared TypeScript types
   normalize.ts        normalizeToolCalls() — field name mismatch between file format and our types
+  global-status-{protocol,channel,client}.ts  page-global running/discovery WebSocket
+  session-{protocol,event-hub,channel,transport-client,registry,view-transport}.ts  projected session transport
+  file-watch-{protocol,channel,client}.ts     mounted live-file WebSocket transport
+  transport-ticket-route.ts                  bounded metadata-bound ticket issuer
   websocket-gateway.ts typed accessor for the process-local WebSocket gateway
   worktree.ts         project/worktree resolution and git worktree operations
 
 components/
   AppShell.tsx        layout + URL state + tab management
   SessionSidebar.tsx  Pinned/Recent/Project presentations + FileExplorer
+  GlobalStatusProvider.tsx one running/discovery socket per loaded page
+  SessionRegistryProvider.tsx page-owned session view registry and transport
   ChatWindow.tsx      chat composition + completion sound wrapper
   ChatInput.tsx       input bar + model/thinking/tools/compact controls
   MessageView.tsx     renders one message (user/assistant/toolCall/toolResult)
@@ -106,7 +108,7 @@ components/
   TabBar.tsx          tab bar (Chat + open file tabs)
 
 hooks/
-  useAgentSession.ts  messages + streaming + SSE + fork/clone/navigate/reconciliation logic
+  useAgentSession.ts  messages + projected WebSocket effects + HTTP reconciliation + fork/clone/navigate logic
   useAudio.ts         completion sound + browser AudioContext unlock
   useDragDrop.ts      shared drag/drop state
   useIsMobile.ts      responsive breakpoint hook
@@ -117,26 +119,27 @@ hooks/
 
 ## Key Design Decisions & Traps
 
-### Custom server and dormant WebSocket gateway
+### Custom server and persistent WebSocket transport
 - `npm run dev`, `npm start`, and the published `pi-web` command all enter through `bin/pi-web.js` and the Pi-Web-owned Node server in `bin/pi-web-server.js`; production alone requires an existing `.next` build.
 - One Node `http.Server` delegates ordinary requests to programmatic Next and reserves only `/_pi/websocket`. The Pi upgrade listener must leave every other path untouched so Next continues to own development HMR.
-- `bin/pi-web-transport-gateway.js` installs one V1 gateway in `globalThis.__piWebTransportGatewayV1`; `lib/websocket-gateway.ts` gives App Router code typed access to that same object across hot reloads.
-- `POST /api/transport/ticket` is dormant unless server code explicitly registers a channel. Tickets are same-origin, one-use, and expire after 30 seconds. No production channel or browser WebSocket consumer exists yet; current global and per-session SSE remain authoritative.
-- Programmatic server close is idempotent and non-exiting: it stops acceptance, releases every Pi-Web-owned WebSocket/connection/gateway/ticket/timer/global, and awaits only public Next cleanup. Production must support strict same-process start/close/restart and natural drain.
-- Next 16.2.11 development is process-scoped because public `app.close()` leaves internal Watchpack watchers referenced. Only the executed terminal launcher exits after awaited cleanup (`130` for SIGINT, `143` for SIGTERM); do not reach into private Next/Watchpack state or enumerate arbitrary process handles.
-- Do not add separate signal handlers in the server library, gateway, or App Router modules. Imported launcher/server APIs must never terminate their embedding process.
+- `bin/pi-web-transport-gateway.js` installs one V1 gateway in `globalThis.__piWebTransportGatewayV1`; `lib/websocket-gateway.ts` gives App Router code typed access across hot reloads. HMR-safe production registrations are static `running`, `session`, and `file-watch` channels.
+- `POST /api/transport/ticket` accepts exact bounded channel shapes, enforces same-host Origin plus `X-Pi-Web-Transport: 1`, and stores authoritative metadata only in a 30-second one-use server-side ticket. Session IDs and paths never become dynamic channel names or WebSocket query metadata.
+- The gateway admits at most 64 Pi Web sockets per direct peer and 256 total. Session replay is bounded by bytes/units, subscriber output is bounded, file watchers are subscription-owned, and slow consumers close retryably instead of blocking agent work.
+- The server owns one 30-second ping/pong heartbeat. Heartbeats do not touch semantic session idle. Programmatic close stops acceptance, joins channel/wrapper/watcher owners, allows one ten-second natural drain for Pi-owned resources, then force-releases only remaining Pi-owned sockets/connections before awaiting public Next cleanup.
+- Next 16.2.11 development remains process-scoped because public `app.close()` leaves internal Watchpack watchers referenced. Only the executed terminal launcher exits after awaited cleanup (`130` for SIGINT, `143` for SIGTERM); do not reach into private Next/Watchpack state or enumerate arbitrary process handles.
+- Do not add separate signal handlers in the server library, gateway, RPC manager, or App Router modules. Imported launcher/server APIs must never terminate their embedding process. Production must remain reusable across same-process start/close/restart.
 
 ### AgentSession lifecycle (`lib/rpc-manager.ts`)
 - One `AgentSessionWrapper` per session id, keyed in `globalThis.__piSessions`
 - `globalThis` survives Next.js hot-reload; plain module-level Map does not
-- Idle timeout: 10 minutes. Concurrent `startRpcSession()` calls share a single start Promise (`globalThis.__piStartLocks`)
+- Semantic idle timeout: 30 minutes. Accepted commands and native/projected activity touch it; heartbeat traffic does not, and prompt/compaction/streaming/binding/hosted-kickoff work cannot expire. Concurrent `startRpcSession()` calls share one generation-safe start Promise (`globalThis.__piStartLocks`).
 
 ### Pi Web-hosted implementation sessions
 - `lib/hosted-implementation-session.ts` publishes a versioned `Symbol.for("pi-web.hosted-implementation-session")` capability only inside the Pi Web server process. Compatible same-runtime hot reload invalidates/replaces the record; foreign or incompatible records are preserved.
 - Start/Orchestrate materialize the native JSONL first. Pi Web accepts exactly the six-field ID/file/cwd/kickoff/kind/signal request, opens that exact owner under the existing per-session startup lock, publishes one wrapper, initiates extension binding, and schedules the kickoff through a wrapper-owned background prompt without awaiting binding, preflight, or settlement. Target Stop or wrapper destruction cancels a scheduled kickoff before native dispatch; after dispatch Stop uses native abort.
 - The optional source signal is checked immediately before synchronous publication when Pi supplies one. Publication transfers ownership: later source cancellation/Stop cannot abort the target, and only target-addressed ordinary controls can steer, follow up, or stop it. A duplicate request for the same owner is rejected without a second ownership acceptance, kickoff, discovery refresh, or detached fallback.
 - Hosted wrappers retain accepted-prompt/compaction running claims and are never idle-evicted while active. Real cleanup calls native `AgentSession.dispose()` once; full graceful `session_shutdown` parity would require the deliberately excluded `AgentSessionRuntime`.
-- Hosted registration invalidates ordinary session discovery and advances a process-global `sessions_changed` generation over the existing running SSE stream. Initial and reconnected streams replay the generation; the sidebar consumes it only after the latest `/api/sessions` load succeeds, retries failed generations on replay, and ignores stale overlapping responses without changing selection or URL.
+- Hosted registration invalidates ordinary session discovery and advances a process-global `sessions_changed` generation over the page-global `running` WebSocket. Initial and reconnected sockets replay the generation; the sidebar consumes it only after the latest `/api/sessions` load succeeds, retries failed generations on replay, and ignores stale overlapping responses without changing selection or URL.
 - Capability absence is the detached-print compatibility boundary in the launcher repository. A present invalid or failing capability never falls back because acceptance may be ambiguous.
 
 ### Fork and clone wrapper lifecycles
@@ -154,7 +157,7 @@ hooks/
 `parentSession` in the header is **display metadata only** — it has zero effect on chat content. Pi may rewrite an entire session file during migrations, but Pi Web exposes no permanent session-delete control or `DELETE /api/sessions/[id]` handler. Hide/Restore is the web removal workflow and updates only sidebar metadata.
 
 ### ToolCall field normalization
-Pi stores toolCall blocks as `{type:"toolCall", id, name, arguments}` but `ToolCallContent` uses `{toolCallId, toolName, input}`. `normalizeToolCalls()` in `lib/normalize.ts` handles this — called in both `session-reader.ts` (file load) and `ChatWindow.handleAgentEvent()` (streaming).
+Pi stores toolCall blocks as `{type:"toolCall", id, name, arguments}` but `ToolCallContent` uses `{toolCallId, toolName, input}`. `normalizeToolCalls()` in `lib/normalize.ts` handles this — called from `session-reader.ts` for file loads and `session-view-projection.ts` for projected live effects.
 
 ### New session tool preset
 Tool names are passed at session creation (`POST /api/agent/new` → `toolNames[]`). For existing sessions, the active preset is inferred on mount via `get_tools` → `getPresetFromTools()`. When tools are fully disabled (`toolNames = []`), `rpc-manager.ts` passes an empty tool allow-list and forces `agent.state.systemPrompt = ""` after startup/reload/resource discovery.
@@ -162,14 +165,14 @@ Tool names are passed at session creation (`POST /api/agent/new` → `toolNames[
 ### Model defaults for new sessions
 `GET /api/models` returns `defaultModel` read from `~/.pi/agent/settings.json`. `ChatWindow` pre-selects this on mount for new sessions.
 
-### SSE reconnect on page refresh mid-stream
-On `ChatWindow` mount, `GET /api/agent/[id]` is called. If `state.isStreaming === true`, SSE is reconnected automatically. `thinkingLevel` and `isCompacting` are also synced from this response.
+### Session WebSocket recovery on refresh
+`SessionRegistryProvider` owns the page-level registry above keyed chat windows. A view claims its session transport before prompt dispatch; projected deltas are primary, reconnect sends the last epoch/cursor for replay, and wrong-epoch/overflow recovery receives a canonical snapshot. Page refresh reconstructs the selected view, while `GET /api/agent/[id]` and transcript/context reads remain authoritative convergence nets.
 
-### Compaction SSE events
-Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `auto_compaction_start` / `auto_compaction_end`. `handleAgentEvent` accepts both sets to keep `isCompacting` in sync. Manual compact is a blocking POST — the button stays disabled until the response returns.
+### Projected compaction events
+Newer Pi emits `compaction_start` / `compaction_end`; older versions emitted `auto_compaction_start` / `auto_compaction_end`. The session projector accepts both sets and emits bounded compaction state/effects. Manual compact remains a blocking POST—the button stays disabled until the response returns.
 
-### Running state SSE + reconciliation
-- The sidebar listens to `/api/agent/running/events`, backed by `subscribeRunningSessions()` in `lib/rpc-manager.ts`, so running badges update without polling.
+### Running state WebSocket + reconciliation
+- `GlobalStatusProvider` owns exactly one `running` socket per loaded page. The channel publishes bounded `running` snapshots and replayable `sessions_changed` generations without starting an `AgentSession`; no global agent EventSource route remains.
 - Wrapper event-fanout depth is an internal cleanup barrier, not browser-visible activity. Global membership is sampled after outer fanout stabilizes; delayed releases wait for projected finality, and only ordering-current wrapper/native starts may replace same-ID publisher authority.
 - `useAgentSession` treats projected per-session WebSocket snapshots/effects as primary for live chat state, but while a run is active it periodically calls `GET /api/agent/[id]` and also reconciles on `visibilitychange`/`online`. This repairs missed settlement or transient completion delivery from background tabs, reconnects, or half-open connections.
 - Prompt runs use a monotonic run id; late projected updates or slow reconciliation responses from an old run must be ignored so they cannot resurrect stale streaming bubbles.
@@ -188,9 +191,10 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - Removing a dirty worktree returns `409` with `{ dirty: true }` so the UI can ask before retrying with `force`.
 - Sessions whose cwd points at a removed worktree are inferred back into the main project instead of becoming a phantom project row.
 
-### File access allow-list
+### File access allow-list and live watches
 - `/api/files` is intentionally not a general filesystem browser. Allowed roots come from session cwds, their resolved project roots, `~/pi-cwd-*`, and roots explicitly added with `allowFileRoot()`.
 - `/api/cwd/validate`, `/api/default-cwd`, and `/api/worktrees` call `allowFileRoot()` when they make a new location browsable.
+- Mounted file viewers obtain metadata-bound `file-watch` tickets through the same allowed-root-or-session-reference decision as file GET. One server-owned watcher publishes path-free connected/change metadata; path/view changes, reconnect, owner replacement, and server close release it. The old `type=watch` SSE mode is removed.
 
 ### Plugins and skills
 - `/api/plugins` uses pi's `SettingsManager` + `DefaultPackageManager` for global/project package install, remove, update, enable, and disable. Disabling writes empty `extensions/skills/prompts/themes` arrays for that package entry.
