@@ -121,3 +121,15 @@ Plan: `.agents/plans/2026-08-05-agent-response-file-links.md`
 **Departures from approved obligations:** None from the product plan. The operational mutex helper was added because global closeout policy requires serialization when racing is possible and main demonstrably advanced during this task. The classifier review suggestion to reject supported `.ts` files based only on an unusual basename was intentionally not adopted because it contradicts the approved any-supported-source-file rule; unknown special-name suffixes remain inert. The optional focus-target preference was not adopted because browser evidence confirms focus enters a clearly named control inside the opened viewer.
 
 **Implementation commit:** Pending.
+
+## Implementation Summary
+
+**Plan section:** Final implementation and Validation Contract VC-001 through VC-009 for `.agents/plans/2026-08-05-agent-response-file-links.md`.
+
+**Work and outcome:** The implementation is complete in commit `bb99187f5930de60bf0fdaa7e3b4988be52adbaf`. Settled assistant prose and whole inline-code source/text paths now become exact-workspace file actions; authored links retain existing semantics; generated actions receive guarded narrow activation; all file-open origins share responsive full-width behavior below 1000px; and text preview reads are bounded, strict UTF-8, and NUL-free. Documentation, durable memory, tests, and the required local-main mutex are included.
+
+**Validation / evidence:** VC-001 through VC-009 pass. Final focused suites passed `59/59`, the complete repository suite passed `706/706`, TypeScript and quiet ESLint passed, and `git diff --check` passed. Live API boundaries returned 200 at 256 KiB, 413 one byte over, and 415 for NUL/invalid UTF-8. Firefox validation covered 1000/999/641/640 and phone widths, all three open origins, confirmation focus/dismissal/stale identity, Escape isolation, responsive provenance, closed-panel rotation, and native touch delivery. Independent reviewers found no unresolved product blocker after parent disposition and regression fixes.
+
+**Departures from approved obligations:** None. Every concrete reviewer finding was fixed: partial whitespace suffixes, unmatched-quote complexity, raced oversized reads, hidden-panel rotation, post-confirm focus, Escape propagation, stale responsive toggles, disguised non-text special names, arbitrary-length suppression, suppressed-candidate reset, and shared punctuation boundaries. The `.ts`-basename rejection suggestion was not adopted because supported source extensions are explicitly in scope; the destructive-focus preference was optional and browser evidence confirms a usable named in-viewer target. The mutex helper is mandatory operational infrastructure, not product-scope expansion.
+
+**Implementation commit:** `bb99187f5930de60bf0fdaa7e3b4988be52adbaf` (`feat(files): open assistant-returned source paths`).
