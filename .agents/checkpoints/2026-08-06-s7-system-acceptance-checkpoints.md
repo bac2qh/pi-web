@@ -81,3 +81,29 @@ Plan: `.agents/plans/2026-08-06-s7-system-acceptance.md`
 **Departures from approved obligations:** The eight user-accepted formal S7 evidence departures remain exactly those enumerated in the preceding summary and acceptance report: exact new 1/5/10-browser, 1/7/10-session, combined 30-socket, 5/7 and 10/10 responsiveness, combined session-recovery, combined all-media file lifecycle, complete rich visual/capability, and S7-specific byte/resource-observation evidence. No other obligation is incomplete, blocked, waived, superseded, or divergent at the S7 boundary.
 
 **Implementation commit:** S7 evidence `47b919c7e20c3e07a562050300c3965e8a4bc3af`; integrated source baseline `08f49cf714b6ada490bda3ded3b4c7a69d80d297`.
+
+## Handoff
+
+**Source:** Fresh read-only `reviewer` result returned in the controlling launcher-session transcript after S7 finality `c31ee36d937a1ae25fffbde1b9e085ebe7ef6fc4`; no-edit and no-delegation constraints; Mode: full-master validation review.
+
+**Purpose:** Independently validate the complete repository result against ORCH-VC-001 through ORCH-VC-013, all retained milestone/correction evidence, current source, explicit user departures, privacy, finality sequencing, and ordinary closeout readiness.
+
+**Outcome:** Verdict `READY`; no source or retained-evidence blocker. ORCH-VC-012 and ORCH-VC-013 pass. ORCH-VC-001 through ORCH-VC-011 are accepted with their explicit existing or user-authorized departures rather than overstated as unconditional passes. The reviewer confirms current production route exports, live-tip reconciliation, receipt-aware running finality, three production WebSocket registrations, 30-minute idle, heartbeat/grace, OAuth-only EventSource inventory, documentation, and 679/679 integrated validation all agree.
+
+**Evidence:** The review mapped every master validation ID to committed S1-S7 plans/checkpoints/reports and actual source. It independently verified S7 finality `c31ee36d937a1ae25fffbde1b9e085ebe7ef6fc4`, clean task status, `main...HEAD` divergence `0 3`, and ancestry of all required implementation/correction commits. It found no migration-source mutation after the validated integrated baseline.
+
+**Uncertainty / gaps:** The eight S7 formal evidence gaps remain accepted departures. Earlier dispositions also remain visible: the S1 real distributed four-address 256/257 integration waiver; S6's accepted throwing-SDK-unsubscribe residual and unsupported private running-global corruption/recursive-publisher cases; and the user-directed interim S1-S6 main integration before S7. Later session-removal and other independently approved main work are outside migration attribution and must not be reverted.
+
+**Recommended use:** Commit the mandatory final full-master summary, then perform fresh guarded main/task status, overlap, Git-operation, ancestry, and race/mutex preflight. Retain the task worktree/branch during closeout; run separately authorized cleanup only after closeout succeeds.
+
+## Implementation Summary
+
+**Plan section:** Master `Full-master validation and ordinary closeout`; Objective and ORCH-VC-001 through ORCH-VC-013.
+
+**Work and outcome:** Full-master validation completed at task tip `c31ee36d937a1ae25fffbde1b9e085ebe7ef6fc4` over the integrated implementation baseline `08f49cf714b6ada490bda3ded3b4c7a69d80d297`, accepted S1-S7 evidence, current source, and all post-S6 corrections. No source blocker was found. Global status, projected session delivery, and live-file watch use same-port bounded WebSockets; HTTP command/reconciliation APIs and transient OAuth SSE remain as designed; current documentation and durable memory match implementation.
+
+**Validation / evidence:** Exact integrated task-source suite 679/679; TypeScript pass; ESLint pass with zero warnings; package dry run nine files/zero forbidden entries; whitespace, ancestry, path, route, EventSource, channel-registration, and private-Next inventories pass; production build/route/package/restart evidence retained at `473236c2eaa2c65f845b18c61974ab859488ea9e`; practical user acceptance; independent full-master review verdict `READY`. ORCH-VC-012 and ORCH-VC-013 pass; every other ID is dispositioned below with accepted evidence and departures.
+
+**Departures from approved obligations:** User-accepted S7 evidence departures: no new exact Firefox/Chromium 1/5/10-page inventory; no exact 1/7/10 aggregate-session inventory; no combined 30-socket topology; no measured 5-page/7-run and 10-page/10-run responsiveness run; no single combined session-recovery matrix; no single combined all-media file lifecycle matrix; no complete rich visual/capability matrix; and no S7-specific projected-byte/owned-resource observation beyond retained evidence. Earlier accepted dispositions: S1's real distributed four-address 256/257 integration is waived while deterministic total-cap and real per-peer evidence pass; S6 retains the residual that a throwing SDK unsubscribe may interrupt cleanup and treats private running-global corruption/synthetic recursive publishers as unsupported; S1-S6 were integrated before S7 by explicit user sequencing override. The first S7 task-suite attempt was rejected because inherited `NODE_ENV=production` and intentionally deleted task runtime invalidated the harness; clean-environment exact-task-source validation passed 679/679 with temporary runtime links removed. No other obligation is incomplete, blocked, waived, superseded, or divergent.
+
+**Implementation commit:** Validated integrated source baseline `08f49cf714b6ada490bda3ded3b4c7a69d80d297`; S7 evidence `47b919c7e20c3e07a562050300c3965e8a4bc3af`; S7 finality `c31ee36d937a1ae25fffbde1b9e085ebe7ef6fc4`.
