@@ -21,3 +21,4 @@
 
 - Added session-removal policy memory after removing Pi Web's destructive session route and sidebar action in favor of reversible Hide/Restore, preserving the stale-extension-context rationale and the separate follow-up boundary for other native-disposal paths.
 - Added live-session transcript-reconciliation memory after separating displayed and pinned leaf intent, making root/context repair follow current intent, and hardening prompt persistence floors, navigation ordering, and compaction recovery without widening the server or protocol boundary.
+- Added running-session-status memory after moving global membership publication to stable fanout boundaries, making final idle receipt-aware, and preserving newer same-ID publisher authority across delayed and reentrant lifecycle work.

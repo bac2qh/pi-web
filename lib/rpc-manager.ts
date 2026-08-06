@@ -18,6 +18,7 @@ import {
   getProjectedSessionHub,
   installProjectedSessionHubCapability,
   type ProjectedInputCommitOutcome,
+  type ProjectedInputCommitReceipt,
   type ProjectedSessionEventHub,
   type ProjectedSessionHubReader,
 } from "./session-event-hub";
@@ -63,11 +64,22 @@ type PendingCustomUiSetup = {
   destroyed: boolean;
 };
 
+type RunningPublisherAuthorityBaseline = {
+  publisher: object | undefined;
+  epoch: object | undefined;
+};
+
+type NativeStartAuthorityRequest = {
+  baseline: RunningPublisherAuthorityBaseline;
+  outcome: "pending" | "committed" | "rejected";
+};
+
 type NativeCausalClaim = {
   startOutcome: "pending" | "committed";
   terminalReserved: boolean;
   terminalOutcome: "pending" | "committed" | null;
   terminalFanoutComplete: boolean;
+  authorityRequest: NativeStartAuthorityRequest;
 };
 
 type ExtensionUiRequestBody = Record<string, unknown> & {
@@ -188,6 +200,7 @@ export class AgentSessionWrapper {
   private nativeCausalClaims: NativeCausalClaim[] = [];
   private standaloneCompactionCausalClaims: NativeCausalClaim[] = [];
   private eventFanoutDepth = 0;
+  private eventFanoutRunningAuthorityRequests: NativeStartAuthorityRequest[] = [];
   private deferredSettlementRequested = false;
   private extensionsBound = false;
   private extensionBindingPromise: Promise<void> | null = null;
@@ -318,6 +331,7 @@ export class AgentSessionWrapper {
   }
 
   start(): void {
+    const startupAuthority = this.captureRunningPublisherAuthority();
     this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
       if (!this.runtimeIsCurrent()) return;
       this.touchSemanticIdle("native_event");
@@ -345,16 +359,19 @@ export class AgentSessionWrapper {
           if (!this._alive) return;
           if (startClaim) this.resolveCausalStart(lifecycle, startClaim, outcome);
           if (terminalClaim) this.resolveCausalTerminal(lifecycle, terminalClaim, outcome);
+          // A queued receipt can resolve after native event delivery returned,
+          // so no enclosing fanout barrier remains to publish its final release.
+          // Delayed active updates must not reclaim a replacement's authority.
+          if (this.eventFanoutDepth === 0 && !this.isRunning()) this.publishRunningState();
         };
         if (receipt) receipt.whenResolved(observeOutcome);
         else observeOutcome("rejected");
-        this.publishRunningState();
       } finally {
         this.endEventFanout();
       }
     });
     this.touchSemanticIdle("startup");
-    this.publishRunningState();
+    this.publishRunningStart(startupAuthority);
   }
 
   setForceEmptySystemPrompt(force: boolean): void {
@@ -444,8 +461,31 @@ export class AgentSessionWrapper {
     return type === "prompt" || type === "steer" || type === "follow_up" || type === "get_commands";
   }
 
-  private publishRunningState(): void {
-    publishRunningSessionState(this.sessionId, this.isRunning(), this.runningPublicationIdentity);
+  private captureRunningPublisherAuthority(): RunningPublisherAuthorityBaseline {
+    const publisher = getRunningPublisherAuthority().get(this.sessionId);
+    return {
+      publisher,
+      epoch: publisher ? getRunningPublisherEpochs().get(publisher) : undefined,
+    };
+  }
+
+  private runningPublisherAuthorityIsUnchanged(baseline: RunningPublisherAuthorityBaseline): boolean {
+    const currentPublisher = getRunningPublisherAuthority().get(this.sessionId);
+    return currentPublisher === baseline.publisher
+      && (!currentPublisher || getRunningPublisherEpochs().get(currentPublisher) === baseline.epoch);
+  }
+
+  private publishRunningState(authority: "claim" | "preserve" = "preserve"): void {
+    const running = this.isRunning();
+    if (running && authority === "preserve") {
+      const currentPublisher = getRunningPublisherAuthority().get(this.sessionId);
+      if (currentPublisher && currentPublisher !== this.runningPublicationIdentity) return;
+    }
+    publishRunningSessionState(this.sessionId, running, this.runningPublicationIdentity);
+  }
+
+  private publishRunningStart(baseline: RunningPublisherAuthorityBaseline): void {
+    this.publishRunningState(this.runningPublisherAuthorityIsUnchanged(baseline) ? "claim" : "preserve");
   }
 
   private async withFinalRunningNotification<T>(operation: () => Promise<T>): Promise<T> {
@@ -456,16 +496,21 @@ export class AgentSessionWrapper {
     }
   }
 
-  private acceptProjectedWrapperInput(event: AgentEvent, category: "wrapper_event" | "settlement" = "wrapper_event"): void {
-    if (!this.runtimeIsCurrent()) return;
+  private acceptProjectedWrapperInput(
+    event: AgentEvent,
+    category: "wrapper_event" | "settlement" = "wrapper_event",
+  ): ProjectedInputCommitReceipt | null {
+    if (!this.runtimeIsCurrent()) return null;
     this.touchSemanticIdle(category);
-    this.projectedHub.accept(event);
+    const prepared = this.projectedHub.prepareNativeInput(event);
+    return prepared ? this.projectedHub.acceptPreparedNativeInput(prepared) : null;
   }
 
   private claimPromptRun(): void {
+    const authority = this.captureRunningPublisherAuthority();
     this.promptRunningCount += 1;
     this.acceptProjectedWrapperInput({ type: "wrapper_activity_started", activity: "prompt" });
-    this.publishRunningState();
+    this.publishRunningStart(authority);
   }
 
   private releasePromptRun(settle = true): void {
@@ -477,9 +522,10 @@ export class AgentSessionWrapper {
   }
 
   private claimCompactionRun(): void {
+    const authority = this.captureRunningPublisherAuthority();
     this.compactionRunningCount += 1;
     this.acceptProjectedWrapperInput({ type: "wrapper_activity_started", activity: "compaction" });
-    this.publishRunningState();
+    this.publishRunningStart(authority);
   }
 
   private releaseCompactionRun(settle = true): void {
@@ -507,13 +553,19 @@ export class AgentSessionWrapper {
     if (lifecycle?.kind !== "agent_start" && lifecycle?.kind !== "manual_compaction_start") return null;
     const claims = this.causalClaimsFor(lifecycle);
     if (!claims || claims.length >= Number.MAX_SAFE_INTEGER) return null;
+    const authorityRequest: NativeStartAuthorityRequest = {
+      baseline: this.captureRunningPublisherAuthority(),
+      outcome: "pending",
+    };
     const claim: NativeCausalClaim = {
       startOutcome: "pending",
       terminalReserved: false,
       terminalOutcome: null,
       terminalFanoutComplete: false,
+      authorityRequest,
     };
     claims.push(claim);
+    this.eventFanoutRunningAuthorityRequests.push(authorityRequest);
     this.syncCausalClaimCounts();
     return claim;
   }
@@ -549,10 +601,12 @@ export class AgentSessionWrapper {
     outcome: ProjectedInputCommitOutcome,
   ): void {
     if (outcome === "rejected") {
+      claim.authorityRequest.outcome = "rejected";
       this.removeCausalClaim(lifecycle, claim);
       return;
     }
     claim.startOutcome = "committed";
+    claim.authorityRequest.outcome = "committed";
     this.completeCommittedCausalClaim(lifecycle, claim);
   }
 
@@ -588,8 +642,16 @@ export class AgentSessionWrapper {
       this.deferredSettlementRequested = true;
       return;
     }
-    this.acceptProjectedWrapperInput({ type: "wrapper_settled" }, "settlement");
-    this.publishRunningState();
+    const receipt = this.acceptProjectedWrapperInput({ type: "wrapper_settled" }, "settlement");
+    if (!receipt) {
+      if (!this.isRunning()) this.publishRunningState();
+      return;
+    }
+    // A reentrant settlement can queue behind the native terminal receipt.
+    // Publish idle only after projected finality has committed or rejected.
+    receipt.whenResolved(() => {
+      if (this._alive && !this.isRunning()) this.publishRunningState();
+    });
   }
 
   private beginEventFanout(): void {
@@ -598,9 +660,25 @@ export class AgentSessionWrapper {
 
   private endEventFanout(): void {
     if (this.eventFanoutDepth > 0) this.eventFanoutDepth -= 1;
-    if (this.eventFanoutDepth !== 0 || !this.deferredSettlementRequested) return;
+    if (this.eventFanoutDepth !== 0) return;
+
+    // Browser-visible status is sampled only after the outer delivery barrier
+    // is stable. Only a committed start may replace authority, and only when
+    // no newer same-ID publisher changed its captured baseline.
+    let authorityRequest: NativeStartAuthorityRequest | null = null;
+    for (let index = this.eventFanoutRunningAuthorityRequests.length - 1; index >= 0; index -= 1) {
+      const request = this.eventFanoutRunningAuthorityRequests[index];
+      if (request.outcome === "rejected") continue;
+      authorityRequest = request;
+      break;
+    }
+    this.eventFanoutRunningAuthorityRequests = [];
+    if (authorityRequest?.outcome === "committed") this.publishRunningStart(authorityRequest.baseline);
+    else this.publishRunningState();
+    if (!this.deferredSettlementRequested) return;
     this.deferredSettlementRequested = false;
     this.settleProjectedActivityIfIdle();
+    this.publishRunningState();
   }
 
   private applyForcedEmptySystemPrompt(): void {
@@ -1073,6 +1151,7 @@ export class AgentSessionWrapper {
     // Owner deletion or process cleanup must not let an unresolved extension
     // binding dispatch its hosted kickoff against a disposed native session.
     this.cancelHostedKickoffBeforeDispatch(false);
+    this.eventFanoutRunningAuthorityRequests = [];
     this.deferredSettlementRequested = false;
     this.nativeCausalClaims = [];
     this.standaloneCompactionCausalClaims = [];
@@ -1498,6 +1577,7 @@ declare global {
   var __piRunningListeners: Set<(ids: RunningSessionIdsView) => void> | undefined;
   var __piRunningSessionIds: Set<string> | undefined;
   var __piRunningSessionPublishers: Map<string, object> | undefined;
+  var __piRunningPublisherEpochs: WeakMap<object, object> | undefined;
   var __piSessionListRefreshListeners: Set<(generation: number) => void> | undefined;
   var __piSessionListRefreshGeneration: number | undefined;
 }
@@ -1601,6 +1681,11 @@ function getRunningPublisherAuthority(): Map<string, object> {
   return globalThis.__piRunningSessionPublishers;
 }
 
+function getRunningPublisherEpochs(): WeakMap<object, object> {
+  if (!globalThis.__piRunningPublisherEpochs) globalThis.__piRunningPublisherEpochs = new WeakMap();
+  return globalThis.__piRunningPublisherEpochs;
+}
+
 export function getRunningRpcSessionIds(): string[] {
   return [...getRunningProjection()].sort();
 }
@@ -1678,7 +1763,10 @@ export function publishRunningSessionState(
   const currentPublisher = publishers.get(sessionId);
 
   if (running) {
-    if (publisherIdentity) publishers.set(sessionId, publisherIdentity);
+    if (publisherIdentity) {
+      if (currentPublisher !== publisherIdentity) getRunningPublisherEpochs().set(publisherIdentity, {});
+      publishers.set(sessionId, publisherIdentity);
+    }
     if (projection.has(sessionId)) return;
     projection.add(sessionId);
   } else {

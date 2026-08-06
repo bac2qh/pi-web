@@ -170,6 +170,7 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 
 ### Running state SSE + reconciliation
 - The sidebar listens to `/api/agent/running/events`, backed by `subscribeRunningSessions()` in `lib/rpc-manager.ts`, so running badges update without polling.
+- Wrapper event-fanout depth is an internal cleanup barrier, not browser-visible activity. Global membership is sampled after outer fanout stabilizes; delayed releases wait for projected finality, and only ordering-current wrapper/native starts may replace same-ID publisher authority.
 - `useAgentSession` treats projected per-session WebSocket snapshots/effects as primary for live chat state, but while a run is active it periodically calls `GET /api/agent/[id]` and also reconciles on `visibilitychange`/`online`. This repairs missed settlement or transient completion delivery from background tabs, reconnects, or half-open connections.
 - Prompt runs use a monotonic run id; late projected updates or slow reconciliation responses from an old run must be ignored so they cannot resurrect stale streaming bubbles.
 - `activeLeafId` is the leaf displayed by the branch UI, not an HTTP pin. Only explicit historical navigation installs the synchronous selected-leaf intent; starting a normal model prompt clears that intent before optimistic mutation so transcript repair follows the advancing live tip, while extension slash commands preserve it. Coalesced root/context repair must re-read the current intent when it runs.
