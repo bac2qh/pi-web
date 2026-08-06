@@ -1,15 +1,20 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { type Components, type Options as ReactMarkdownOptions } from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vs } from "react-syntax-highlighter/dist/cjs/styles/prism";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/cjs/styles/prism";
 import { useTheme } from "@/hooks/useTheme";
 import { useDisplayPreferences } from "@/hooks/useDisplayPreferences";
 import { copyText } from "@/lib/clipboard";
-import { resolveLocalFileHref } from "@/lib/file-links";
-import { markdownRehypePlugins, markdownRemarkPlugins } from "@/lib/markdown";
+import {
+  ASSISTANT_FILE_ACTION_CLASS,
+  resolveAssistantFileActionHref,
+  resolveLocalFileHref,
+  type FileOpenOptions,
+} from "@/lib/file-links";
+import { markdownRehypePlugins, markdownRemarkPlugins, remarkAssistantFileLinks } from "@/lib/markdown";
 import {
   DEFAULT_MERMAID_VIEW,
   buildMermaidRenderKey,
@@ -33,12 +38,21 @@ function withoutSyntaxBackground(theme: typeof vs): typeof vs {
 const lightSyntaxStyle = withoutSyntaxBackground(vs);
 const darkSyntaxStyle = withoutSyntaxBackground(vscDarkPlus);
 
+function markdownNodeText(node: unknown): string {
+  if (!node || typeof node !== "object") return "";
+  const record = node as { value?: unknown; children?: unknown };
+  if (typeof record.value === "string") return record.value;
+  if (!Array.isArray(record.children)) return "";
+  return record.children.map(markdownNodeText).join("");
+}
+
 interface MarkdownBodyProps {
   children: string;
   className?: string;
   isStreaming?: boolean;
+  enableAutomaticFileLinks?: boolean;
   cwd?: string;
-  onOpenFile?: (filePath: string) => void;
+  onOpenFile?: (filePath: string, options?: FileOpenOptions) => void;
   mermaidTextBlockIdentity?: string;
   mermaidViewSelections?: ReadonlyMap<string, MermaidView>;
   onMermaidViewChange?: (key: string, view: MermaidView) => void;
@@ -48,6 +62,7 @@ export function MarkdownBody({
   children,
   className,
   isStreaming,
+  enableAutomaticFileLinks,
   cwd,
   onOpenFile,
   mermaidTextBlockIdentity,
@@ -59,6 +74,13 @@ export function MarkdownBody({
   // react-markdown's renderer functions and remount every code block.
   const mermaidViewSelectionsRef = useRef(mermaidViewSelections);
   mermaidViewSelectionsRef.current = mermaidViewSelections;
+  const remarkPlugins = useMemo<ReactMarkdownOptions["remarkPlugins"]>(() => {
+    if (!enableAutomaticFileLinks || isStreaming || !cwd || !onOpenFile) return markdownRemarkPlugins;
+    return [
+      ...(markdownRemarkPlugins ?? []),
+      [remarkAssistantFileLinks, { workspace: cwd }],
+    ] as ReactMarkdownOptions["remarkPlugins"];
+  }, [cwd, enableAutomaticFileLinks, isStreaming, onOpenFile]);
   const markdownComponents = useMemo<Components>(() => ({
     code({ className, children, node, ...props }) {
       const lang = className?.replace("language-", "").toLowerCase() ?? "";
@@ -92,14 +114,36 @@ export function MarkdownBody({
     pre({ children }) {
       return <>{children}</>;
     },
-    a({ href, children, ...props }) {
-      // `node` is react-markdown metadata, not a DOM attribute.
-      delete props.node;
-      const filePath = onOpenFile ? resolveLocalFileHref(href, cwd) : null;
+    a({ href, children, className, node, ...props }) {
+      const automaticMarker = enableAutomaticFileLinks
+        && className?.split(/\s+/).includes(ASSISTANT_FILE_ACTION_CLASS);
       const openFile = onOpenFile;
+      if (automaticMarker && openFile) {
+        const filePath = resolveAssistantFileActionHref(href, cwd);
+        if (filePath) {
+          const displayPath = markdownNodeText(node) || href || filePath;
+          return (
+            <button
+              type="button"
+              className={ASSISTANT_FILE_ACTION_CLASS}
+              aria-label={`Open file ${displayPath}`}
+              title={`Open file: ${displayPath}`}
+              onClick={(event) => openFile(filePath, {
+                automatic: true,
+                displayPath,
+                trigger: event.currentTarget,
+              })}
+            >
+              {children}
+            </button>
+          );
+        }
+      }
+
+      const filePath = openFile ? resolveLocalFileHref(href, cwd) : null;
       if (!filePath || !openFile) {
         return (
-          <a href={href} {...props} target="_blank" rel="noopener noreferrer">
+          <a href={href} className={automaticMarker ? undefined : className} {...props} target="_blank" rel="noopener noreferrer">
             {children}
           </a>
         );
@@ -115,7 +159,7 @@ export function MarkdownBody({
       };
 
       return (
-        <a href={href} {...props} onClick={handleClick}>
+        <a href={href} className={automaticMarker ? undefined : className} {...props} onClick={handleClick}>
           {children}
         </a>
       );
@@ -127,12 +171,12 @@ export function MarkdownBody({
         </div>
       );
     },
-  }), [cwd, isStreaming, mermaidTextBlockIdentity, onMermaidViewChange, onOpenFile]);
+  }), [cwd, enableAutomaticFileLinks, isStreaming, mermaidTextBlockIdentity, onMermaidViewChange, onOpenFile]);
 
   return (
     <div className={["markdown-body", className].filter(Boolean).join(" ")}>
       <ReactMarkdown
-        remarkPlugins={markdownRemarkPlugins}
+        remarkPlugins={remarkPlugins}
         rehypePlugins={markdownRehypePlugins}
         components={markdownComponents}
       >

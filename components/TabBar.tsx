@@ -90,6 +90,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
               }}
               title="Close"
               aria-label={`Close ${tab.label}`}
+              data-active-file-tab={isActive ? "true" : undefined}
             >
               <svg width="11" height="11" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
                 <line x1="2" y1="2" x2="8" y2="8" />

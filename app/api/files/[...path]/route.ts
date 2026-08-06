@@ -11,12 +11,16 @@ import {
   DOCX_PREVIEW_MAX_BYTES,
   IMAGE_PREVIEW_MAX_BYTES,
   TEXT_PREVIEW_MAX_BYTES,
+  TEXT_PREVIEW_TOO_LARGE_ERROR,
+  decodeTextPreviewBytes,
   documentPreviewKind,
   getAudioMime,
   getDocumentMime,
   getFileExt,
+  getFileLanguage,
   getImageMime,
 } from "@/lib/file-types";
+import { readTextPreviewBytes } from "@/lib/text-preview-file";
 import { resolveDirentIsDirectory } from "@/lib/file-dirent";
 import { authorizeFileRequest } from "@/lib/file-authorization";
 import {
@@ -36,31 +40,6 @@ const IGNORED_SUFFIXES = [".pyc"];
 const FILE_REQUEST_TYPES = ["list", "read", "download", "meta", "preview"] as const;
 type FileRequestType = typeof FILE_REQUEST_TYPES[number];
 const FILE_REQUEST_TYPE_SET = new Set<string>(FILE_REQUEST_TYPES);
-
-const EXT_TO_LANGUAGE: Record<string, string> = {
-  ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
-  mjs: "javascript", cjs: "javascript", py: "python", rb: "ruby",
-  go: "go", rs: "rust", java: "java", kt: "kotlin", swift: "swift",
-  c: "c", cpp: "cpp", h: "c", hpp: "cpp", cs: "csharp",
-  html: "html", htm: "html", css: "css", scss: "css", less: "css",
-  json: "json", jsonl: "json", yaml: "yaml", yml: "yaml",
-  toml: "toml", xml: "xml", md: "markdown", mdx: "markdown",
-  sh: "bash", bash: "bash", zsh: "bash", fish: "bash",
-  sql: "sql", graphql: "graphql", gql: "graphql",
-  dockerfile: "dockerfile", tf: "hcl", hcl: "hcl",
-  env: "bash", gitignore: "bash", txt: "text",
-  pdf: "pdf", docx: "word",
-};
-
-function getLanguage(filePath: string): string {
-  const base = path.basename(filePath).toLowerCase();
-  // Special full-name matches
-  if (base === "dockerfile" || base.startsWith("dockerfile.")) return "dockerfile";
-  if (base === ".env" || base.startsWith(".env.")) return "bash";
-  if (base === "makefile" || base === "gnumakefile") return "makefile";
-  const ext = base.split(".").pop() ?? "";
-  return EXT_TO_LANGUAGE[ext] ?? "text";
-}
 
 function filePathFromSegments(segments: string[]): string {
   const joined = segments.join("/");
@@ -432,11 +411,17 @@ export async function GET(
         return streamFile(filePath, stat, documentMime, request.headers.get("range"));
       }
       if (stat.size > TEXT_PREVIEW_MAX_BYTES) {
-        return NextResponse.json({ error: "File too large for preview (>256KB)" }, { status: 413 });
+        return NextResponse.json({ error: TEXT_PREVIEW_TOO_LARGE_ERROR }, { status: 413 });
       }
-      const content = fs.readFileSync(filePath, "utf-8");
-      const language = getLanguage(filePath);
-      return NextResponse.json({ content, language, size: stat.size });
+      const bytes = readTextPreviewBytes(filePath);
+      const decoded = decodeTextPreviewBytes(bytes);
+      if (!decoded.ok) {
+        return NextResponse.json(
+          { error: decoded.error },
+          { status: decoded.kind === "too_large" ? 413 : 415 },
+        );
+      }
+      return NextResponse.json({ content: decoded.content, language: getFileLanguage(filePath), size: bytes.byteLength });
     }
 
     if (type === "download") {
@@ -456,7 +441,7 @@ export async function GET(
       const documentMime = getDocumentMime(filePath);
       return NextResponse.json({
         size: stat.size,
-        language: getLanguage(filePath),
+        language: getFileLanguage(filePath),
         mime: imageMime || audioMime || documentMime || "text/plain",
         previewKind: documentPreviewKind(filePath),
       });

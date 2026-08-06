@@ -13,10 +13,22 @@ import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { BranchNavigator } from "./BranchNavigator";
 import { DisplayControls } from "./DisplayControls";
+import { AutomaticFileOpenConfirmation } from "./AutomaticFileOpenConfirmation";
 import { useTheme } from "@/hooks/useTheme";
-import { useIsMobile } from "@/hooks/useIsMobile";
+import { useIsMobile, useIsNarrowFileViewerViewport } from "@/hooks/useIsMobile";
 import { copyText } from "@/lib/clipboard";
 import { getFileName } from "@/lib/file-paths";
+import type { FileOpenOptions } from "@/lib/file-links";
+import {
+  INITIAL_FILE_VIEWER_EXPANSION,
+  fileViewerExpansionAfterFinalClose,
+  fileViewerExpansionAfterOpen,
+  fileViewerExpansionAfterToggle,
+  fileViewerExpansionAfterViewportChange,
+  isFileViewerExpandedForViewport,
+  isSameFileOpenContext,
+  shouldConfirmAutomaticFileOpen,
+} from "@/lib/file-viewer-layout";
 import { buildAtMentionText, buildFileAtMentionsText } from "@/lib/file-fuzzy";
 import type { SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
@@ -27,11 +39,19 @@ import type { SessionViewBinding } from "@/lib/session-view-transport";
 type SessionCopyField = "file" | "id";
 type TopPanel = "branches" | "system" | "session" | "display";
 
+interface PendingAutomaticFileOpen {
+  filePath: string;
+  displayPath: string;
+  sessionId: string | null;
+  cwd: string | null;
+}
+
 export function AppShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isDark, toggleTheme } = useTheme();
   const isMobile = useIsMobile();
+  const isNarrowFileViewerViewport = useIsNarrowFileViewerViewport();
   const sessionViews = useSessionViewTransport();
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
   const [selectedSessionBinding, setSelectedSessionBinding] = useState<SessionViewBinding | null>(null);
@@ -142,12 +162,27 @@ export function AppShell() {
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
-  const [fileViewerExpanded, setFileViewerExpanded] = useState(false);
-  const fileViewerExpandedActive = fileViewerExpanded && !isMobile;
+  const rightPanelRef = useRef<HTMLDivElement | null>(null);
+  const [fileViewerExpansion, setFileViewerExpansion] = useState(INITIAL_FILE_VIEWER_EXPANSION);
+  const fileViewerExpandedActive = isFileViewerExpandedForViewport(
+    fileViewerExpansion,
+    isNarrowFileViewerViewport,
+    rightPanelOpen,
+  ) && !isMobile;
+  const [pendingAutomaticFileOpen, setPendingAutomaticFileOpen] = useState<PendingAutomaticFileOpen | null>(null);
+  const automaticFileTriggerRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => () => {
+    automaticFileTriggerRef.current = null;
+  }, []);
 
   useEffect(() => {
-    if (isMobile) setFileViewerExpanded(false);
-  }, [isMobile]);
+    setFileViewerExpansion((current) => fileViewerExpansionAfterViewportChange(
+      current,
+      isNarrowFileViewerViewport,
+      rightPanelOpen,
+    ));
+  }, [isNarrowFileViewerViewport, rightPanelOpen]);
 
   // Same @mention format as the chat input's @ autocomplete, so the agent's
   // read tool resolves it the same way (it strips the @ prefix).
@@ -162,6 +197,37 @@ export function AppShell() {
 
   const [initialSessionId] = useState<string | null>(() => searchParams.get("session"));
   const [activeCwd, setActiveCwd] = useState<string | null>(null);
+  const currentFileOpenSessionId = selectedSession?.id ?? null;
+  const currentFileOpenCwd = selectedSession?.cwd
+    ?? newSessionCwd
+    ?? (selectedSession === null ? activeCwd : null);
+
+  const dismissAutomaticFileOpen = useCallback((restoreFocus = true) => {
+    const trigger = automaticFileTriggerRef.current;
+    automaticFileTriggerRef.current = null;
+    setPendingAutomaticFileOpen(null);
+    if (restoreFocus && trigger) {
+      queueMicrotask(() => {
+        if (trigger.isConnected) trigger.focus();
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!pendingAutomaticFileOpen) return;
+    if (!isSameFileOpenContext(pendingAutomaticFileOpen, {
+      sessionId: currentFileOpenSessionId,
+      cwd: currentFileOpenCwd,
+    })) {
+      dismissAutomaticFileOpen();
+    }
+  }, [
+    currentFileOpenCwd,
+    currentFileOpenSessionId,
+    dismissAutomaticFileOpen,
+    pendingAutomaticFileOpen,
+  ]);
+
   // True once the initial ?session= URL param has been resolved (or confirmed absent)
   const [initialSessionRestored, setInitialSessionRestored] = useState<boolean>(() => !searchParams.get("session"));
   // Suppresses sessionKey bump in handleCwdChange during the initial URL restore
@@ -323,20 +389,72 @@ export function AppShell() {
     });
     setActiveFileTabId(tabId);
     setRightPanelOpen(true);
+    setFileViewerExpansion((current) => fileViewerExpansionAfterOpen(
+      current,
+      isNarrowFileViewerViewport,
+    ));
     // On mobile the file panel is full-screen; close the drawer so it shows.
     if (isMobile) setSidebarOpen(false);
-  }, [isMobile]);
+  }, [isMobile, isNarrowFileViewerViewport]);
 
-  const handleOpenLinkedFile = useCallback((filePath: string) => {
-    handleOpenFile(filePath, getFileName(filePath), selectedSession?.id ?? null);
-  }, [handleOpenFile, selectedSession?.id]);
+  const handleOpenLinkedFile = useCallback((filePath: string, options?: FileOpenOptions) => {
+    if (shouldConfirmAutomaticFileOpen(options?.automatic === true, isNarrowFileViewerViewport)) {
+      const focusedElement = typeof HTMLElement !== "undefined" && document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+      automaticFileTriggerRef.current = options?.trigger ?? focusedElement;
+      setPendingAutomaticFileOpen({
+        filePath,
+        displayPath: options?.displayPath ?? filePath,
+        sessionId: currentFileOpenSessionId,
+        cwd: currentFileOpenCwd,
+      });
+      return;
+    }
+    handleOpenFile(filePath, getFileName(filePath), currentFileOpenSessionId);
+  }, [
+    currentFileOpenCwd,
+    currentFileOpenSessionId,
+    handleOpenFile,
+    isNarrowFileViewerViewport,
+  ]);
+
+  const focusOpenedFileTab = useCallback(() => {
+    requestAnimationFrame(() => {
+      rightPanelRef.current
+        ?.querySelector<HTMLButtonElement>('button[data-active-file-tab="true"]')
+        ?.focus();
+    });
+  }, []);
+
+  const confirmAutomaticFileOpen = useCallback(() => {
+    if (!pendingAutomaticFileOpen) return;
+    if (!isSameFileOpenContext(pendingAutomaticFileOpen, {
+      sessionId: currentFileOpenSessionId,
+      cwd: currentFileOpenCwd,
+    })) {
+      dismissAutomaticFileOpen();
+      return;
+    }
+    const request = pendingAutomaticFileOpen;
+    dismissAutomaticFileOpen(false);
+    handleOpenFile(request.filePath, getFileName(request.filePath), request.sessionId);
+    focusOpenedFileTab();
+  }, [
+    currentFileOpenCwd,
+    currentFileOpenSessionId,
+    dismissAutomaticFileOpen,
+    focusOpenedFileTab,
+    handleOpenFile,
+    pendingAutomaticFileOpen,
+  ]);
 
   const handleCloseFileTab = useCallback((tabId: string) => {
     const remaining = fileTabs.filter((t) => t.id !== tabId);
     setFileTabs(remaining);
     if (remaining.length === 0) {
       setRightPanelOpen(false);
-      setFileViewerExpanded(false);
+      setFileViewerExpansion(fileViewerExpansionAfterFinalClose());
     }
     setActiveFileTabId((cur) => {
       if (cur !== tabId) return cur;
@@ -1087,6 +1205,7 @@ export function AppShell() {
 
       {/* Right panel: file viewer — always mounted, width animated via CSS */}
       <div
+        ref={rightPanelRef}
         className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}${fileViewerExpandedActive ? " right-panel-expanded" : ""}`}
         style={{
           display: "flex",
@@ -1109,7 +1228,10 @@ export function AppShell() {
             <button
               type="button"
               className="file-viewer-expand-button"
-              onClick={() => setFileViewerExpanded((expanded) => !expanded)}
+              onClick={() => setFileViewerExpansion((current) => fileViewerExpansionAfterToggle(
+                current,
+                isNarrowFileViewerViewport,
+              ))}
               title={fileViewerExpandedActive ? "Restore file viewer" : "Expand file viewer"}
               aria-label={fileViewerExpandedActive ? "Restore file viewer" : "Expand file viewer"}
             >
@@ -1149,6 +1271,13 @@ export function AppShell() {
         </div>
       </div>
     </div>
+    {pendingAutomaticFileOpen && (
+      <AutomaticFileOpenConfirmation
+        displayPath={pendingAutomaticFileOpen.displayPath}
+        onConfirm={confirmAutomaticFileOpen}
+        onDismiss={dismissAutomaticFileOpen}
+      />
+    )}
     {/* Normal file panel toggle — suppressed while the viewer is expanded */}
     <button
       className={`file-panel-toggle${fileViewerExpandedActive ? " file-panel-toggle-hidden" : ""}`}

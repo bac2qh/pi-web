@@ -71,7 +71,11 @@ lib/
   agent-client.ts      typed fetch helper for /api/agent commands
   draft-store.ts       local draft persistence helpers
   file-access.ts       allowed file roots for /api/files and worktrees
+  file-links.ts        authored-link resolution + strict assistant path recognition
   file-paths.ts        client/server path encoding helpers
+  file-types.ts        shared preview limits, languages, and automatic text eligibility
+  file-viewer-layout.ts pure responsive expansion/confirmation policy transitions
+  text-preview-file.ts bounded server-side text file reader
   markdown.ts          shared markdown helpers
   npx.ts               npx runner used by skill install
   pi-types.ts          local structural types for pi SDK objects
@@ -89,6 +93,7 @@ lib/
 
 components/
   AppShell.tsx        layout + URL state + tab management
+  AutomaticFileOpenConfirmation.tsx  narrow-width agent-path confirmation
   SessionSidebar.tsx  Pinned/Recent/Project presentations + FileExplorer
   ChatWindow.tsx      chat composition + completion sound wrapper
   ChatInput.tsx       input bar + model/thinking/tools/compact controls
@@ -205,9 +210,15 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - The model test route is `app/api/models-config/test/route.ts`; `app/api/models/test/` is not a real route.
 
 ### Expanded file viewer
-- `AppShell` owns the ephemeral expanded-viewer Boolean. Expansion changes shell/panel classes only: sidebar and center/chat remain mounted but leave layout and hit testing, while the existing right panel fills `100dvh` and the fixed panel toggle is suppressed.
-- Desktop expansion must override both the panel's `42%`/`300px` rule and its direct children's separate `42vw`/`300px` rule. At `640px` and below, the normal mobile panel remains the sole full-width mode and clears stale desktop expansion.
+- `AppShell` owns manual and automatic-narrow expansion provenance. Expansion changes shell/panel classes only: sidebar and center/chat remain mounted but leave layout and hit testing, while the existing right panel fills `100dvh` and the fixed panel toggle is suppressed.
+- Desktop expansion must override both the panel's `42%`/`300px` rule and its direct children's separate `42vw`/`300px` rule. At `640px` and below, the normal mobile panel remains the sole full-width mode; from `641px` through `999px`, every committed file open automatically uses expanded presentation. Narrow restore suppression lasts until the next open, and automatic expansion clears at `1000px` without clearing manual expansion.
 - Explorer Markdown stays separate from chat `MarkdownBody`. `MarkdownFilePreview` centers direct reading blocks at `1000px` maximum while direct code, wrapped tables, and standalone images use the wider padded surface with inner overflow.
+
+### Assistant-returned file paths
+- Only settled assistant text opts into automatic path recognition. A local Markdown AST transform handles conservative prose tokens and whole inline-code spans, skips authored links and fenced code, and never performs recognition-time I/O.
+- Automatic candidates must use the shared source/text filename policy and resolve lexically inside the exact session cwd, including linked-worktree identity. Authored Markdown links retain their broader existing resolver and authorization semantics.
+- Generated path actions open directly at `1000px` and above. Below `1000px`, `AppShell` owns one accessible **Open file** confirmation bound to the captured session/cwd and revalidates that identity before opening.
+- Text reads remain capped at 256 KiB and reject NUL-bearing or invalid UTF-8 bytes before returning content. Images, audio, PDF, DOCX, unknown extensions, and arbitrary extensionless names are not eligible for automatic path actions.
 
 ### Completion sound
 - `hooks/useAudio.ts` stores the toggle in `localStorage` as `pi-sound-enabled` and reuses one `AudioContext`.

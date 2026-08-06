@@ -7,10 +7,12 @@ import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
 const { FileViewer } = await jiti.import("./FileViewer.tsx");
+const { MarkdownBody } = await jiti.import("./MarkdownBody.tsx");
+const { AutomaticFileOpenConfirmation } = await jiti.import("./AutomaticFileOpenConfirmation.tsx");
+const { TEXT_PREVIEW_TOO_LARGE_ERROR, TEXT_PREVIEW_UNSUPPORTED_ERROR } = await jiti.import("../lib/file-types.ts");
 const TICKET = "a".repeat(43);
 
 function createMinimalDom() {
-  const noop = () => {};
   const makeEventTarget = (target) => {
     const listeners = new Map();
     target.addEventListener = (type, listener) => { const set = listeners.get(type) ?? new Set(); set.add(listener); listeners.set(type, set); };
@@ -21,8 +23,9 @@ function createMinimalDom() {
   const make = (tag, document) => makeEventTarget({
     nodeType: 1, nodeName: tag.toUpperCase(), tagName: tag.toUpperCase(), namespaceURI: "http://www.w3.org/1999/xhtml",
     ownerDocument: document, parentNode: null, childNodes: [], style: {}, attributes: {}, value: "", disabled: false,
-    naturalWidth: 40, naturalHeight: 20, duration: 3, focus: noop,
-    setAttribute(name, value) { this.attributes[name] = String(value); this[name] = String(value); }, removeAttribute(name) { delete this.attributes[name]; },
+    naturalWidth: 40, naturalHeight: 20, duration: 3,
+    focus() { document.activeElement = this; },
+    setAttribute(name, value) { this.attributes[name] = String(value); this[name] = String(value); }, getAttribute(name) { return this.attributes[name] ?? null; }, removeAttribute(name) { delete this.attributes[name]; },
     appendChild(child) { child.parentNode = this; this.childNodes.push(child); return child; },
     insertBefore(child, before) { child.parentNode = this; const index = this.childNodes.indexOf(before); this.childNodes.splice(index < 0 ? this.childNodes.length : index, 0, child); return child; },
     removeChild(child) { this.childNodes.splice(this.childNodes.indexOf(child), 1); child.parentNode = null; return child; },
@@ -31,11 +34,12 @@ function createMinimalDom() {
   const document = makeEventTarget({
     nodeType: 9, nodeName: "#document", namespaceURI: "http://www.w3.org/1999/xhtml",
     createElement(tag) { return make(tag, this); }, createElementNS(namespace, tag) { const element = make(tag, this); element.namespaceURI = namespace; return element; },
-    createTextNode(text) { return { nodeType: 3, nodeName: "#text", nodeValue: text, data: text, ownerDocument: this, parentNode: null }; }, defaultView: null,
+    createTextNode(text) { return { nodeType: 3, nodeName: "#text", nodeValue: text, data: text, ownerDocument: this, parentNode: null }; }, defaultView: null, activeElement: null,
     documentElement: { classList: { contains() { return false; }, add() {}, remove() {} } },
   });
   const window = makeEventTarget({ document, location: { protocol: "http:", host: "localhost:30141" }, HTMLIFrameElement: class {}, HTMLElement: class {}, Node: class {} });
   document.defaultView = window;
+  document.parentNode = window;
   return { document, window, container: make("div", document) };
 }
 function find(root, tag) { if (root.tagName === tag) return root; for (const child of root.childNodes ?? []) { const found = find(child, tag); if (found) return found; } return null; }
@@ -122,9 +126,15 @@ test("mounted text and document viewers synchronize without false diffs and reco
     readError = "Not found";
     await React.act(async () => { textSocket.message(frame("change", 2, false)); await flush(); await flush(); });
     assert.match(text(dom.container), /Not found/);
-    readError = null; content = "three";
+    readError = TEXT_PREVIEW_UNSUPPORTED_ERROR;
     await React.act(async () => { textSocket.message(frame("change", 3, true, 5)); await flush(); await flush(); });
-    assert.doesNotMatch(text(dom.container), /^Not found$/);
+    assert.match(text(dom.container), new RegExp(TEXT_PREVIEW_UNSUPPORTED_ERROR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    readError = TEXT_PREVIEW_TOO_LARGE_ERROR;
+    await React.act(async () => { textSocket.message(frame("change", 4, true, 5)); await flush(); await flush(); });
+    assert.match(text(dom.container), new RegExp(TEXT_PREVIEW_TOO_LARGE_ERROR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    readError = null; content = "three";
+    await React.act(async () => { textSocket.message(frame("change", 5, true, 5)); await flush(); await flush(); });
+    assert.doesNotMatch(text(dom.container), /Unsupported or binary|File too large|Not found/);
 
     await React.act(async () => { root.render(React.createElement(FileViewer, { filePath: "/synthetic/a.pdf" })); await flush(); await flush(); });
     assert.equal(textSocket.closeCalls.includes(1000), true);
@@ -438,6 +448,131 @@ test("StrictMode text refresh records one pure transition for one changed accept
   } finally {
     console.error = originalConsoleError;
     globalThis.window = previous.window; globalThis.document = previous.document; globalThis.WebSocket = previous.WebSocket; globalThis.fetch = previous.fetch; globalThis.IS_REACT_ACT_ENVIRONMENT = previous.act;
+  }
+});
+
+test("automatic file confirmation owns focus, keyboard, backdrop, cancel, and confirm behavior", async () => {
+  const previous = { window: globalThis.window, document: globalThis.document, act: globalThis.IS_REACT_ACT_ENVIRONMENT };
+  const dom = createMinimalDom();
+  globalThis.window = dom.window; globalThis.document = dom.document; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  let confirms = 0;
+  let dismissals = 0;
+  let escapedToWindow = 0;
+  const onWindowKeyDown = (event) => { if (event.key === "Escape") escapedToWindow += 1; };
+  dom.window.addEventListener("keydown", onWindowKeyDown);
+  const onConfirm = () => { confirms += 1; };
+  const onDismiss = () => { dismissals += 1; };
+  const root = createRoot(dom.container);
+  const renderConfirmation = async () => {
+    await React.act(async () => {
+      root.render(React.createElement(AutomaticFileOpenConfirmation, {
+        displayPath: "src/file.ts",
+        onConfirm,
+        onDismiss,
+      }));
+      await flush();
+    });
+  };
+  try {
+    await renderConfirmation();
+    const open = elementWithText(dom.container, "BUTTON", "Open file");
+    const cancel = elementWithText(dom.container, "BUTTON", "Cancel");
+    assert.ok(open); assert.ok(cancel);
+    assert.equal(dom.document.activeElement, open);
+    assert.match(text(dom.container), /src\/file\.ts/);
+
+    await React.act(async () => dom.document.dispatchEvent({ type: "keydown", key: "Tab", shiftKey: true }));
+    assert.equal(dom.document.activeElement, cancel);
+    await React.act(async () => dom.document.dispatchEvent({ type: "keydown", key: "Tab", shiftKey: false }));
+    assert.equal(dom.document.activeElement, open);
+    await React.act(async () => cancel.dispatchEvent({ type: "click", bubbles: true }));
+    assert.equal(dismissals, 1);
+    await React.act(async () => { root.render(null); await flush(); });
+
+    await renderConfirmation();
+    const backdrop = findAll(dom.container, (node) => node.attributes?.class === "automatic-file-confirmation-backdrop")[0];
+    assert.ok(backdrop);
+    await React.act(async () => backdrop.dispatchEvent({ type: "mousedown", bubbles: true }));
+    assert.equal(dismissals, 2);
+    await React.act(async () => { root.render(null); await flush(); });
+
+    await renderConfirmation();
+    await React.act(async () => elementWithText(dom.container, "BUTTON", "Open file").dispatchEvent({ type: "click", bubbles: true }));
+    assert.equal(confirms, 1);
+    await React.act(async () => { root.render(null); await flush(); });
+
+    await renderConfirmation();
+    await React.act(async () => dom.document.dispatchEvent({ type: "keydown", key: "Escape" }));
+    assert.equal(dismissals, 3);
+    assert.equal(escapedToWindow, 0, "handled Escape cannot reach global running-agent shortcuts");
+    await React.act(async () => root.unmount());
+    dom.document.dispatchEvent({ type: "keydown", key: "Escape" });
+    assert.equal(dismissals, 3, "unmount removes the document listener");
+    assert.equal(escapedToWindow, 1, "unhandled Escape still reaches the window after dialog cleanup");
+    dom.window.removeEventListener("keydown", onWindowKeyDown);
+  } finally {
+    globalThis.window = previous.window; globalThis.document = previous.document; globalThis.IS_REACT_ACT_ENVIRONMENT = previous.act;
+  }
+});
+
+test("settled generated file actions dispatch one local automatic-open request", async () => {
+  const previous = { window: globalThis.window, document: globalThis.document, act: globalThis.IS_REACT_ACT_ENVIRONMENT };
+  const dom = createMinimalDom();
+  globalThis.window = dom.window; globalThis.document = dom.document; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const opened = [];
+  const root = createRoot(dom.container);
+  try {
+    await React.act(async () => {
+      root.render(React.createElement(MarkdownBody, {
+        cwd: "/synthetic/worktree",
+        enableAutomaticFileLinks: true,
+        onOpenFile: (filePath, options) => opened.push({ filePath, options }),
+      }, "Open src/file.ts"));
+      await flush();
+    });
+    const action = elementWithText(dom.container, "BUTTON", "src/file.ts");
+    assert.ok(action);
+    await React.act(async () => action.dispatchEvent({ type: "click", bubbles: true }));
+    assert.equal(opened.length, 1);
+    assert.equal(opened[0].filePath, "/synthetic/worktree/src/file.ts");
+    assert.equal(opened[0].options.automatic, true);
+    assert.equal(opened[0].options.displayPath, "src/file.ts");
+    assert.equal(opened[0].options.trigger, action);
+    await React.act(async () => root.unmount());
+  } finally {
+    globalThis.window = previous.window; globalThis.document = previous.document; globalThis.IS_REACT_ACT_ENVIRONMENT = previous.act;
+  }
+});
+
+test("authored local Markdown links preserve plain and modifier-click behavior", async () => {
+  const previous = { window: globalThis.window, document: globalThis.document, act: globalThis.IS_REACT_ACT_ENVIRONMENT };
+  const dom = createMinimalDom();
+  globalThis.window = dom.window; globalThis.document = dom.document; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const opened = [];
+  const root = createRoot(dom.container);
+  try {
+    await React.act(async () => {
+      root.render(React.createElement(MarkdownBody, {
+        cwd: "/synthetic/worktree",
+        enableAutomaticFileLinks: true,
+        onOpenFile: (filePath, options) => opened.push({ filePath, options }),
+      }, "[open](src/file.ts)"));
+      await flush();
+    });
+    const link = elementWithText(dom.container, "A", "open");
+    assert.ok(link);
+    const modifiedClick = { type: "click", bubbles: true, ctrlKey: true };
+    await React.act(async () => link.dispatchEvent(modifiedClick));
+    assert.equal(opened.length, 0);
+    assert.equal(modifiedClick.defaultPrevented, false);
+
+    const plainClick = { type: "click", bubbles: true };
+    await React.act(async () => link.dispatchEvent(plainClick));
+    assert.deepEqual(opened, [{ filePath: "/synthetic/worktree/src/file.ts", options: undefined }]);
+    assert.equal(plainClick.defaultPrevented, true);
+    await React.act(async () => root.unmount());
+  } finally {
+    globalThis.window = previous.window; globalThis.document = previous.document; globalThis.IS_REACT_ACT_ENVIRONMENT = previous.act;
   }
 });
 
