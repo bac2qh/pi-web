@@ -1,7 +1,8 @@
 # Open Agent-Returned File Paths in the Viewer
 
-Status: draft
+Status: approved
 Date: 2026-08-05
+Approved by user: 2026-08-05
 
 ## Objective
 
