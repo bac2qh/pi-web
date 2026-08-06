@@ -27,3 +27,4 @@
 ## 2026-08-06
 
 - Updated custom-server transport memory after completing the global/session/file-watch WebSocket migration, bounded replay/backpressure/admission, 30-minute semantic idle, heartbeat, and owned-shutdown lifecycle; recorded that practical user acceptance does not imply the exact combined S7 load matrix was reconstructed.
+- Updated running-session-status memory so one session-level native settlement transactionally retires every pre-fanout continuation claim while preserving reentrant starts, receipt rollback, manual-compaction isolation, projected finality, and same-ID authority.

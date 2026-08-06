@@ -347,18 +347,18 @@ export class AgentSessionWrapper {
         // can reserve them. They become committed activity only if their exact
         // projected start frame commits.
         const startClaim = this.prepareCausalStart(lifecycle);
-        const terminalClaim = this.reserveCausalTerminal(lifecycle);
+        const terminalClaims = this.reserveCausalTerminalBatch(lifecycle);
         const receipt = prepared ? this.projectedHub.acceptPreparedNativeInput(prepared) : null;
 
         // Capture/projection rejection never suppresses the exact original raw
         // object or lets one hostile observer suppress another.
         this.fanoutLegacyEvent(event);
-        if (terminalClaim) terminalClaim.terminalFanoutComplete = true;
+        for (const claim of terminalClaims) claim.terminalFanoutComplete = true;
 
         const observeOutcome = (outcome: ProjectedInputCommitOutcome) => {
           if (!this._alive) return;
           if (startClaim) this.resolveCausalStart(lifecycle, startClaim, outcome);
-          if (terminalClaim) this.resolveCausalTerminal(lifecycle, terminalClaim, outcome);
+          if (terminalClaims.length > 0) this.resolveCausalTerminalBatch(lifecycle, terminalClaims, outcome);
           // A queued receipt can resolve after native event delivery returned,
           // so no enclosing fanout barrier remains to publish its final release.
           // Delayed active updates must not reclaim a replacement's authority.
@@ -570,15 +570,22 @@ export class AgentSessionWrapper {
     return claim;
   }
 
-  private reserveCausalTerminal(lifecycle: AcceptedNativeLifecycleInput | null): NativeCausalClaim | null {
-    if (lifecycle?.kind !== "agent_settled" && lifecycle?.kind !== "manual_compaction_end") return null;
-    const claim = this.causalClaimsFor(lifecycle)?.find((candidate) => !candidate.terminalReserved) ?? null;
-    if (!claim) return null;
-    claim.terminalReserved = true;
-    claim.terminalOutcome = "pending";
-    claim.terminalFanoutComplete = false;
+  private reserveCausalTerminalBatch(lifecycle: AcceptedNativeLifecycleInput | null): readonly NativeCausalClaim[] {
+    if (lifecycle?.kind !== "agent_settled" && lifecycle?.kind !== "manual_compaction_end") return [];
+    const claims = this.causalClaimsFor(lifecycle);
+    if (!claims) return [];
+    // Pi emits one session-level settlement after continuation loops whose
+    // individual attempts each emit a start. Manual compaction stays one-to-one.
+    const reserved = lifecycle.kind === "agent_settled"
+      ? claims.filter((claim) => !claim.terminalReserved)
+      : claims.filter((claim) => !claim.terminalReserved).slice(0, 1);
+    for (const claim of reserved) {
+      claim.terminalReserved = true;
+      claim.terminalOutcome = "pending";
+      claim.terminalFanoutComplete = false;
+    }
     this.syncCausalClaimCounts();
-    return claim;
+    return reserved;
   }
 
   private removeCausalClaim(lifecycle: AcceptedNativeLifecycleInput | null, claim: NativeCausalClaim): void {
@@ -610,20 +617,22 @@ export class AgentSessionWrapper {
     this.completeCommittedCausalClaim(lifecycle, claim);
   }
 
-  private resolveCausalTerminal(
+  private resolveCausalTerminalBatch(
     lifecycle: AcceptedNativeLifecycleInput | null,
-    claim: NativeCausalClaim,
+    claims: readonly NativeCausalClaim[],
     outcome: ProjectedInputCommitOutcome,
   ): void {
     if (outcome === "rejected") {
-      claim.terminalReserved = false;
-      claim.terminalOutcome = null;
-      claim.terminalFanoutComplete = false;
+      for (const claim of claims) {
+        claim.terminalReserved = false;
+        claim.terminalOutcome = null;
+        claim.terminalFanoutComplete = false;
+      }
       this.syncCausalClaimCounts();
       return;
     }
-    claim.terminalOutcome = "committed";
-    this.completeCommittedCausalClaim(lifecycle, claim);
+    for (const claim of claims) claim.terminalOutcome = "committed";
+    for (const claim of claims) this.completeCommittedCausalClaim(lifecycle, claim);
   }
 
   private projectedActivityIsIdle(): boolean {
