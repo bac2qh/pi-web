@@ -69,3 +69,15 @@ Plan: `.agents/plans/2026-08-06-s7-system-acceptance.md`
 **Departures from approved obligations:** User-accepted S7 departures: no new exact Firefox/Chromium 1/5/10-page inventory; no exact 1/7/10 aggregate session inventory; no combined 30-socket topology; no measured 5-page/7-run and 10-page/10-run schedulability/responsiveness run; no single combined visible/hidden retry/queue/compaction/navigation/background/offline/refresh/restart run; no single combined all-media file-viewer lifecycle run; no complete rich visual/capability matrix; and no S7-specific projected-byte/owned-resource observation beyond retained evidence. Existing narrower milestone evidence remains valid. No documentation, source, privacy, or cleanup obligation is silently waived.
 
 **Implementation commit:** Integrated implementation baseline `08f49cf714b6ada490bda3ded3b4c7a69d80d297`; S7 evidence commit pending.
+
+## Implementation Summary
+
+**Plan section:** S7 committed finality boundary before separate full-master validation.
+
+**Work and outcome:** S7 is accepted. Evidence commit `47b919c7e20c3e07a562050300c3965e8a4bc3af` contains the bounded current-state guidance, transport memory/log update, system-acceptance report, and pre-commit checkpoint evidence. It changes no implementation source and retains the orchestration worktree/branch for the master's separate validation and closeout.
+
+**Validation / evidence:** Exact task-source 679/679, TypeScript, zero-warning ESLint, package dry run, whitespace, ancestry, path, source inventory, practical user acceptance, and fresh independent `READY` review all passed as recorded above. The evidence commit's cached paths were exactly the five approved post-plan S7 paths and no S7 change remained unstaged.
+
+**Departures from approved obligations:** The eight user-accepted formal S7 evidence departures remain exactly those enumerated in the preceding summary and acceptance report: exact new 1/5/10-browser, 1/7/10-session, combined 30-socket, 5/7 and 10/10 responsiveness, combined session-recovery, combined all-media file lifecycle, complete rich visual/capability, and S7-specific byte/resource-observation evidence. No other obligation is incomplete, blocked, waived, superseded, or divergent at the S7 boundary.
+
+**Implementation commit:** S7 evidence `47b919c7e20c3e07a562050300c3965e8a4bc3af`; integrated source baseline `08f49cf714b6ada490bda3ded3b4c7a69d80d297`.
