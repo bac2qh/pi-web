@@ -6,6 +6,7 @@ import { MarkdownBody } from "./MarkdownBody";
 import { copyText } from "@/lib/clipboard";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
 import { buildAssistantBlockKey, isEmptyThinkingBlock } from "@/lib/message-display";
+import type { FileOpenOptions } from "@/lib/file-links";
 import type { MermaidView } from "@/lib/mermaid-display";
 import { parseUnifiedPatch, type SplitDiffCell } from "@/lib/patch";
 import type {
@@ -20,6 +21,8 @@ import type {
   ToolCallContent,
   ThinkingContent,
 } from "@/lib/types";
+
+type OpenFileHandler = (filePath: string, options?: FileOpenOptions) => void;
 
 const MAX_THINKING_CACHE_ENTRIES = 100;
 const thinkingContentCache = new Map<string, Promise<string>>();
@@ -59,7 +62,7 @@ interface Props {
   toolResults?: Map<string, ToolResultMessage>;
   modelNames?: Record<string, string>;
   cwd?: string;
-  onOpenFile?: (filePath: string) => void;
+  onOpenFile?: OpenFileHandler;
   entryId?: string;
   onFork?: (entryId: string) => void;
   forking?: boolean;
@@ -149,7 +152,7 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
 function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent }: {
   message: UserMessage;
   cwd?: string;
-  onOpenFile?: (filePath: string) => void;
+  onOpenFile?: OpenFileHandler;
   entryId?: string;
   onFork?: (entryId: string) => void;
   forking?: boolean;
@@ -366,7 +369,7 @@ function AssistantMessageView({
   toolResults?: Map<string, ToolResultMessage>;
   modelNames?: Record<string, string>;
   cwd?: string;
-  onOpenFile?: (filePath: string) => void;
+  onOpenFile?: OpenFileHandler;
   showTimestamp?: boolean;
   prevTimestamp?: number;
   sessionId?: string;
@@ -642,7 +645,7 @@ function BlockView({
   streamingDuration?: number;
   toolCallDurations?: Map<string, number>;
   cwd?: string;
-  onOpenFile?: (filePath: string) => void;
+  onOpenFile?: OpenFileHandler;
   sessionId?: string;
   entryId?: string;
   blockIndex: number;
@@ -687,7 +690,7 @@ function TextBlock({
   block: TextContent;
   isStreaming?: boolean;
   cwd?: string;
-  onOpenFile?: (filePath: string) => void;
+  onOpenFile?: OpenFileHandler;
   mermaidTextBlockIdentity?: string;
   mermaidViewSelections?: ReadonlyMap<string, MermaidView>;
   onMermaidViewChange?: (key: string, view: MermaidView) => void;
@@ -695,6 +698,7 @@ function TextBlock({
   return (
     <MarkdownBody
       isStreaming={isStreaming}
+      enableAutomaticFileLinks
       cwd={cwd}
       onOpenFile={onOpenFile}
       mermaidTextBlockIdentity={mermaidTextBlockIdentity}
@@ -1241,7 +1245,7 @@ function CompactionFileList({ title, files }: { title: string; files: string[] }
   );
 }
 
-function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessage; cwd?: string; onOpenFile?: (filePath: string) => void }) {
+function CustomMessageView({ message, cwd, onOpenFile }: { message: CustomMessage; cwd?: string; onOpenFile?: OpenFileHandler }) {
   const isHiddenDisplay = message.display === false;
   const [contentExpanded, setContentExpanded] = useState(!isHiddenDisplay);
   const [detailsExpanded, setDetailsExpanded] = useState(false);

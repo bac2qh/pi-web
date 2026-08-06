@@ -163,6 +163,33 @@ pre, code {
   text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .markdown-body a:hover { text-decoration-color: var(--accent); }
+.markdown-body .assistant-file-action {
+  appearance: none;
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  line-height: inherit;
+  text-align: inherit;
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, var(--accent) 65%, transparent);
+  cursor: pointer;
+}
+.markdown-body .assistant-file-action:hover {
+  text-decoration-style: solid;
+  text-decoration-color: var(--accent);
+}
+.markdown-body .assistant-file-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
 .markdown-body .markdown-inline-code {
   background: var(--bg-subtle);
   border-radius: 5px;
@@ -911,6 +938,73 @@ span.linenumber {
 }
 
 
+.automatic-file-confirmation-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.42);
+}
+.automatic-file-confirmation {
+  width: min(440px, 100%);
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-panel);
+  color: var(--text);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.28);
+}
+.automatic-file-confirmation-title {
+  margin-bottom: 10px;
+  font-size: 15px;
+  font-weight: 700;
+}
+.automatic-file-confirmation-path {
+  display: block;
+  max-height: 30vh;
+  overflow: auto;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.automatic-file-confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+.automatic-file-confirmation-actions button {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.automatic-file-confirmation-open {
+  border-color: var(--accent) !important;
+  background: var(--accent);
+  color: #fff;
+}
+.automatic-file-confirmation-cancel {
+  background: var(--bg);
+  color: var(--text-muted);
+}
+.automatic-file-confirmation-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* Right panel: animate width */
 @media (min-width: 641px) {
   .right-panel-container {
@@ -958,6 +1052,19 @@ span.linenumber {
 
 /* Mobile sidebar: slide in/out as overlay */
 @media (max-width: 640px) {
+  .automatic-file-confirmation-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .automatic-file-confirmation {
+    width: 100%;
+    padding: 18px 16px max(18px, env(safe-area-inset-bottom));
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 14px 14px 0 0;
+  }
+
   .file-viewer-expand-button {
     display: none !important;
   }

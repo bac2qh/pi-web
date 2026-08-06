@@ -2,6 +2,7 @@
 
 ## Topics
 
+- [Agent response file links](agent-response-file-links.md) — assistant-only path actions, exact-workspace containment, text-preview safety, and narrow confirmation/expansion provenance.
 - [Clone session host boundary](clone-session.md) — durable `/clone` semantics, source-stable lifecycle, concurrency guards, and native Pi extraction boundary.
 - [Hosted implementation sessions](hosted-implementation-sessions.md) — same-process Start/Orchestrate ownership transfer, capability/fallback boundary, cleanup, discovery, and source isolation.
 - [Running session status projection](running-session-status.md) — stable fanout publication, receipt-aware finality, delayed release, and same-ID publisher authority ordering.
