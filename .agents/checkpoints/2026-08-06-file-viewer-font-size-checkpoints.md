@@ -41,3 +41,15 @@ Plan: `.agents/plans/2026-08-06-file-viewer-font-size.md`
 **Departures from approved obligations:** None. The Display presentation handoff moved from the prior `1000px` threshold to `1400px` as the bounded correction required by the plan’s explicit four-group crowding risk and VC-004 unclipped-control obligation; the separate chat-width and automatic-expansion thresholds remain unchanged. The browser workflow is retained as synthetic evidence rather than a committed executable harness, consistent with the repository’s existing validation practice.
 
 **Implementation commit:** pending.
+
+## Implementation Summary
+
+**Plan section:** Final implementation, validation, review, and closeout readiness for Objective; Design / Implementation Strategy items 1-7; Validation Contract VC-001 through VC-006.
+
+**Work and outcome:** The independent File Viewer base-size preference, proportional source/diff/Explorer Markdown scaling, fourth global Display group, responsive `1400/1401px` presentation handoff, renderer/chrome ownership boundaries, focused tests, durable memory, and sanitized evidence are implemented and committed. The default appearance and font families remain unchanged; selected values persist independently and remain applied through normal, narrow/mobile, and expanded viewer lifecycles.
+
+**Validation / evidence:** Implementation commit `75c326ed581cd844ac27101b3773c58239ee1c1c`. Final automated results are 718 Node tests passed with zero failures, TypeScript passed, lint passed, and `git diff --check` passed. Browser validation under `.agents/reports/2026-08-06-file-viewer-font-size/` records real default/minimum/intermediate/maximum computed typography, source/diff/Markdown hierarchy and families, independent persistence, responsive control geometry with populated session statistics, both themes, normal/automatic/manual-expanded/mobile layouts, live diff, wrapping/overflow, and unchanged HTML/document/media geometry with no browser errors. The initial review findings were corrected and a fresh follow-up reviewer independently reproduced the full green suite and found no blockers or residual risks.
+
+**Departures from approved obligations:** None. The former Display-control `1000px` presentation threshold was not an obligation of this follow-up; it was moved to `1400px` to satisfy the approved crowding risk and VC-004 after measured clipping at the old threshold. The independent `1000px` chat-width and automatic-file-expansion policies are unchanged. Browser validation remains a retained synthetic report/screenshots rather than a committed executable harness; this is the repository’s established evidence form and no validation obligation was waived. Ambient `NODE_ENV=production` intentionally omits React `act()`, so the parent ran Node tests with `NODE_ENV=test`; the independent reviewer also passed all 718 tests with `NODE_ENV` unset.
+
+**Implementation commit:** `75c326ed581cd844ac27101b3773c58239ee1c1c`.
