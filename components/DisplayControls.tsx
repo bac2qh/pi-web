@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import {
   CHAT_WIDTH_SPEC,
+  FILE_VIEWER_FONT_SPEC,
   MENU_FONT_SPEC,
   TRANSCRIPT_FONT_SPEC,
   normalizeNumericPreference,
@@ -125,10 +126,12 @@ export function DisplayControls({ variant }: { variant: "inline" | "panel" }) {
     chatWidthPercent,
     transcriptFontSize,
     menuFontSize,
+    fileViewerFontSize,
     setChatWidthPercent,
     resetChatWidthPercent,
     setTranscriptFontSize,
     setMenuFontSize,
+    setFileViewerFontSize,
   } = useDisplayPreferences();
 
   return (
@@ -185,6 +188,14 @@ export function DisplayControls({ variant }: { variant: "inline" | "panel" }) {
         value={menuFontSize}
         spec={MENU_FONT_SPEC}
         onChange={setMenuFontSize}
+        variant={variant}
+      />
+      <NumericStepper
+        label="File Viewer"
+        shortLabel="File"
+        value={fileViewerFontSize}
+        spec={FILE_VIEWER_FONT_SPEC}
+        onChange={setFileViewerFontSize}
         variant={variant}
       />
     </div>

@@ -13,6 +13,7 @@ import {
   CHAT_WIDTH_SPEC,
   DEFAULT_DISPLAY_PREFERENCES,
   DISPLAY_PREFERENCE_STORAGE_KEYS,
+  FILE_VIEWER_FONT_SPEC,
   MENU_FONT_SPEC,
   TRANSCRIPT_FONT_SPEC,
   displayPreferenceCssVariables,
@@ -26,6 +27,7 @@ interface DisplayPreferencesContextValue extends DisplayPreferences {
   resetChatWidthPercent: () => void;
   setTranscriptFontSize: (value: number) => void;
   setMenuFontSize: (value: number) => void;
+  setFileViewerFontSize: (value: number) => void;
 }
 
 const DEFAULT_CONTEXT: DisplayPreferencesContextValue = {
@@ -34,6 +36,7 @@ const DEFAULT_CONTEXT: DisplayPreferencesContextValue = {
   resetChatWidthPercent: () => {},
   setTranscriptFontSize: () => {},
   setMenuFontSize: () => {},
+  setFileViewerFontSize: () => {},
 };
 
 const DisplayPreferencesContext = createContext<DisplayPreferencesContextValue>(DEFAULT_CONTEXT);
@@ -72,6 +75,10 @@ export function DisplayPreferencesProvider({ children }: { children: ReactNode }
         menuFontSize: parseStoredPreference(
           window.localStorage.getItem(DISPLAY_PREFERENCE_STORAGE_KEYS.menuFontSize),
           MENU_FONT_SPEC,
+        ),
+        fileViewerFontSize: parseStoredPreference(
+          window.localStorage.getItem(DISPLAY_PREFERENCE_STORAGE_KEYS.fileViewerFontSize),
+          FILE_VIEWER_FONT_SPEC,
         ),
       };
     } catch {
@@ -113,16 +120,23 @@ export function DisplayPreferencesProvider({ children }: { children: ReactNode }
     updatePreference("menuFontSize", normalized, DISPLAY_PREFERENCE_STORAGE_KEYS.menuFontSize);
   }, [updatePreference]);
 
+  const setFileViewerFontSize = useCallback((value: number) => {
+    const normalized = normalizeNumericPreference(value, FILE_VIEWER_FONT_SPEC);
+    updatePreference("fileViewerFontSize", normalized, DISPLAY_PREFERENCE_STORAGE_KEYS.fileViewerFontSize);
+  }, [updatePreference]);
+
   const value = useMemo<DisplayPreferencesContextValue>(() => ({
     ...preferences,
     setChatWidthPercent,
     resetChatWidthPercent,
     setTranscriptFontSize,
     setMenuFontSize,
+    setFileViewerFontSize,
   }), [
     preferences,
     resetChatWidthPercent,
     setChatWidthPercent,
+    setFileViewerFontSize,
     setMenuFontSize,
     setTranscriptFontSize,
   ]);

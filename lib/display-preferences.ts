@@ -9,6 +9,7 @@ export interface DisplayPreferences {
   chatWidthPercent: number;
   transcriptFontSize: number;
   menuFontSize: number;
+  fileViewerFontSize: number;
 }
 
 export const CHAT_WIDTH_SPEC: NumericPreferenceSpec = {
@@ -32,16 +33,25 @@ export const MENU_FONT_SPEC: NumericPreferenceSpec = {
   step: 1,
 };
 
+export const FILE_VIEWER_FONT_SPEC: NumericPreferenceSpec = {
+  defaultValue: 14,
+  min: 10,
+  max: 32,
+  step: 1,
+};
+
 export const DEFAULT_DISPLAY_PREFERENCES: DisplayPreferences = {
   chatWidthPercent: CHAT_WIDTH_SPEC.defaultValue,
   transcriptFontSize: TRANSCRIPT_FONT_SPEC.defaultValue,
   menuFontSize: MENU_FONT_SPEC.defaultValue,
+  fileViewerFontSize: FILE_VIEWER_FONT_SPEC.defaultValue,
 };
 
 export const DISPLAY_PREFERENCE_STORAGE_KEYS = {
   chatWidthPercent: "pi-chat-width-percent",
   transcriptFontSize: "pi-transcript-font-size",
   menuFontSize: "pi-menu-font-size",
+  fileViewerFontSize: "pi-file-viewer-font-size",
 } as const;
 
 export function normalizeNumericPreference(value: number, spec: NumericPreferenceSpec): number {
@@ -73,6 +83,10 @@ export function displayPreferenceCssVariables(preferences: DisplayPreferences): 
     "--pi-transcript-font-scale": String(preferences.transcriptFontSize / 14),
     "--pi-menu-font-size": `${preferences.menuFontSize}px`,
     "--pi-menu-font-scale": String(preferences.menuFontSize / MENU_FONT_SPEC.defaultValue),
+    "--pi-file-viewer-font-size": `${preferences.fileViewerFontSize}px`,
+    "--pi-file-viewer-font-scale": String(
+      preferences.fileViewerFontSize / FILE_VIEWER_FONT_SPEC.defaultValue,
+    ),
   };
 }
 
@@ -82,4 +96,8 @@ export function scaledMenuFontSize(basePixels: number): string {
 
 export function scaledTranscriptFontSize(basePixels: number): string {
   return `calc(${basePixels}px * var(--pi-transcript-font-scale, ${TRANSCRIPT_FONT_SPEC.defaultValue / 14}))`;
+}
+
+export function scaledFileViewerFontSize(basePixels: number): string {
+  return `calc(${basePixels}px * var(--pi-file-viewer-font-scale, 1))`;
 }

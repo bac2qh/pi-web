@@ -38,6 +38,8 @@
   --pi-transcript-font-scale: 1.1428571429;
   --pi-menu-font-size: 14px;
   --pi-menu-font-scale: 1;
+  --pi-file-viewer-font-size: 14px;
+  --pi-file-viewer-font-scale: 1;
 }
 
 html.dark {
@@ -472,6 +474,7 @@ pre, code {
   min-width: 0;
   padding: 24px 32px;
   overflow-x: hidden;
+  font-size: var(--pi-file-viewer-font-size, 14px);
 }
 .markdown-file-preview h1 { font-size: 1.8em; }
 .markdown-file-preview h2 { font-size: 1.4em; }
@@ -486,7 +489,7 @@ pre, code {
   border: 1px solid var(--border);
   border-radius: 6px;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: calc(13px * var(--pi-file-viewer-font-scale, 1));
 }
 .markdown-file-preview code {
   padding: 1px 5px;
@@ -511,6 +514,7 @@ pre, code {
 .markdown-file-table-wrap table {
   width: max-content;
   min-width: 100%;
+  font-size: calc(13px * var(--pi-file-viewer-font-scale, 1));
 }
 .markdown-file-preview .markdown-file-media {
   max-width: 100%;
@@ -805,7 +809,10 @@ span.linenumber {
   font-size: 0.9em;
 }
 
-@container center-pane (max-width: 1000px) {
+/* Four proportional Display groups plus the session controls need more room
+   than the chat-width handoff. Keep the complete inline row unclipped even at
+   the maximum Menu size. */
+@container center-pane (max-width: 1400px) {
   .display-controls-inline-wrap {
     display: none;
   }

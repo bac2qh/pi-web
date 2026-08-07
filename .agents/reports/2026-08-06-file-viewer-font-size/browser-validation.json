@@ -1,0 +1,261 @@
+{
+  "defaultsAndControls": {
+    "defaults": {
+      "viewer": 14,
+      "transcript": 16,
+      "menu": 14,
+      "storageInitiallyAbsent": true
+    },
+    "editing": {
+      "immediateValidUpdate": true,
+      "escapeRevert": true,
+      "min": 10,
+      "max": 32,
+      "step": 1,
+      "boundedButtonsAndKeyboard": true,
+      "independentStorage": true
+    },
+    "reloadPersistence": true
+  },
+  "source": {
+    "defaults": {
+      "content": {
+        "size": 13,
+        "family": "\"Noto Sans Mono\", \"Noto Sans Mono Fallback\", \"JetBrains Mono\", \"Fira Code\", Consolas, ui-monospace, \"PingFang SC\", \"Microsoft YaHei\", monospace",
+        "lineHeight": 20.8
+      },
+      "lineNumber": {
+        "size": 13,
+        "family": "\"Noto Sans Mono\", \"Noto Sans Mono Fallback\", \"JetBrains Mono\", \"Fira Code\", Consolas, ui-monospace, \"PingFang SC\", \"Microsoft YaHei\", monospace",
+        "lineHeight": 20.8
+      },
+      "status": {
+        "size": 11,
+        "family": "\"Noto Sans Mono\", \"Noto Sans Mono Fallback\", \"JetBrains Mono\", \"Fira Code\", Consolas, ui-monospace, \"PingFang SC\", \"Microsoft YaHei\", monospace",
+        "lineHeight": 16.5
+      },
+      "tab": {
+        "size": 12,
+        "family": "-apple-system, \"system-ui\", \"Segoe UI\", Roboto, sans-serif",
+        "lineHeight": 18
+      },
+      "transcript": {
+        "size": 16,
+        "family": "-apple-system, \"system-ui\", \"Segoe UI\", Roboto, sans-serif",
+        "lineHeight": 27.2
+      }
+    },
+    "persistedAt28": {
+      "content": 26,
+      "lineNumber": 26
+    },
+    "wrap": {
+      "nowrapGeometry": {
+        "clientWidth": 804,
+        "scrollWidth": 10624
+      },
+      "wrapGeometry": {
+        "clientWidth": 804,
+        "scrollWidth": 10561
+      },
+      "nowrapWhiteSpace": "pre",
+      "wrapWhiteSpace": "pre-wrap"
+    }
+  },
+  "markdown": {
+    "defaults": {
+      "root": 14,
+      "h1": 25.2,
+      "h2": 19.6,
+      "h3": 16.1,
+      "paragraph": 14,
+      "pre": 13,
+      "fencedCode": 11.7,
+      "inlineCode": 12.6,
+      "table": 13
+    },
+    "minimum": {
+      "root": 10,
+      "h1": 18,
+      "h2": 14,
+      "h3": 11.5,
+      "paragraph": 10,
+      "pre": 9.28571,
+      "fencedCode": 8.35714,
+      "inlineCode": 9,
+      "table": 9.28571
+    },
+    "maximum": {
+      "root": 32,
+      "h1": 57.6,
+      "h2": 44.8,
+      "h3": 36.8,
+      "paragraph": 32,
+      "pre": 29.7143,
+      "fencedCode": 26.7429,
+      "inlineCode": 28.8,
+      "table": 29.7143
+    },
+    "familiesPreserved": true,
+    "ratiosPreserved": true,
+    "overflow": {
+      "pre": {
+        "clientWidth": 740,
+        "scrollWidth": 10765
+      },
+      "table": {
+        "clientWidth": 740,
+        "scrollWidth": 10036
+      },
+      "document": {
+        "clientWidth": 1920,
+        "scrollWidth": 1920,
+        "overflow": false
+      }
+    },
+    "crossDomainIsolation": {
+      "viewerLeavesChromeOnMenu": true,
+      "menuLeavesContentOnViewer": true,
+      "transcriptLeavesContentOnViewer": true,
+      "transcriptBefore": 16,
+      "transcriptAfter": 22
+    }
+  },
+  "diff": {
+    "defaults": {
+      "body": 13,
+      "prefix": 13,
+      "lineNumber": 11,
+      "collapsed": 11
+    },
+    "minimum": {
+      "body": 9.28571,
+      "prefix": 9.28571,
+      "lineNumber": 7.85714,
+      "collapsed": 7.85714
+    },
+    "maximum": {
+      "body": 29.7143,
+      "prefix": 29.7143,
+      "lineNumber": 25.1429,
+      "collapsed": 25.1429
+    },
+    "familiesPreserved": true,
+    "ratiosPreserved": true
+  },
+  "ownershipBoundaries": {
+    "rawHtml": {
+      "at14": 13,
+      "at28": 26
+    },
+    "htmlPreview": {
+      "before": 16,
+      "after": 16
+    },
+    "image": {
+      "before": {
+        "width": 120,
+        "height": 60,
+        "naturalWidth": 120,
+        "naturalHeight": 60
+      },
+      "after": {
+        "width": 120,
+        "height": 60,
+        "naturalWidth": 120,
+        "naturalHeight": 60
+      }
+    },
+    "audio": {
+      "before": {
+        "width": 680,
+        "height": 54
+      },
+      "after": {
+        "width": 680,
+        "height": 54
+      }
+    },
+    "documents": {
+      "sample.pdf": {
+        "before": {
+          "width": 806.390625,
+          "height": 835
+        },
+        "after": {
+          "width": 806.390625,
+          "height": 835
+        }
+      },
+      "sample.docx": {
+        "before": {
+          "width": 806.390625,
+          "height": 835
+        },
+        "after": {
+          "width": 806.390625,
+          "height": 835
+        }
+      }
+    }
+  },
+  "responsive": {
+    "inlineFourthGroup": true,
+    "panelFourthGroup": true,
+    "presentationHandoff": {
+      "at1001": {
+        "clientWidth": 1001,
+        "scrollWidth": 1001
+      },
+      "at1400": "panel",
+      "at1401": {
+        "clientWidth": 1401,
+        "scrollWidth": 1401
+      }
+    },
+    "narrowPanelRect": {
+      "left": 276,
+      "right": 784,
+      "width": 508
+    },
+    "manualExpandedValue": 21,
+    "automaticExpandedValue": 21,
+    "restoredAdjustment": 19,
+    "mobileValue": 10,
+    "mobileGroupRect": {
+      "left": 16,
+      "right": 374,
+      "width": 358
+    },
+    "expandedHidesGlobalControl": true,
+    "restoreRegainsGlobalControl": true
+  },
+  "accessibilityAndOverflow": {
+    "inlineGroups": [
+      "Chat width",
+      "Transcript font size",
+      "Menu font size",
+      "File Viewer font size"
+    ],
+    "visibleFocus": {
+      "style": "solid",
+      "width": "2px"
+    },
+    "topBarAtMenu24": {
+      "clientWidth": 1446,
+      "scrollWidth": 1446
+    },
+    "documentAtExtremes": {
+      "clientWidth": 2500,
+      "scrollWidth": 2500,
+      "overflow": false
+    }
+  },
+  "screenshots": [
+    "desktop-expanded-light.png",
+    "desktop-expanded-dark.png",
+    "narrow-display-panel.png",
+    "mobile-source.png"
+  ],
+  "consoleErrors": []
+}

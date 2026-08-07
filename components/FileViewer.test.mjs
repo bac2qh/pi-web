@@ -588,3 +588,20 @@ test("viewer source preserves all variants and AppShell mounts only the active t
   assert.match(shell, /right-panel-closed/);
   assert.doesNotMatch(shell, /rightPanelOpen\s*&&\s*activeFileTab\?\.filePath/);
 });
+
+test("viewer content uses the independent scale while chrome and opaque renderers keep their owners", async () => {
+  const viewer = await readFile(new URL("./FileViewer.tsx", import.meta.url), "utf8");
+
+  assert.equal((viewer.match(/scaledFileViewerFontSize\(/g) ?? []).length, 6);
+  assert.match(viewer, /lineNumberStyle=\{\{[\s\S]*?fontSize: scaledFileViewerFontSize\(13\)/);
+  assert.match(viewer, /customStyle=\{\{[\s\S]*?fontSize: scaledFileViewerFontSize\(13\)/);
+  assert.match(viewer, /fontSize: scaledFileViewerFontSize\(11\)[\s\S]*?unchanged lines/);
+  assert.match(viewer, /fontSize: scaledFileViewerFontSize\(11\)[\s\S]*?borderRight: "1px solid var\(--border\)"/);
+  assert.doesNotMatch(viewer, /fontSize:\s*(?:11|13)(?:,|\s*})/);
+
+  assert.match(viewer, /fontSize: scaledMenuFontSize\(11\)/, "status and controls remain on Menu");
+  assert.match(viewer, /Loading\.\.\.[\s\S]*?scaledMenuFontSize|scaledMenuFontSize\(13\)[\s\S]*?Loading\.\.\./);
+  assert.match(viewer, /<iframe[\s\S]*?title="HTML preview"/);
+  assert.match(viewer, /title=\{`Preview \$\{getFileName\(filePath\)\}`\}/);
+  assert.doesNotMatch(viewer, /\bzoom\b|--pi-file-viewer-font-(?:size|scale)[\s\S]{0,200}<iframe/);
+});

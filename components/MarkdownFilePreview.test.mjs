@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -67,6 +68,19 @@ test("recognizes a linked image as standalone media", () => {
   const html = renderFileMarkdown("[![Diagram](diagram.png)](full-size.png)");
 
   assert.match(html, /<p class="markdown-file-media-block"><a href="full-size\.png"><img [^>]*class="markdown-file-media"[^>]*\/><\/a><\/p>/);
+});
+
+test("Explorer typography consumes one file-only base and proportional fixed baselines", async () => {
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+
+  assert.match(css, /\.markdown-body\s*\{[\s\S]*?font-size:\s*14px;/, "generic Markdown keeps its existing base");
+  assert.match(css, /\.chat-width-container \.markdown-body\s*\{\s*font-size:\s*var\(--pi-transcript-font-size, 16px\);\s*\}/);
+  assert.match(css, /\.markdown-file-preview\s*\{[\s\S]*?font-size:\s*var\(--pi-file-viewer-font-size, 14px\);[\s\S]*?\}/);
+  assert.match(css, /\.markdown-file-preview pre\s*\{[\s\S]*?font-size:\s*calc\(13px \* var\(--pi-file-viewer-font-scale, 1\)\);[\s\S]*?\}/);
+  assert.match(css, /\.markdown-file-table-wrap table\s*\{[\s\S]*?font-size:\s*calc\(13px \* var\(--pi-file-viewer-font-scale, 1\)\);[\s\S]*?\}/);
+  assert.match(css, /\.markdown-file-preview h1\s*\{\s*font-size:\s*1\.8em;\s*\}/);
+  assert.match(css, /\.markdown-file-preview code\s*\{[\s\S]*?font-size:\s*0\.9em;[\s\S]*?\}/);
+  assert.doesNotMatch(css, /\.chat-width-container[^{]*--pi-file-viewer-font/);
 });
 
 test("does not leak Explorer table or media hooks into chat Markdown", () => {

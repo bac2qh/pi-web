@@ -1,0 +1,30 @@
+File Viewer Font Size — Automated Validation Summary
+Date: 2026-08-06
+
+$ NODE_ENV=test node --test components/*.test.mjs lib/*.test.mjs
+PASS: 718 tests, 0 failures, 0 skipped, 0 cancelled.
+Note: the parent environment exports NODE_ENV=production, where React intentionally omits act(); test mode was selected explicitly. An independent reviewer also reproduced 718/718 with NODE_ENV unset.
+
+$ node_modules/.bin/tsc --noEmit
+PASS: no TypeScript errors.
+
+$ npm run lint
+PASS: no lint errors.
+
+$ git diff --check
+PASS: no whitespace errors.
+
+Privacy-safe browser validation
+PASS: isolated synthetic HOME/session/files; no browser console or page errors.
+PASS: default, minimum, intermediate, and maximum Viewer values; direct input, keyboard/button bounds, Escape reversion, independent localStorage persistence, and reload.
+PASS: computed source, source-line-number, diff, raw HTML, and Explorer Markdown typography retained default families/ratios and scaled proportionally.
+PASS: File Viewer remained independent from Transcript and Menu; status, tabs, controls, loading, and errors remained Menu-owned.
+PASS: HTML Preview, image, audio, PDF, and DOCX remained renderer/media-owned.
+PASS: inline and panel controls, visible focus, 1001/1400/1401px presentation handoff, narrow/mobile geometry, manual/automatic expansion, restoration, both themes, wrapping, inner overflow, and no document overflow.
+Evidence: browser-validation.json and four synthetic screenshots in this directory.
+
+Scope audit
+PASS: no dependency, server API, shared setting, telemetry, iframe injection, document zoom, or font-family change.
+PASS: next build was not run.
+
+Raw logs are intentionally not retained here because unrelated tests and development infrastructure emit local paths and synthetic runtime identifiers.

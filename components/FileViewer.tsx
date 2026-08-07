@@ -1,6 +1,6 @@
 "use client";
 
-import { scaledMenuFontSize } from "@/lib/display-preferences";
+import { scaledFileViewerFontSize, scaledMenuFontSize } from "@/lib/display-preferences";
 import { useEffect, useState, useRef, useCallback } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vs } from "react-syntax-highlighter/dist/cjs/styles/prism";
@@ -164,7 +164,7 @@ function DiffView({ oldContent, newContent }: { oldContent: string; newContent: 
   const hasChanges = diff.some((l) => l.type !== "unchanged");
   if (!hasChanges) {
     return (
-      <div style={{ padding: "12px 16px", fontSize: scaledMenuFontSize(12), color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
+      <div style={{ padding: "12px 16px", fontSize: scaledFileViewerFontSize(12), color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
         No changes
       </div>
     );
@@ -214,7 +214,7 @@ function DiffView({ oldContent, newContent }: { oldContent: string; newContent: 
   let diffIdx = 0;
 
   return (
-    <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, lineHeight: 1.6 }}>
+    <div style={{ fontFamily: "var(--font-mono)", fontSize: scaledFileViewerFontSize(13), lineHeight: 1.6 }}>
       {segments.map((seg, si) => {
         if (seg.hidden) {
           const result = (
@@ -224,7 +224,7 @@ function DiffView({ oldContent, newContent }: { oldContent: string; newContent: 
                 padding: "2px 16px",
                 color: "var(--text-dim)",
                 background: "var(--bg-panel)",
-                fontSize: 11,
+                fontSize: scaledFileViewerFontSize(11),
                 borderTop: "1px solid var(--border)",
                 borderBottom: "1px solid var(--border)",
               }}
@@ -269,7 +269,7 @@ function DiffView({ oldContent, newContent }: { oldContent: string; newContent: 
                   textAlign: "right",
                   color: "var(--text-dim)",
                   userSelect: "none",
-                  fontSize: 11,
+                  fontSize: scaledFileViewerFontSize(11),
                   lineHeight: 1.6,
                   borderRight: "1px solid var(--border)",
                   background: "var(--bg-panel)",
@@ -980,12 +980,13 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile }: Props) {
               fontStyle: "normal",
               minWidth: "3em",
               paddingRight: "1em",
+              fontSize: scaledFileViewerFontSize(13),
             }}
             customStyle={{
               margin: 0,
               padding: "12px 0",
               background: "var(--bg)",
-              fontSize: 13,
+              fontSize: scaledFileViewerFontSize(13),
               lineHeight: 1.6,
               fontFamily: "var(--font-mono)",
               minHeight: "100%",
