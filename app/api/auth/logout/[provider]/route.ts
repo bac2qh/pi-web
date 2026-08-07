@@ -1,5 +1,5 @@
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { invalidateModelsCache } from "@/lib/models-cache";
+import { withModelsCacheInvalidation } from "@/lib/model-credential-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +12,6 @@ export async function POST(
   if (!modelRuntime.getProvider(provider)?.auth.oauth) {
     return Response.json({ error: `Unknown provider: ${provider}` }, { status: 400 });
   }
-  await modelRuntime.logout(provider);
-  invalidateModelsCache();
+  await withModelsCacheInvalidation(() => modelRuntime.logout(provider));
   return Response.json({ ok: true });
 }

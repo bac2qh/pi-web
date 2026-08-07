@@ -56,10 +56,34 @@ PI_WEB_NO_OPEN=1 pi-web         # 适用于后台服务或开机自启
 
 ## 开发
 
+### 本地 Pi Fork 前置条件
+
+此 checkout 有意使用由 `bac2qh/pi` 提交 `734502cb86eaf631e1ceeb403dbd717e3b78404f` 构建的本地、未跟踪 coding-agent tarball。它不会使用全局 Pi 安装，而且当前形态不可发布。
+
+请使用 Node `24.19.0` 和 npm `11.17.0`，并让保留的 main checkout 互为同级目录：
+
+```text
+<repos>/pi-web/
+<repos>/pi/
+```
+
+同级 `pi` checkout 必须保持干净，`origin` 必须指向 `bac2qh/pi`，并且 `HEAD` 必须是上面的精确提交。在保留的 `pi-web` main 中运行：
+
 ```bash
-npm install
+npm run build:local-pi-fork
+npm run install:local-pi-fork
 npm run dev
 ```
+
+该 helper 会从精确提交创建两套全新构建，运行 Fork 的检查、测试、构建、local-release 流程和聚焦的 faux-provider 压缩回归；只有两个归档逐字节一致时，才会原子发布到：
+
+```text
+../pi/.artifacts/pi-web/734502cb8/bac2qh-pi-coding-agent-0.84.0-bac2qh.734502cb8.tgz
+```
+
+此产物已被 Fork 忽略，必须在本机重建；它不会全局安装，也不会从自定义包发布中下载。为避免可变的模型目录输入，helper 会先从未改动的官方 `@earendil-works/pi-ai@0.84.0` 产物补齐生成模型数据，再运行精确 Fork 的验证流程。`npm run install:local-pi-fork` 会先校验磁盘上的产物身份和已提交完整性，再运行禁用脚本的 `npm ci`，因此即使 npm 缓存已预热，也不能掩盖缺失或过期的同级产物。它不会退回 registry coding-agent；请重新运行构建 helper（如果它报告字节不匹配，只保留或删除那个精确的旧产物）。
+
+已提交的 `file:../pi/...` 路径以保留的 `pi-web` main 为基准。位于 `.agents/worktrees/` 下的嵌套受管 checkout 不具备该同级布局；请在一次性的 `pi-web`/`pi` 同级副本中验证，不要创建假的 worktree，也不要修改 manifest 路径。
 
 本地开发端口为 [http://localhost:30141](http://localhost:30141)。
 

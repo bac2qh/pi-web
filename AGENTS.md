@@ -3,8 +3,12 @@
 ## Quick Start
 
 ```bash
+npm run build:local-pi-fork    # retained main only; requires clean sibling ../pi at 734502cb8
+npm run install:local-pi-fork  # verifies on-disk identity/integrity, then npm ci --ignore-scripts
 npm run dev   # port 30141
 ```
+
+The local fork helper requires Node `24.19.0`/npm `11.17.0` and the retained `pi-web`/`pi` sibling layout. Nested `.agents/worktrees/` checkouts must validate through a disposable sibling-layout copy; do not change the committed `file:../pi/...` dependency to fit a nested worktree.
 
 Typecheck: `node_modules/.bin/tsc --noEmit`  
 Lint: `npm run lint`  
@@ -123,6 +127,13 @@ hooks/
 ---
 
 ## Key Design Decisions & Traps
+
+### Local bac2qh/pi coding-agent fork
+- The compatibility dependency key remains `@earendil-works/pi-coding-agent`, but npm installs the untracked local tarball whose actual identity is `@bac2qh/pi-coding-agent@0.84.0-bac2qh.734502cb8` from exact commit `734502cb86eaf631e1ceeb403dbd717e3b78404f`.
+- `scripts/build-local-pi-fork.mjs` requires the pinned Node/npm toolchain and clean sibling fork, validates two fresh exact-commit builds plus the fork suite/faux regression, applies only the declared package/shrinkwrap identity overlay, requires byte-identical archives, and publishes under sibling `pi/.artifacts/pi-web/734502cb8/` without global installation.
+- The helper pins ignored generated model data to the integrity-checked official `@earendil-works/pi-ai@0.84.0` artifact so mutable live model catalogs cannot change exact-commit validation.
+- `package-lock.json` records the local tarball integrity and exact official `0.84.0` AI/TUI/agent-core/client/protocol/telemetry graph. npm is authoritative; `bun.lock` remains unchanged and unvalidated.
+- This manifest is local-only and non-publishable because npm publication does not embed an external `file:` dependency. `npm run release` is intentionally unchanged but blocked until a separately approved change restores a self-contained dependency.
 
 ### Custom server and persistent WebSocket transport
 - `npm run dev`, `npm start`, and the published `pi-web` command all enter through `bin/pi-web.js` and the Pi-Web-owned Node server in `bin/pi-web-server.js`; production alone requires an existing `.next` build.

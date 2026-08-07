@@ -1,5 +1,8 @@
 # Release Checklist
 
+> [!WARNING]
+> The current manifest is intentionally **local-only and non-publishable**: `@earendil-works/pi-coding-agent` resolves an untracked sibling tarball through `file:../pi/.artifacts/...`. npm does not embed that external tarball when publishing Pi Web, so a consumer install would fail. Do not run `npm run release`, publish, tag, or create a GitHub Release from this manifest. A separately approved release-preparation change must first restore a self-contained publishable dependency and pass the full release validation. The release command and implementation below are deliberately unchanged.
+
 This repo publishes two artifacts for each release:
 
 - npm package: `@agegr/pi-web`

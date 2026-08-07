@@ -1,6 +1,6 @@
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { NextResponse } from "next/server";
-import { invalidateModelsCache } from "@/lib/models-cache";
+import { withModelsCacheInvalidation } from "@/lib/model-credential-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +26,7 @@ export async function POST(req: Request, { params }: Params) {
     }
     const modelRuntime = await ModelRuntime.create();
     let keySubmitted = false;
-    await modelRuntime.login(provider, "api_key", {
+    await withModelsCacheInvalidation(() => modelRuntime.login(provider, "api_key", {
       notify: () => {},
       prompt: async (prompt) => {
         if (prompt.type === "select") {
@@ -40,8 +40,7 @@ export async function POST(req: Request, { params }: Params) {
         }
         throw new Error(`${provider} requires additional authentication settings`);
       },
-    });
-    invalidateModelsCache();
+    }));
     return NextResponse.json({ success: true });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
@@ -53,8 +52,7 @@ export async function DELETE(_req: Request, { params }: Params) {
   const { provider } = await params;
   try {
     const modelRuntime = await ModelRuntime.create();
-    await modelRuntime.logout(provider);
-    invalidateModelsCache();
+    await withModelsCacheInvalidation(() => modelRuntime.logout(provider));
     return NextResponse.json({ success: true });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });

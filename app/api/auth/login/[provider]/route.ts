@@ -1,6 +1,6 @@
 import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { invalidateModelsCache } from "@/lib/models-cache";
+import { withModelsCacheInvalidation } from "@/lib/model-credential-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -117,7 +117,7 @@ export async function GET(
       abort.signal.addEventListener("abort", cleanup);
 
       try {
-        await modelRuntime.login(provider, "oauth", {
+        await withModelsCacheInvalidation(() => modelRuntime.login(provider, "oauth", {
           prompt: async (prompt: AuthPrompt) => {
             const request = prompt.type === "manual_code"
               ? getManualInputRequest()
@@ -161,9 +161,8 @@ export async function GET(
             }
           },
           signal: abort.signal,
-        });
+        }));
 
-        invalidateModelsCache();
         send(controller, { type: "success" });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

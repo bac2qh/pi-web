@@ -60,10 +60,34 @@ PI_WEB_NO_OPEN=1 pi-web         # useful when running as a background service
 
 ## Development
 
+### Local Pi fork prerequisite
+
+This checkout intentionally uses a local, untracked coding-agent tarball built from `bac2qh/pi` commit `734502cb86eaf631e1ceeb403dbd717e3b78404f`. It does not use the global Pi installation and is not publishable in this form.
+
+Use Node `24.19.0` and npm `11.17.0`, and keep the retained main checkouts as siblings:
+
+```text
+<repos>/pi-web/
+<repos>/pi/
+```
+
+The sibling `pi` checkout must be clean, its `origin` must identify `bac2qh/pi`, and `HEAD` must be the exact commit above. From retained `pi-web` main, run:
+
 ```bash
-npm install
+npm run build:local-pi-fork
+npm run install:local-pi-fork
 npm run dev
 ```
+
+The helper creates two fresh exact-commit builds, runs the fork checks, tests, build, local-release path, and focused faux-provider compaction regression, then requires byte-identical archives before atomically publishing:
+
+```text
+../pi/.artifacts/pi-web/734502cb8/bac2qh-pi-coding-agent-0.84.0-bac2qh.734502cb8.tgz
+```
+
+That artifact is ignored by the fork and must be rebuilt locally; it is never installed globally or fetched from a custom package release. To avoid mutable model-catalog input, the helper hydrates generated model data from the unchanged official `@earendil-works/pi-ai@0.84.0` artifact before running the exact fork validation path. `npm run install:local-pi-fork` verifies the on-disk artifact identity and committed integrity before running scripts-disabled `npm ci`, so a warm npm cache cannot hide a missing or stale sibling prerequisite. It never falls back to the registry coding-agent; rerun the build helper (and preserve or remove only the exact stale artifact if it reports a byte mismatch).
+
+The committed `file:../pi/...` path is relative to retained `pi-web` main. A nested managed checkout under `.agents/worktrees/` does not have that sibling layout; validate it in a disposable `pi-web`/`pi` sibling copy rather than creating a fake worktree or changing the manifest path.
 
 The local dev server runs at [http://localhost:30141](http://localhost:30141).
 
