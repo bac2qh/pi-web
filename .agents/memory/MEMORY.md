@@ -10,4 +10,5 @@
 - [Dependency security and local production runtime](dependency-security.md) — durable npm exceptions, override boundaries, and rebuild requirements.
 - [Custom server and process-scoped development](custom-server-lifecycle.md) — one-port server/gateway security, owned cleanup, terminal signal ownership, and strict production reuse.
 - [Session removal policy](session-removal.md) — permanent web deletion removal, reversible Hide/Restore boundary, stale-context rationale, and explicit teardown non-goals.
+- [Sidebar unread state](sidebar-unread.md) — one browser-local manual/automatic dot, explicit-open and running transitions, duplicate presentation synchronization, and strict shared-state separation.
 - [Live session transcript reconciliation](session-transcript-reconciliation.md) — displayed-versus-pinned leaf intent, advancing-tip repair, prompt transcript floors, navigation ordering, and bounded browser-only recovery.

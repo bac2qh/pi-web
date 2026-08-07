@@ -8,6 +8,7 @@ const jiti = createJiti(import.meta.url, {
   tsconfigPaths: true,
 });
 const {
+  SessionUnreadAction,
   createSessionListGenerationTracker,
   isLatestSessionLoadRequest,
   resolveSidebarRunningSessionIds,
@@ -91,7 +92,7 @@ test("shared sidebar metadata stays operation-only, optimistic, and separate fro
   assert.doesNotMatch(routeSource, /pinnedSessionIds\s*[:=]\s*body|explicitlyHiddenSessionIds\s*[:=]\s*body/);
 });
 
-test("the shared row exposes rename, keyboard, touch, pin, hide, restore, and no permanent deletion", async () => {
+test("the shared row exposes unread, rename, keyboard, touch, pin, hide, restore, and no permanent deletion", async () => {
   const [sidebarSource, cssSource, appShellSource] = await Promise.all([
     readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
@@ -104,13 +105,16 @@ test("the shared row exposes rename, keyboard, touch, pin, hide, restore, and no
   assert.match(selectionControl, /tabIndex=\{0\}/);
   assert.match(selectionControl, /event\.key === "Enter" \|\| event\.key === " "/);
   assert.match(sidebarSource, /className="session-row-select"/);
+  assert.match(sidebarSource, /<SessionUnreadAction/);
   assert.match(sidebarSource, /title="Rename"/);
   assert.match(sidebarSource, /aria-pressed=\{isPinned\}/);
   assert.match(sidebarSource, /className="session-row-actions"/);
   assert.match(sidebarSource, /hiddenKind === "explicit" \? `Restore/);
   assert.match(sidebarSource, /Hidden by parent/);
   assert.match(sidebarSource, /onHideChange=\{hiddenSessionKinds\.get\(node\.session\.id\) === "inherited"/);
-  assert.match(sidebarSource, /paddingRight: onHideChange \? 54 : 25/);
+  assert.match(sidebarSource, /const rowActionCount = onHideChange \? 3 : 2/);
+  assert.match(sidebarSource, /const metadataActionPaddingRight = 25 \+ \(rowActionCount - 1\) \* 29/);
+  assert.match(sidebarSource, /paddingRight: metadataActionPaddingRight/);
   assert.doesNotMatch(sidebarSource, /\bDelete\b/);
   assert.doesNotMatch(sidebarSource, /onDeleted|onSessionDeleted|confirmDelete|deleting|handleDelete/);
   assert.doesNotMatch(
@@ -121,6 +125,54 @@ test("the shared row exposes rename, keyboard, touch, pin, hide, restore, and no
   assert.match(cssSource, /\.session-row:focus-within \.session-row-actions/);
   assert.match(cssSource, /any-pointer: coarse/);
   assert.match(cssSource, /\.session-row-compact-action:focus/);
+});
+
+test("the unread row action reports state, stops navigation, and synchronizes duplicate presentations", () => {
+  let unread = false;
+  let propagationStops = 0;
+  const createAction = (presentation) => SessionUnreadAction({
+    title: `Session in ${presentation}`,
+    isUnread: unread,
+    onUnreadChange: (nextIsUnread) => { unread = nextIsUnread; },
+  });
+
+  const markUnread = createAction("Pinned");
+  assert.equal(markUnread.type, "button");
+  assert.equal(markUnread.props.type, "button");
+  assert.equal(markUnread.props.title, "Mark unread");
+  assert.equal(markUnread.props["aria-label"], "Mark unread Session in Pinned");
+  assert.equal(markUnread.props["aria-pressed"], undefined, "dynamic command names must not also claim toggle-button state");
+  assert.match(markUnread.props.className, /session-row-action/);
+  markUnread.props.onClick({ stopPropagation: () => { propagationStops += 1; } });
+  assert.equal(propagationStops, 1);
+  assert.equal(unread, true);
+
+  const duplicateActions = ["Pinned", "Recent", "Project"].map(createAction);
+  for (const action of duplicateActions) {
+    assert.equal(action.props.title, "Mark read");
+    assert.equal(action.props["aria-label"].startsWith("Mark read "), true);
+    assert.equal(action.props["aria-pressed"], undefined);
+  }
+  duplicateActions[2].props.onClick({ stopPropagation: () => { propagationStops += 1; } });
+  assert.equal(propagationStops, 2);
+  assert.equal(unread, false);
+});
+
+test("manual unread uses one browser-local set across Pinned, Recent, and Project and every row open clears it", async () => {
+  const [sidebarSource, routeSource] = await Promise.all([
+    readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/sidebar-state/route.ts", import.meta.url), "utf8"),
+  ]);
+  assert.equal((sidebarSource.match(/onUnreadChange=\{handleUnreadChange\}/g) ?? []).length, 3);
+  assert.ok((sidebarSource.match(/onUnreadChange=\{onUnreadChange\}/g) ?? []).length >= 2);
+  const explicitOpenHandler = sidebarSource.slice(
+    sidebarSource.indexOf("const handleSelectSessionFromList"),
+    sidebarSource.indexOf("const handleUnreadChange"),
+  );
+  assert.match(explicitOpenHandler, /setSessionUnread\(prev, s\.id, false\)/);
+  assert.ok(explicitOpenHandler.indexOf("setSessionUnread") < explicitOpenHandler.indexOf("onSelectSession(s)"));
+  assert.match(sidebarSource, /from "@\/lib\/sidebar-unread-state"/);
+  assert.doesNotMatch(routeSource, /unread/i);
 });
 
 test("WebSocket authority atomically suppresses a late HTTP fallback before passive effects", async () => {

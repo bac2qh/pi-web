@@ -1,0 +1,82 @@
+{
+  "passed": true,
+  "failures": [],
+  "duplicatePresentations": {
+    "pinnedAndProjectRows": 2,
+    "recentAndProjectRows": 2,
+    "markUnreadSynchronized": true,
+    "markReadSynchronized": true,
+    "accessibleActionLabelsSynchronized": true
+  },
+  "selectedOpenLifecycle": {
+    "selectedMayBeMarked": true,
+    "sameRowReclickClears": true,
+    "leavingKeepsMarker": true,
+    "reopeningClears": true
+  },
+  "persistenceAndStorage": {
+    "reloadRestoredUnselectedMarker": true,
+    "staleIdPruned": true,
+    "malformedStateFailedSafely": true,
+    "sharedStateApiUnchanged": true
+  },
+  "runningLifecycle": {
+    "runningIndicatorPrecedence": true,
+    "newlyRunningClearsUnread": true,
+    "backgroundCompletionMarksUnread": true,
+    "selectedCompletionRemainsRead": true,
+    "providerOrModelCallUsed": false
+  },
+  "accessibilityAndLayout": {
+    "nativeButtonKeyboardSemantics": true,
+    "nativeKeyboardInputActivation": true,
+    "focusedNativeButtonActivation": true,
+    "keyboardDiagnostics": {
+      "nativeButton": true,
+      "focusedBeforeActivation": true,
+      "keyboardInputActivation": true
+    },
+    "focusWithinRevealsActions": true,
+    "focusedOutline": {
+      "style": "solid",
+      "width": "2px"
+    },
+    "touchActivation": true,
+    "coarsePointerActionsVisible": true,
+    "narrowParentRow": {
+      "rowWidth": 279,
+      "actionsWidth": 88,
+      "actionsVisible": true,
+      "titleClear": true,
+      "metadataClear": true,
+      "controlsSeparated": true,
+      "controlsInsideRow": true,
+      "actionCount": 3,
+      "hasUnread": true,
+      "hasRename": true,
+      "hasHide": true,
+      "hasCollapse": true,
+      "hasPin": true,
+      "gaps": {
+        "titleToActions": 36.593749046325684,
+        "actionsToCollapse": 2,
+        "collapseToPin": 6
+      }
+    },
+    "fixedRowHeightPreserved": true,
+    "documentOverflow": false
+  },
+  "browserErrorCount": 0,
+  "screenshots": [
+    "desktop-unread.png",
+    "mobile-touch-unread.png"
+  ],
+  "existingControlRegressions": {
+    "collapseAndExpand": true,
+    "unpinAndRepin": true,
+    "hideAndRestore": true,
+    "rename": true,
+    "unreadPreserved": true,
+    "selectionPreserved": true
+  }
+}

@@ -13,6 +13,14 @@ import {
   type SidebarSessionTreeNode,
   type SidebarStateOperation,
 } from "@/lib/sidebar-session-state";
+import {
+  getBackgroundCompletedSessionIds,
+  loadUnreadSessionIds,
+  pruneUnreadSessionIds,
+  saveUnreadSessionIds,
+  setSessionUnread,
+  updateUnreadSessionIdsForRunningState,
+} from "@/lib/sidebar-unread-state";
 import { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
 import type { SessionInfo } from "@/lib/types";
 import { useGlobalStatus } from "./GlobalStatusProvider";
@@ -102,31 +110,6 @@ interface WorktreeState {
 interface PendingSidebarOperation {
   clientOperationId: number;
   operation: SidebarStateOperation;
-}
-
-const UNREAD_SESSIONS_STORAGE_KEY = "pi-web:unread-session-ids";
-
-function loadUnreadSessionIds(): Set<string> {
-  if (typeof window === "undefined") return new Set();
-  try {
-    const raw = window.localStorage.getItem(UNREAD_SESSIONS_STORAGE_KEY);
-    if (!raw) return new Set();
-    const parsed = JSON.parse(raw) as unknown;
-    if (Array.isArray(parsed)) return new Set(parsed.filter((id): id is string => typeof id === "string"));
-    return new Set();
-  } catch {
-    return new Set();
-  }
-}
-
-function saveUnreadSessionIds(ids: Set<string>): void {
-  if (typeof window === "undefined") return;
-  try {
-    if (ids.size === 0) window.localStorage.removeItem(UNREAD_SESSIONS_STORAGE_KEY);
-    else window.localStorage.setItem(UNREAD_SESSIONS_STORAGE_KEY, JSON.stringify([...ids]));
-  } catch {
-    // ignore storage quota / privacy-mode errors
-  }
 }
 
 function formatRelativeTime(dateStr: string): string {
@@ -484,11 +467,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       }
       // Drop unread markers for sessions absent from the latest complete listing.
       const existingIds = new Set(data.sessions.map((s) => s.id));
-      setUnreadSessionIds((prev) => {
-        if (prev.size === 0) return prev;
-        const next = new Set([...prev].filter((id) => existingIds.has(id)));
-        return next.size === prev.size ? prev : next;
-      });
+      setUnreadSessionIds((prev) => pruneUnreadSessionIds(prev, existingIds));
       setError(null);
       if (!showLoading) {
         setSessionRefreshDone(true);
@@ -550,17 +529,18 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }), [loadSessions, subscribeSessionsChanged]);
 
   useEffect(() => {
-    const previous = previousRunningSessionIdsRef.current;
-    const completedInBackground = [...previous].filter((id) => !runningSessionIds.has(id) && id !== selectedSessionId);
-    const newlyRunning = [...runningSessionIds];
+    const completedInBackground = getBackgroundCompletedSessionIds(
+      previousRunningSessionIdsRef.current,
+      runningSessionIds,
+      selectedSessionId,
+    );
 
-    if (completedInBackground.length > 0 || newlyRunning.length > 0) {
-      setUnreadSessionIds((prev) => {
-        const next = new Set(prev);
-        newlyRunning.forEach((id) => next.delete(id));
-        completedInBackground.forEach((id) => next.add(id));
-        return next;
-      });
+    if (completedInBackground.length > 0 || runningSessionIds.size > 0) {
+      setUnreadSessionIds((prev) => updateUnreadSessionIdsForRunningState(
+        prev,
+        runningSessionIds,
+        completedInBackground,
+      ));
     }
     // A background completion can move an old session into Recent and can
     // promote its Project family. Refresh the ordinary listing once on the
@@ -572,12 +552,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   useEffect(() => {
     if (!selectedSessionId) return;
-    setUnreadSessionIds((prev) => {
-      if (!prev.has(selectedSessionId)) return prev;
-      const next = new Set(prev);
-      next.delete(selectedSessionId);
-      return next;
-    });
+    setUnreadSessionIds((prev) => setSessionUnread(prev, selectedSessionId, false));
   }, [selectedSessionId]);
 
   useEffect(() => {
@@ -865,9 +840,16 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // works when the prop value won't change — e.g. re-clicking the already
   // open session after manually switching worktrees.
   const handleSelectSessionFromList = useCallback((s: SessionInfo) => {
+    // Clear on every explicit row open, including a re-click that leaves the
+    // selectedSessionId prop unchanged.
+    setUnreadSessionIds((prev) => setSessionUnread(prev, s.id, false));
     if (s.cwd) setSelectedCwd(s.cwd);
     onSelectSession(s);
   }, [onSelectSession]);
+
+  const handleUnreadChange = useCallback((sessionId: string, isUnread: boolean) => {
+    setUnreadSessionIds((prev) => setSessionUnread(prev, sessionId, isUnread));
+  }, []);
 
   const handleNewSession = useCallback(() => {
     if (!selectedCwd) return;
@@ -1098,6 +1080,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             titlePrefix={getGlobalSessionPrefix(session, sidebarSessionLists.projectPrefixes)}
             globalContextTitle={`${session.projectRoot ?? session.cwd}${session.worktreeBranch ? ` · ${session.worktreeBranch} (${session.cwd})` : ""}`}
             onClick={() => handleSelectSessionFromList(session)}
+            onUnreadChange={handleUnreadChange}
             onPinChange={() => requestSidebarOperation({ operation: "unpin", sessionId: session.id })}
             onHideChange={sidebarSessionLists.hiddenSessionKinds.get(session.id) === "inherited"
               ? undefined
@@ -1130,6 +1113,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             titlePrefix={getGlobalSessionPrefix(session, sidebarSessionLists.projectPrefixes)}
             globalContextTitle={`${session.projectRoot ?? session.cwd}${session.worktreeBranch ? ` · ${session.worktreeBranch} (${session.cwd})` : ""}`}
             onClick={() => handleSelectSessionFromList(session)}
+            onUnreadChange={handleUnreadChange}
             onPinChange={() => requestSidebarOperation({ operation: "pin", sessionId: session.id })}
             onHideChange={sidebarSessionLists.hiddenSessionKinds.get(session.id) === "inherited"
               ? undefined
@@ -1768,6 +1752,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             hiddenSessionKinds={sidebarSessionLists.hiddenSessionKinds}
             showHidden={showHidden}
             onSelectSession={handleSelectSessionFromList}
+            onUnreadChange={handleUnreadChange}
             onSidebarOperation={requestSidebarOperation}
             onRenamed={loadSessions}
             depth={0}
@@ -1972,6 +1957,7 @@ function SessionTreeItem({
   hiddenSessionKinds,
   showHidden,
   onSelectSession,
+  onUnreadChange,
   onSidebarOperation,
   onRenamed,
   depth,
@@ -1984,6 +1970,7 @@ function SessionTreeItem({
   hiddenSessionKinds: Map<string, HiddenSessionKind>;
   showHidden: boolean;
   onSelectSession: (s: SessionInfo) => void;
+  onUnreadChange: (sessionId: string, isUnread: boolean) => void;
   onSidebarOperation: (operation: SidebarStateOperation) => void;
   onRenamed?: () => void;
   depth: number;
@@ -2013,6 +2000,7 @@ function SessionTreeItem({
           isPinned={pinnedSessionIds.has(node.session.id)}
           hiddenKind={showHidden ? hiddenSessionKinds.get(node.session.id) : undefined}
           onClick={() => onSelectSession(node.session)}
+          onUnreadChange={onUnreadChange}
           onPinChange={() => onSidebarOperation({
             operation: pinnedSessionIds.has(node.session.id) ? "unpin" : "pin",
             sessionId: node.session.id,
@@ -2043,6 +2031,7 @@ function SessionTreeItem({
               hiddenSessionKinds={hiddenSessionKinds}
               showHidden={showHidden}
               onSelectSession={onSelectSession}
+              onUnreadChange={onUnreadChange}
               onSidebarOperation={onSidebarOperation}
               onRenamed={onRenamed}
               depth={depth + 1}
@@ -2117,6 +2106,41 @@ function UnreadSessionIndicator() {
   );
 }
 
+export function SessionUnreadAction({
+  title,
+  isUnread,
+  onUnreadChange,
+}: {
+  title: string;
+  isUnread: boolean;
+  onUnreadChange: (isUnread: boolean) => void;
+}) {
+  const actionLabel = isUnread ? "Mark read" : "Mark unread";
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onUnreadChange(!isUnread);
+      }}
+      title={actionLabel}
+      aria-label={`${actionLabel} ${title}`}
+      className="session-row-action session-row-unread-action"
+      style={{
+        display: "flex", alignItems: "center", justifyContent: "center",
+        width: 26, height: 24, padding: 0,
+        background: "var(--bg-hover)", border: "1px solid var(--border)",
+        borderRadius: 7, color: isUnread ? "#0891b2" : "var(--text-muted)",
+        cursor: "pointer", flexShrink: 0,
+      }}
+    >
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+        <circle cx="7" cy="7" r="3" fill={isUnread ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5" />
+      </svg>
+    </button>
+  );
+}
+
 function SessionItem({
   session,
   isSelected,
@@ -2127,6 +2151,7 @@ function SessionItem({
   titlePrefix,
   globalContextTitle,
   onClick,
+  onUnreadChange,
   onPinChange,
   onHideChange,
   onRenamed,
@@ -2138,12 +2163,13 @@ function SessionItem({
   session: SessionInfo;
   isSelected: boolean;
   isRunning?: boolean;
-  isUnread?: boolean;
+  isUnread: boolean;
   isPinned: boolean;
   hiddenKind?: HiddenSessionKind;
   titlePrefix?: string;
   globalContextTitle?: string;
   onClick: () => void;
+  onUnreadChange: (sessionId: string, isUnread: boolean) => void;
   onPinChange: () => void;
   onHideChange?: () => void;
   onRenamed?: () => void;
@@ -2158,6 +2184,8 @@ function SessionItem({
   const inputRef = useRef<HTMLInputElement>(null);
 
   const title = session.name || session.firstMessage.slice(0, 50) || session.id.slice(0, 12);
+  const rowActionCount = onHideChange ? 3 : 2;
+  const metadataActionPaddingRight = 25 + (rowActionCount - 1) * 29;
 
   const startRename = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -2306,7 +2334,7 @@ function SessionItem({
                 {title}
               </span>
             </div>
-            <div style={{ marginTop: 2, display: "flex", gap: 8, color: "var(--text-dim)", fontSize: scaledMenuFontSize(11), minWidth: 0, paddingRight: onHideChange ? 54 : 25 }}>
+            <div style={{ marginTop: 2, display: "flex", gap: 8, color: "var(--text-dim)", fontSize: scaledMenuFontSize(11), minWidth: 0, paddingRight: metadataActionPaddingRight }}>
               {hiddenKind && (
                 <span style={{ color: hiddenKind === "explicit" ? "#d97706" : "var(--text-dim)", whiteSpace: "nowrap" }}>
                   {hiddenKind === "explicit" ? "Hidden" : "Hidden by parent"}
@@ -2376,8 +2404,13 @@ function SessionItem({
             </svg>
           </button>
 
-          {/* Rename and Hide/Restore remain available on focus and touch. */}
-          <div className="session-row-actions" style={{ position: "absolute", right: hasChildren ? 56 : 34, bottom: 2, display: "flex", gap: 3, padding: 2, background: "var(--bg-hover)", borderRadius: 6, zIndex: 2 }}>
+          {/* Unread, rename, and Hide/Restore remain available on focus and touch. */}
+          <div className="session-row-actions" style={{ position: "absolute", right: hasChildren ? 60 : 34, bottom: 2, display: "flex", gap: 3, padding: 2, background: "var(--bg-hover)", borderRadius: 6, zIndex: 2 }}>
+              <SessionUnreadAction
+                title={title}
+                isUnread={isUnread}
+                onUnreadChange={(nextIsUnread) => onUnreadChange(session.id, nextIsUnread)}
+              />
               <button
                 onClick={startRename}
                 title="Rename"
