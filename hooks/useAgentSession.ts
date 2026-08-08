@@ -10,6 +10,10 @@ import type {
   SessionTreeNode,
 } from "@/lib/types";
 import { sendAgentCommand } from "@/lib/agent-client";
+import {
+  splitOpenAiFastModeStatus,
+  type OpenAiFastModeState,
+} from "@/lib/openai-fast-mode-status";
 import { getToolNamesForPreset, type ToolEntry } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import {
@@ -78,6 +82,20 @@ interface LastAssistantTextResponse {
   text?: string;
 }
 
+type SetModelCommandResult = {
+  id: string;
+  provider: string;
+  projection: { streamEpoch: string; cursor: number };
+};
+
+type PendingFastModeModelChange = {
+  generation: number;
+  sessionId: string;
+  provider: string;
+  modelId: string;
+  projection: SetModelCommandResult["projection"] | null;
+};
+
 type AgentStateResponse = {
   contextUsage?: { percent: number | null; contextWindow: number; tokens: number | null } | null;
   systemPrompt?: string;
@@ -85,6 +103,8 @@ type AgentStateResponse = {
   isStreaming?: boolean;
   isPromptRunning?: boolean;
   isCompacting?: boolean;
+  model?: { id: string; provider: string } | null;
+  projection?: { streamEpoch: string; cursor: number };
   extensionStatuses?: ExtensionStatusItem[];
   extensionWidgets?: ExtensionWidgetItem[];
   queuedMessages?: { steering?: string[]; followUp?: string[] } | null;
@@ -451,7 +471,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [contextUsage, setContextUsage] = useState<{ percent: number | null; contextWindow: number; tokens: number | null } | null>(null);
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
   const [forkingEntryId, setForkingEntryId] = useState<string | null>(null);
-  const [currentModelOverride, setCurrentModelOverride] = useState<{ provider: string; modelId: string } | null>(null);
+  // `undefined` follows transcript state; `null` is an authoritative runtime
+  // observation that no model is selected.
+  const [currentModelOverride, setCurrentModelOverride] = useState<{
+    provider: string;
+    modelId: string;
+  } | null | undefined>(undefined);
   const [pendingModel, setPendingModel] = useState<{ provider: string; modelId: string } | null>(null);
   const [isCompacting, setIsCompacting] = useState(false);
   const [compactError, setCompactError] = useState<string | null>(null);
@@ -464,6 +489,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [extensionDialog, setExtensionDialog] = useState<ExtensionUiDialogRequest | null>(null);
   const [extensionCustomUi, setExtensionCustomUi] = useState<ExtensionUiCustomRequest | null>(null);
   const [extensionStatuses, setExtensionStatuses] = useState<ExtensionStatusItem[]>([]);
+  const [openAiFastModeState, setOpenAiFastModeState] = useState<OpenAiFastModeState | null>(null);
+  const [fastModeModelChangePending, setFastModeModelChangePending] = useState(false);
+  const [fastModeProjectionNeedsConfirmation, setFastModeProjectionNeedsConfirmation] = useState(false);
   const [extensionWidgets, setExtensionWidgets] = useState<ExtensionWidgetItem[]>([]);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
 
@@ -507,6 +535,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const cloneInFlightRef = useRef<Promise<BuiltinSlashCommandResult> | null>(null);
   const newSessionPromotedRef = useRef(false);
   const promptRunIdRef = useRef(0);
+  const modelChangeGenerationRef = useRef(0);
+  const modelChangeQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingFastModeModelChangeRef = useRef<PendingFastModeModelChange | null>(null);
+  const lastProjectedFastModeRef = useRef<{
+    streamEpoch: string | null;
+    connectionState: SessionViewSnapshot["transport"]["connectionState"];
+    canonicalCommitted: boolean;
+    state: OpenAiFastModeState | null;
+  } | null>(null);
   const optimisticUserMessageKeyRef = useRef<string | null>(null);
   const promptTranscriptFloorRef = useRef<PromptTranscriptFloor | null>(null);
   const pendingLeafNavigationRef = useRef<PendingLeafNavigation | null>(null);
@@ -518,8 +555,32 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const setToolPresetState = opts.setToolPreset ?? setToolPreset;
 
-  const currentModel = currentModelOverride ?? data?.context.model ?? pendingModel ?? null;
+  const applyExtensionStatusItems = useCallback((statuses: readonly ExtensionStatusItem[]) => {
+    const split = splitOpenAiFastModeStatus(statuses);
+    setExtensionStatuses(split.extensionStatuses.map((status) => ({ ...status })));
+    setOpenAiFastModeState(split.fastModeState);
+  }, []);
+
+  const completeFastModeModelChangeAtProjection = useCallback((snapshot: SessionViewSnapshot): boolean => {
+    const pending = pendingFastModeModelChangeRef.current;
+    const projection = pending?.projection;
+    if (!pending || !projection || pending.generation !== modelChangeGenerationRef.current
+      || sessionIdRef.current !== pending.sessionId
+      || !snapshot.canonicalCommitted
+      || snapshot.transport.streamEpoch !== projection.streamEpoch
+      || snapshot.transport.cursor !== projection.cursor) return false;
+    pendingFastModeModelChangeRef.current = null;
+    setFastModeModelChangePending(false);
+    setFastModeProjectionNeedsConfirmation(false);
+    return true;
+  }, []);
+
+  const currentModel = currentModelOverride !== undefined
+    ? currentModelOverride
+    : data?.context.model ?? pendingModel ?? null;
   const displayModel = isNew ? (newSessionModel ?? newSessionDefaultModel) : currentModel;
+  const displayedOpenAiFastModeState: OpenAiFastModeState | null = (fastModeModelChangePending
+    || fastModeProjectionNeedsConfirmation) && openAiFastModeState !== null ? "unknown" : openAiFastModeState;
 
   const currentHttpObservation = useCallback((sid = sessionIdRef.current): SessionHttpObservation | null => {
     const snapshot = viewBindingRef.current?.getSnapshot() ?? null;
@@ -591,6 +652,30 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const delayMs = httpReconciliationRef.current.consumeFailureRetryDelay(resource, observation);
     if (delayMs !== null) scheduleHttpRepair(resource, delayMs);
   }, [scheduleHttpRepair]);
+
+  const applyAuthoritativeRuntimeFastModeState = useCallback((
+    state: AgentStateResponse,
+    snapshot: SessionViewSnapshot,
+  ): boolean => {
+    const projection = state.projection;
+    if (!projection || !snapshot.canonicalCommitted
+      || projection.streamEpoch !== snapshot.transport.streamEpoch
+      || projection.cursor !== snapshot.transport.cursor) return false;
+
+    if (state.extensionStatuses !== undefined) applyExtensionStatusItems(state.extensionStatuses);
+    if (state.model === null) {
+      setCurrentModelOverride(null);
+      if (isNew) setNewSessionModel(null);
+    } else if (state.model) {
+      const selectedModel = { provider: state.model.provider, modelId: state.model.id };
+      setCurrentModelOverride(selectedModel);
+      if (isNew) setNewSessionModel(selectedModel);
+    }
+    pendingFastModeModelChangeRef.current = null;
+    setFastModeModelChangePending(false);
+    setFastModeProjectionNeedsConfirmation(false);
+    return true;
+  }, [applyExtensionStatusItems, isNew]);
 
   const sessionStats = useMemo(() => {
     if (sessionStatsOverride) return sessionStatsOverride;
@@ -676,7 +761,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setActiveLeafId(d.leafId);
       setMessages(d.context.messages);
       setEntryIds(d.context.entryIds ?? []);
-      setCurrentModelOverride(null);
+      setCurrentModelOverride(undefined);
       setError(null);
       if (d.context.thinkingLevel && d.context.thinkingLevel !== "off") {
         setThinkingLevel(d.context.thinkingLevel as ThinkingLevelOption);
@@ -712,7 +797,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (liveState.contextUsage !== undefined) setContextUsage(liveState.contextUsage ?? null);
           if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
           if (liveState.thinkingLevel !== undefined) setThinkingLevel((liveState.thinkingLevel as ThinkingLevelOption) ?? "auto");
-          if (liveState.extensionStatuses !== undefined) setExtensionStatuses(liveState.extensionStatuses ?? []);
+          const fastStateConfirmed = committedView
+            ? applyAuthoritativeRuntimeFastModeState(liveState, committedView)
+            : false;
+          if (!fastStateConfirmed && !hasCanonical) {
+            if (liveState.extensionStatuses !== undefined) applyExtensionStatusItems(liveState.extensionStatuses ?? []);
+            if (liveState.model === null) setCurrentModelOverride(null);
+            else if (liveState.model) {
+              setCurrentModelOverride({ provider: liveState.model.provider, modelId: liveState.model.id });
+            }
+          }
           if (liveState.extensionWidgets !== undefined) setExtensionWidgets(liveState.extensionWidgets ?? []);
           if (liveState.queuedMessages !== undefined) setQueuedMessages(normalizeQueuedMessages(liveState.queuedMessages));
           if (!hasCanonical) {
@@ -764,7 +858,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       if (showLoading && !messagesLoaded) setLoading(false);
     }
-  }, [currentHttpObservation, retryFailedHttpRepair, scheduleHttpRepair]);
+  }, [applyAuthoritativeRuntimeFastModeState, applyExtensionStatusItems, currentHttpObservation,
+    retryFailedHttpRepair, scheduleHttpRepair]);
   loadSessionRef.current = loadSession;
 
   const loadContext = useCallback(async (sid: string, leafId: string) => {
@@ -991,7 +1086,36 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
     setExtensionDialog(projected.dialog as ExtensionUiDialogRequest | null);
     setExtensionCustomUi(projected.customUi as ExtensionUiCustomRequest | null);
-    setExtensionStatuses(projected.statuses.map((status) => ({ ...status })));
+    const splitFastStatus = splitOpenAiFastModeStatus(projected.statuses);
+    const previousFastStatus = lastProjectedFastModeRef.current;
+    const requiresModelConfirmation = previousFastStatus !== null
+      && previousFastStatus.canonicalCommitted
+      && splitFastStatus.fastModeState !== null
+      && splitFastStatus.fastModeState !== "unknown"
+      && (previousFastStatus.state === "unknown"
+        || previousFastStatus.streamEpoch !== snapshot.transport.streamEpoch
+        || (previousFastStatus.connectionState !== "connected"
+          && snapshot.transport.connectionState === "connected"));
+    lastProjectedFastModeRef.current = {
+      streamEpoch: snapshot.transport.streamEpoch,
+      connectionState: snapshot.transport.connectionState,
+      canonicalCommitted: snapshot.canonicalCommitted,
+      state: splitFastStatus.fastModeState,
+    };
+    applyExtensionStatusItems(projected.statuses);
+    const completedLocalModelChange = completeFastModeModelChangeAtProjection(snapshot);
+    if (splitFastStatus.fastModeState === null) {
+      setFastModeProjectionNeedsConfirmation(false);
+    } else if (requiresModelConfirmation && !completedLocalModelChange) {
+      setFastModeProjectionNeedsConfirmation(true);
+      scheduleHttpRepair("runtime");
+    }
+    const pendingFastModel = pendingFastModeModelChangeRef.current;
+    if (pendingFastModel?.projection && snapshot.canonicalCommitted
+      && (snapshot.transport.streamEpoch !== pendingFastModel.projection.streamEpoch
+        || snapshot.transport.cursor > pendingFastModel.projection.cursor)) {
+      scheduleHttpRepair("runtime");
+    }
     setExtensionWidgets(projected.widgets.map((widget) => ({ ...widget, lines: [...widget.lines] })));
     if (projected.title) document.title = projected.title;
 
@@ -1006,7 +1130,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       && httpReconciliationRef.current.needsRepair("transcript", observation)) scheduleHttpRepair("transcript");
     if (observation && (recovered || settled)
       && httpReconciliationRef.current.needsRepair("runtime", observation)) scheduleHttpRepair("runtime");
-  }, [currentHttpObservation, scheduleHttpRepair]);
+  }, [applyExtensionStatusItems, completeFastModeModelChangeAtProjection, currentHttpObservation, scheduleHttpRepair]);
   applyProjectedSnapshotRef.current = applyProjectedSnapshot;
 
   const applyProjectedEffect = useCallback((delivery: SessionEffectDelivery) => {
@@ -1136,6 +1260,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (state.contextUsage !== undefined) setContextUsage(state.contextUsage ?? null);
         if (state.systemPrompt !== undefined) setSystemPrompt(state.systemPrompt ?? null);
         if (state.thinkingLevel !== undefined) setThinkingLevel((state.thinkingLevel as ThinkingLevelOption) ?? "auto");
+        if (committedView) applyAuthoritativeRuntimeFastModeState(state, committedView);
         if (!hasCanonical) {
           httpLiveSeededRef.current = true;
           const promptBusy = !!(data.running && (state.isStreaming || state.isPromptRunning));
@@ -1143,7 +1268,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           setAgentRunning(promptBusy);
           setIsCompacting(state.isCompacting ?? false);
           setQueuedMessages(normalizeQueuedMessages(state.queuedMessages));
-          if (state.extensionStatuses !== undefined) setExtensionStatuses(state.extensionStatuses ?? []);
+          if (state.extensionStatuses !== undefined) applyExtensionStatusItems(state.extensionStatuses ?? []);
+          if (state.model === null) setCurrentModelOverride(null);
+          else if (state.model) setCurrentModelOverride({ provider: state.model.provider, modelId: state.model.id });
           if (state.extensionWidgets !== undefined) setExtensionWidgets(state.extensionWidgets ?? []);
         }
       }
@@ -1165,7 +1292,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       retryFailedHttpRepair("runtime", current);
       // Network still down — bounded backoff plus visibility/online recovery retains dirty repair.
     }
-  }, [currentHttpObservation, retryFailedHttpRepair, scheduleHttpRepair]);
+  }, [applyAuthoritativeRuntimeFastModeState, applyExtensionStatusItems, currentHttpObservation,
+    retryFailedHttpRepair, scheduleHttpRepair]);
   reconcileAgentStateRef.current = reconcileAgentState;
 
   // Active runs keep the 15-second recovery net. Visibility and online edges
@@ -1517,27 +1645,58 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [loadSession, navigateToLeaf]);
 
   const handleModelChange = useCallback(async (provider: string, modelId: string) => {
+    const generation = modelChangeGenerationRef.current + 1;
+    modelChangeGenerationRef.current = generation;
+    setFastModeModelChangePending(true);
     if (isNew) {
       setNewSessionModel({ provider, modelId });
       setPendingModel({ provider, modelId });
-      const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
-      if (!sid) return;
+    }
+
+    const queued = modelChangeQueueRef.current.catch(() => {}).then(async () => {
+      if (modelChangeGenerationRef.current !== generation) return;
+      const sid = sessionIdRef.current ?? (isNew ? await ensuringNewSessionRef.current : null);
+      if (!sid) {
+        if (modelChangeGenerationRef.current === generation) {
+          pendingFastModeModelChangeRef.current = null;
+          setFastModeModelChangePending(false);
+        }
+        return;
+      }
+      pendingFastModeModelChangeRef.current = { generation, sessionId: sid, provider, modelId, projection: null };
+
       try {
-        await sendAgentCommand(sid, { type: "set_model", provider, modelId });
+        const result = await sendAgentCommand<SetModelCommandResult>(sid, { type: "set_model", provider, modelId });
+        const pending = pendingFastModeModelChangeRef.current;
+        if (!pending || pending.generation !== generation || modelChangeGenerationRef.current !== generation
+          || sessionIdRef.current !== sid || result.provider !== provider || result.id !== modelId
+          || !result.projection || typeof result.projection.streamEpoch !== "string"
+          || !Number.isSafeInteger(result.projection.cursor) || result.projection.cursor < 0) return;
+        pending.projection = result.projection;
+        if (isNew) {
+          setNewSessionModel({ provider, modelId });
+          setPendingModel({ provider, modelId });
+        } else {
+          setCurrentModelOverride({ provider, modelId });
+        }
+        const currentSnapshot = viewBindingRef.current?.getSnapshot();
+        const completed = currentSnapshot
+          ? completeFastModeModelChangeAtProjection(currentSnapshot)
+          : false;
+        if (!completed && currentSnapshot?.canonicalCommitted
+          && (currentSnapshot.transport.streamEpoch !== result.projection.streamEpoch
+            || currentSnapshot.transport.cursor > result.projection.cursor)) {
+          scheduleHttpRepair("runtime");
+        }
       } catch (e) {
+        // A lost response is ambiguous: keep the badge unknown rather than pair
+        // an unconfirmed model with a prior model's effective Fast state.
         console.error("Failed to set model:", e);
       }
-      return;
-    }
-    const sid = sessionIdRef.current;
-    if (!sid) return;
-    try {
-      await sendAgentCommand(sid, { type: "set_model", provider, modelId });
-      setCurrentModelOverride({ provider, modelId });
-    } catch (e) {
-      console.error("Failed to set model:", e);
-    }
-  }, [isNew, setNewSessionModel]);
+    });
+    modelChangeQueueRef.current = queued;
+    await queued;
+  }, [completeFastModeModelChangeAtProjection, isNew, scheduleHttpRepair, setNewSessionModel]);
 
   const handleCompact = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -1993,7 +2152,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
-    notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
+    notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, openAiFastModeState: displayedOpenAiFastModeState, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
     isAutoModelSelection: isNew && newSessionModel === null,
     agentPhase,
     isNew,

@@ -7,6 +7,7 @@ import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
 const protocol = await jiti.import("../lib/session-protocol.ts");
+const { PI_WEB_OPENAI_FAST_MODE_STATUS_KEY } = await jiti.import("../lib/openai-fast-mode-status.ts");
 const { SessionRegistryProvider, useSessionViewTransport } = await jiti.import("./SessionRegistryProvider.tsx");
 const { ChatInput } = await jiti.import("./ChatInput.tsx");
 const { clearDraft, getDraft } = await jiti.import("../lib/draft-store.ts");
@@ -155,6 +156,473 @@ async function mountExistingSessionHook(fetchImpl) {
   };
 }
 
+test("mounted mobile ChatInput keeps the non-interactive Fast badge anchored while model selection is disabled", async () => {
+  const previous = { window: globalThis.window, document: globalThis.document, act: globalThis.IS_REACT_ACT_ENVIRONMENT };
+  const dom = createMinimalDom();
+  dom.window.matchMedia = (query) => ({
+    matches: query === "(max-width: 640px)",
+    media: query,
+    addEventListener() {},
+    removeEventListener() {},
+  });
+  globalThis.window = dom.window;
+  globalThis.document = dom.document;
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const root = createRoot(dom.container);
+  try {
+    await React.act(async () => root.render(React.createElement(ChatInput, {
+      onSend: () => true,
+      onAbort: () => {},
+      isStreaming: true,
+      model: { provider: "other", modelId: "unsupported" },
+      modelList: [{ provider: "other", id: "unsupported", name: "A very long mobile model display name" }],
+      onModelChange: () => {},
+      openAiFastModeState: "unavailable",
+    })));
+    const badge = findElement(dom.container, (element) => element.attributes?.["data-openai-fast-mode"] === "unavailable");
+    assert.ok(badge);
+    assert.equal(elementText(badge) || badge.textContent, "Fast unavailable");
+    assert.ok(badge.style.flexShrink === 0 || badge.style.flexShrink === "0");
+    const modelButton = badge.parentNode;
+    assert.equal(modelButton.tagName, "BUTTON");
+    assert.ok(modelButton.disabled === true || Object.hasOwn(modelButton.attributes, "disabled"));
+    assert.equal(modelButton.style.width, "100%");
+    assert.match(modelButton.attributes["aria-label"], /other\/unsupported/);
+    assert.match(modelButton.attributes.title, /OpenAI priority service tier/);
+  } finally {
+    await React.act(async () => root.unmount());
+    globalThis.window = previous.window;
+    globalThis.document = previous.document;
+    globalThis.IS_REACT_ACT_ENVIRONMENT = previous.act;
+  }
+});
+
+test("mounted model changes keep Fast unknown until the projected status watermark reaches the selected model", async () => {
+  const mounted = await mountExistingSessionHook(async (input, init = {}) => {
+    const url = String(input);
+    if (url.startsWith("/api/sessions/synthetic/state")) {
+      return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    }
+    if (url.startsWith("/api/sessions/synthetic?")) {
+      return Response.json({
+        sessionId: "synthetic", filePath: "", tree: [], leafId: null,
+        context: {
+          messages: [], entryIds: [], thinkingLevel: "off",
+          model: { provider: "openai", modelId: "gpt-5.4" },
+        },
+      });
+    }
+    if (url.startsWith("/api/models")) {
+      return Response.json({
+        models: {}, defaultModel: null,
+        modelList: [
+          { provider: "openai", id: "gpt-5.4", name: "GPT" },
+          { provider: "other", id: "unsupported", name: "Unsupported" },
+        ],
+      });
+    }
+    if (url === "/api/agent/synthetic" && init.method === "POST") {
+      const command = JSON.parse(String(init.body));
+      if (command.type === "set_model") {
+        return Response.json({ success: true, data: {
+          id: "unsupported", provider: "other",
+          projection: { streamEpoch: "epoch", cursor: 4 },
+        } });
+      }
+      throw new Error(`unexpected command ${command.type}`);
+    }
+    if (url === "/api/agent/synthetic") {
+      return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    const handle = mounted.registry.handles.get("synthetic");
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 1, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" }]),
+    })));
+    assert.equal(mounted.latest().openAiFastModeState, "effective");
+
+    await React.act(async () => { await mounted.latest().handleModelChange("other", "unsupported"); });
+    assert.deepEqual(mounted.latest().displayModel, { provider: "other", modelId: "unsupported" });
+    assert.equal(mounted.latest().openAiFastModeState, "unknown", "the old effective state is demoted before model intent renders");
+
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 2, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" }]),
+    })));
+    assert.equal(mounted.latest().openAiFastModeState, "unknown", "a delayed pre-watermark effective frame cannot claim Fast");
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 3, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "unknown" }]),
+    })));
+    assert.equal(mounted.latest().openAiFastModeState, "unknown");
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 4, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "unavailable" }]),
+    })));
+    assert.equal(mounted.latest().openAiFastModeState, "unavailable");
+    assert.deepEqual(mounted.latest().extensionStatuses, []);
+  } finally {
+    await mounted.cleanup();
+  }
+});
+
+test("mounted overlapping model intents serialize and only the latest watermark can reveal Fast", async () => {
+  const requests = [];
+  let resolveFirstResponse;
+  const firstResponse = new Promise((resolve) => { resolveFirstResponse = resolve; });
+  const mounted = await mountExistingSessionHook(async (input, init = {}) => {
+    const url = String(input);
+    if (url.startsWith("/api/sessions/synthetic/state")) {
+      return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    }
+    if (url.startsWith("/api/sessions/synthetic?")) {
+      return Response.json({
+        sessionId: "synthetic", filePath: "", tree: [], leafId: null,
+        context: {
+          messages: [], entryIds: [], thinkingLevel: "off",
+          model: { provider: "openai", modelId: "gpt-5.4" },
+        },
+      });
+    }
+    if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+    if (url === "/api/agent/synthetic" && init.method === "POST") {
+      const command = JSON.parse(String(init.body));
+      requests.push(command.modelId);
+      if (command.modelId === "first") return firstResponse;
+      return Response.json({ success: true, data: {
+        id: "unsupported", provider: "other",
+        projection: { streamEpoch: "epoch", cursor: 5 },
+      } });
+    }
+    if (url === "/api/agent/synthetic") {
+      return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    const handle = mounted.registry.handles.get("synthetic");
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 1, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" }]),
+    })));
+    let first;
+    let latest;
+    await React.act(async () => {
+      first = mounted.latest().handleModelChange("openai", "first");
+      await Promise.resolve();
+    });
+    for (let attempt = 0; attempt < 20 && requests.length === 0; attempt += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    await React.act(async () => {
+      latest = mounted.latest().handleModelChange("other", "unsupported");
+      await Promise.resolve();
+    });
+    assert.deepEqual(requests, ["first"], "the latest browser intent waits instead of racing the first HTTP mutation");
+    assert.equal(mounted.latest().openAiFastModeState, "unknown");
+
+    await React.act(async () => {
+      resolveFirstResponse(Response.json({ success: true, data: {
+        id: "first", provider: "openai",
+        projection: { streamEpoch: "epoch", cursor: 2 },
+      } }));
+      await first;
+      await latest;
+    });
+    assert.deepEqual(requests, ["first", "unsupported"]);
+    assert.deepEqual(mounted.latest().displayModel, { provider: "other", modelId: "unsupported" });
+    assert.equal(mounted.latest().openAiFastModeState, "unknown");
+
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 2, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" }]),
+    })));
+    assert.equal(mounted.latest().openAiFastModeState, "unknown", "the superseded request watermark cannot complete the latest intent");
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 5, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "unavailable" }]),
+    })));
+    assert.equal(mounted.latest().openAiFastModeState, "unavailable");
+  } finally {
+    await mounted.cleanup();
+  }
+});
+
+test("an independent model transition confirms model and Fast state at one exact runtime watermark", async () => {
+  let resolveRuntimeResponse;
+  let runtimeRequests = 0;
+  const runtimeResponse = new Promise((resolve) => { resolveRuntimeResponse = resolve; });
+  const mounted = await mountExistingSessionHook(async (input) => {
+    const url = String(input);
+    if (url.startsWith("/api/sessions/synthetic/state")) {
+      return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    }
+    if (url.startsWith("/api/sessions/synthetic?")) {
+      return Response.json({
+        sessionId: "synthetic", filePath: "", tree: [], leafId: null,
+        context: {
+          messages: [], entryIds: [], thinkingLevel: "off",
+          model: { provider: "other", modelId: "unsupported-a" },
+        },
+      });
+    }
+    if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+    if (url === "/api/agent/synthetic") {
+      runtimeRequests += 1;
+      return runtimeResponse;
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    const handle = mounted.registry.handles.get("synthetic");
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 1, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "unavailable" }]),
+    })));
+    assert.equal(mounted.latest().openAiFastModeState, "unavailable");
+
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 2, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "unknown" }]),
+    })));
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 3, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" }]),
+    })));
+    for (let attempt = 0; attempt < 20 && runtimeRequests === 0; attempt += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(runtimeRequests, 1);
+    assert.deepEqual(mounted.latest().displayModel, { provider: "other", modelId: "unsupported-a" });
+    assert.equal(mounted.latest().openAiFastModeState, "unknown",
+      "the final projection cannot claim Fast beside the prior caller's model");
+
+    await React.act(async () => {
+      resolveRuntimeResponse(Response.json({
+        running: false,
+        state: {
+          model: { provider: "openai", id: "gpt-5.4" },
+          projection: { streamEpoch: "epoch", cursor: 3 },
+          extensionStatuses: [{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" }],
+          isStreaming: false,
+          isPromptRunning: false,
+          isCompacting: false,
+        },
+      }));
+      await Promise.resolve();
+    });
+    await flushMountedWork();
+    assert.deepEqual(mounted.latest().displayModel, { provider: "openai", modelId: "gpt-5.4" });
+    assert.equal(mounted.latest().openAiFastModeState, "effective");
+  } finally {
+    await mounted.cleanup();
+  }
+});
+
+test("exact runtime authority clears a stale displayed model when no model remains selected", async () => {
+  let resolveRuntimeResponse;
+  let runtimeRequests = 0;
+  const runtimeResponse = new Promise((resolve) => { resolveRuntimeResponse = resolve; });
+  const mounted = await mountExistingSessionHook(async (input) => {
+    const url = String(input);
+    if (url.startsWith("/api/sessions/synthetic/state")) {
+      return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    }
+    if (url.startsWith("/api/sessions/synthetic?")) {
+      return Response.json({
+        sessionId: "synthetic", filePath: "", tree: [], leafId: null,
+        context: {
+          messages: [], entryIds: [], thinkingLevel: "off",
+          model: { provider: "openai", modelId: "gpt-5.4" },
+        },
+      });
+    }
+    if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+    if (url === "/api/agent/synthetic") {
+      runtimeRequests += 1;
+      return runtimeResponse;
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    const handle = mounted.registry.handles.get("synthetic");
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 1, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" }]),
+    })));
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 2, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "unknown" }]),
+    })));
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 3, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "unavailable" }]),
+    })));
+    for (let attempt = 0; attempt < 20 && runtimeRequests === 0; attempt += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(runtimeRequests, 1);
+    assert.equal(mounted.latest().openAiFastModeState, "unknown");
+
+    await React.act(async () => {
+      resolveRuntimeResponse(Response.json({
+        running: false,
+        state: {
+          model: null,
+          projection: { streamEpoch: "epoch", cursor: 3 },
+          extensionStatuses: [{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "unavailable" }],
+          isStreaming: false,
+          isPromptRunning: false,
+          isCompacting: false,
+        },
+      }));
+      await Promise.resolve();
+    });
+    await flushMountedWork();
+    assert.equal(mounted.latest().displayModel, null);
+    assert.equal(mounted.latest().openAiFastModeState, "unavailable");
+  } finally {
+    await mounted.cleanup();
+  }
+});
+
+test("reconnect keeps Fast unknown until the replayed state is model-correlated", async () => {
+  let resolveRuntimeResponse;
+  let runtimeRequests = 0;
+  const runtimeResponse = new Promise((resolve) => { resolveRuntimeResponse = resolve; });
+  const mounted = await mountExistingSessionHook(async (input) => {
+    const url = String(input);
+    if (url.startsWith("/api/sessions/synthetic/state")) {
+      return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    }
+    if (url.startsWith("/api/sessions/synthetic?")) {
+      return Response.json({
+        sessionId: "synthetic", filePath: "", tree: [], leafId: null,
+        context: {
+          messages: [], entryIds: [], thinkingLevel: "off",
+          model: { provider: "openai", modelId: "gpt-5.4" },
+        },
+      });
+    }
+    if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+    if (url === "/api/agent/synthetic") {
+      runtimeRequests += 1;
+      return runtimeResponse;
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    const handle = mounted.registry.handles.get("synthetic");
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 1, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" }]),
+    })));
+    assert.equal(mounted.latest().openAiFastModeState, "effective");
+
+    await React.act(async () => handle.publish(transportSnapshotWithState("recovering", false, 2, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" }]),
+    }, { streamEpoch: "reconnected-epoch" })));
+    for (let attempt = 0; attempt < 20 && runtimeRequests === 0; attempt += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(runtimeRequests, 1);
+    assert.equal(mounted.latest().openAiFastModeState, "unknown");
+
+    await React.act(async () => {
+      resolveRuntimeResponse(Response.json({
+        running: false,
+        state: {
+          model: { provider: "openai", id: "gpt-5.4" },
+          projection: { streamEpoch: "reconnected-epoch", cursor: 2 },
+          extensionStatuses: [{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" }],
+          isStreaming: false,
+          isPromptRunning: false,
+          isCompacting: false,
+        },
+      }));
+      await Promise.resolve();
+    });
+    await flushMountedWork();
+    assert.equal(mounted.latest().openAiFastModeState, "effective");
+  } finally {
+    await mounted.cleanup();
+  }
+});
+
+test("a delayed model response cannot consume a later independent caller's Fast projection", async () => {
+  let resolveModelResponse;
+  let resolveRuntimeResponse;
+  let runtimeRequests = 0;
+  const modelResponse = new Promise((resolve) => { resolveModelResponse = resolve; });
+  const runtimeResponse = new Promise((resolve) => { resolveRuntimeResponse = resolve; });
+  const mounted = await mountExistingSessionHook(async (input, init = {}) => {
+    const url = String(input);
+    if (url.startsWith("/api/sessions/synthetic/state")) {
+      return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    }
+    if (url.startsWith("/api/sessions/synthetic?")) {
+      return Response.json({
+        sessionId: "synthetic", filePath: "", tree: [], leafId: null,
+        context: {
+          messages: [], entryIds: [], thinkingLevel: "off",
+          model: { provider: "openai", modelId: "gpt-5.4" },
+        },
+      });
+    }
+    if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
+    if (url === "/api/agent/synthetic" && init.method === "POST") return modelResponse;
+    if (url === "/api/agent/synthetic") {
+      runtimeRequests += 1;
+      return runtimeResponse;
+    }
+    throw new Error(`unexpected ${url}`);
+  });
+  try {
+    const handle = mounted.registry.handles.get("synthetic");
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 1, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" }]),
+    })));
+
+    let change;
+    await React.act(async () => {
+      change = mounted.latest().handleModelChange("other", "unsupported-a");
+      await Promise.resolve();
+    });
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 3, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "unknown" }]),
+    })));
+    await React.act(async () => handle.publish(transportSnapshotWithState("connected", false, 4, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" }]),
+    })));
+    assert.equal(mounted.latest().openAiFastModeState, "unknown",
+      "the independent caller's effective projection stays hidden while model A is unresolved");
+
+    await React.act(async () => {
+      resolveModelResponse(Response.json({ success: true, data: {
+        id: "unsupported-a", provider: "other",
+        projection: { streamEpoch: "epoch", cursor: 2 },
+      } }));
+      await change;
+    });
+    for (let attempt = 0; attempt < 20 && runtimeRequests === 0; attempt += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(runtimeRequests, 1);
+    assert.deepEqual(mounted.latest().displayModel, { provider: "other", modelId: "unsupported-a" });
+    assert.equal(mounted.latest().openAiFastModeState, "unknown",
+      "cursor 4 cannot satisfy model A's exact cursor-2 authority");
+
+    await React.act(async () => {
+      resolveRuntimeResponse(Response.json({
+        running: false,
+        state: {
+          model: { provider: "openai", id: "gpt-5.4" },
+          projection: { streamEpoch: "epoch", cursor: 4 },
+          extensionStatuses: [{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" }],
+          isStreaming: false,
+          isPromptRunning: false,
+          isCompacting: false,
+        },
+      }));
+      await Promise.resolve();
+    });
+    await flushMountedWork();
+    assert.deepEqual(mounted.latest().displayModel, { provider: "openai", modelId: "gpt-5.4" });
+    assert.equal(mounted.latest().openAiFastModeState, "effective");
+  } finally {
+    await mounted.cleanup();
+  }
+});
+
 test("mounted React DOM consumer receives canonical state before effect and provider releases view before registry", async () => {
   const previous = { window: globalThis.window, document: globalThis.document, act: globalThis.IS_REACT_ACT_ENVIRONMENT };
   const dom = createMinimalDom();
@@ -259,7 +727,10 @@ test("mounted useAgentSession gates HTTP prompt on the binding and completes one
         ...richTransport.state,
         queue: Object.freeze({ steering: Object.freeze(["steer"]), followUp: Object.freeze(["follow"]) }),
         retry: Object.freeze({ attempt: 2, maxAttempts: 4, errorMessage: "retry" }),
-        statuses: Object.freeze([{ key: "status", text: "working" }]),
+        statuses: Object.freeze([
+          { key: "status", text: "working" },
+          { key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" },
+        ]),
         widgets: Object.freeze([{ key: "widget", lines: Object.freeze(["line"]), placement: "aboveEditor" }]),
       }) }),
       canonicalCommitted: true,
@@ -268,8 +739,10 @@ test("mounted useAgentSession gates HTTP prompt on the binding and completes one
     assert.deepEqual(latest.queuedMessages, { steering: ["steer"], followUp: ["follow"] });
     assert.equal(latest.retryInfo.attempt, 2);
     assert.deepEqual(latest.extensionStatuses, [{ key: "status", text: "working" }]);
+    assert.equal(latest.openAiFastModeState, "effective");
     assert.equal(latest.extensionWidgets[0].key, "widget");
     await React.act(async () => binding.publish(Object.freeze({ generation: 1, transport: transportSnapshot("connected", false, 2), canonicalCommitted: true, localPromptPending: false })));
+    assert.equal(latest.openAiFastModeState, null, "a canonical host-key clear removes only the Fast badge");
     await React.act(async () => { await latest.handleSend("synthetic prompt"); });
     const promptPost = fetchOrder.findIndex(([url, method]) => url === "/api/agent/synthetic" && method === "POST");
     assert.ok(promptPost >= 0);
@@ -427,7 +900,10 @@ test("mounted initial HTTP seeds standalone compaction before canonical commit w
         streamEpoch: mode === "initial" ? null : "prior",
         state: Object.freeze({ ...base.state,
           queue: Object.freeze({ steering: Object.freeze(["projected"]), followUp: Object.freeze([]) }),
-          statuses: Object.freeze([{ key: "projected", text: "yes" }]),
+          statuses: Object.freeze([
+            { key: "projected", text: "yes" },
+            { key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" },
+          ]),
         }),
       });
       let view = Object.freeze({ generation: 1, transport: projectedTransport, canonicalCommitted: mode === "prior", localPromptPending: false });
@@ -446,7 +922,10 @@ test("mounted initial HTTP seeds standalone compaction before canonical commit w
         if (url.startsWith("/api/sessions/synthetic/state")) return Response.json({ running: true, state: {
           isStreaming: false, isPromptRunning: false, isCompacting: true,
           queuedMessages: { steering: ["http"], followUp: ["retry"] },
-          extensionStatuses: [{ key: "http", text: "seed" }], extensionWidgets: [{ key: "http-widget", lines: ["seed"], placement: "belowEditor" }],
+          extensionStatuses: [
+            { key: "http", text: "seed" },
+            { key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "unavailable" },
+          ], extensionWidgets: [{ key: "http-widget", lines: ["seed"], placement: "belowEditor" }],
         } });
         if (url.startsWith("/api/sessions/synthetic?")) return Response.json({ sessionId: "synthetic", filePath: "", tree: [], leafId: null, context: { messages: [], entryIds: [], thinkingLevel: "off", model: null } });
         if (url.startsWith("/api/models")) return Response.json({ models: {}, modelList: [], defaultModel: null });
@@ -468,6 +947,7 @@ test("mounted initial HTTP seeds standalone compaction before canonical commit w
           assert.equal(latest.isCompacting, true, JSON.stringify({ requests, queue: latest.queuedMessages, statuses: latest.extensionStatuses }));
           assert.deepEqual(latest.queuedMessages, { steering: ["http"], followUp: ["retry"] });
           assert.deepEqual(latest.extensionStatuses, [{ key: "http", text: "seed" }]);
+          assert.equal(latest.openAiFastModeState, "unavailable");
           assert.equal(latest.extensionWidgets[0].key, "http-widget");
           const laterRecovering = Object.freeze({
             generation: 1,
@@ -484,38 +964,45 @@ test("mounted initial HTTP seeds standalone compaction before canonical commit w
             transport: Object.freeze({ ...committed, state: Object.freeze({
               ...committed.state,
               queue: Object.freeze({ steering: Object.freeze(["canonical"]), followUp: Object.freeze([]) }),
+              statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "off" }]),
             }) }),
             canonicalCommitted: true,
             localPromptPending: false,
           })));
           assert.equal(latest.isCompacting, false, "exact canonical commit supersedes the HTTP seed");
           assert.deepEqual(latest.queuedMessages, { steering: ["canonical"], followUp: [] });
+          assert.equal(latest.openAiFastModeState, "off");
           const exactReplay = Object.freeze({
             generation: 1,
             transport: Object.freeze({ ...committed, connectionState: "recovering", revision: committed.revision + 1, state: Object.freeze({
               ...committed.state,
               queue: Object.freeze({ steering: Object.freeze(["canonical"]), followUp: Object.freeze([]) }),
+              statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "off" }]),
             }) }),
             canonicalCommitted: true,
             localPromptPending: false,
           });
           await React.act(async () => binding.publish(exactReplay));
           assert.deepEqual(latest.queuedMessages, { steering: ["canonical"], followUp: [] }, "mounted exact replay retains committed canonical view during reconnect");
+          assert.equal(latest.openAiFastModeState, "off", "reconnect replay retains wrapper-owned Fast state without a new probe");
           const recovered = transportSnapshot("connected", false, 2);
           await React.act(async () => binding.publish(Object.freeze({
             generation: 1,
             transport: Object.freeze({ ...recovered, readyOutcome: "wrong_epoch", state: Object.freeze({
               ...recovered.state,
               queue: Object.freeze({ steering: Object.freeze(["recovered"]), followUp: Object.freeze([]) }),
+              statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "unknown" }]),
             }) }),
             canonicalCommitted: true,
             localPromptPending: false,
           })));
           assert.deepEqual(latest.queuedMessages, { steering: ["recovered"], followUp: [] }, "mounted snapshot recovery atomically replaces the committed view");
+          assert.equal(latest.openAiFastModeState, "unknown");
         } else {
           assert.equal(latest.isCompacting, false, "prior canonical state wins over HTTP standalone compaction fallback");
           assert.deepEqual(latest.queuedMessages, { steering: ["projected"], followUp: [] });
           assert.deepEqual(latest.extensionStatuses, [{ key: "projected", text: "yes" }]);
+          assert.equal(latest.openAiFastModeState, "effective");
         }
         await React.act(async () => root.unmount());
       } finally {
@@ -752,7 +1239,10 @@ test("mounted A to B to A preserves page lineage once, while hidden settlement e
       root.render(React.createElement(Consumer, { key: "A1", id: "A", binding: a, mountKey: "A1" }));
       await Promise.resolve();
     });
-    await React.act(async () => registry.handles.get("A").publish(transportSnapshot("connected", false, 0)));
+    await React.act(async () => registry.handles.get("A").publish(transportSnapshotWithState("connected", false, 0, {
+      statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" }]),
+    })));
+    assert.equal(latest.openAiFastModeState, "effective");
     await React.act(async () => { await latest.handleSend("/remote-command"); });
     const b = views.prepareSelection("B");
     await React.act(async () => root.render(React.createElement(Consumer, { key: "B", id: "B", binding: b, mountKey: "B" })));
@@ -764,15 +1254,19 @@ test("mounted A to B to A preserves page lineage once, while hidden settlement e
     assert.ok(acquireBIndex >= 0 && hideAIndex > acquireBIndex, "B raw ownership precedes every A ownership change");
     const operations = registry.handles;
     await React.act(async () => {
-      registry.handles.get("B").publish(transportSnapshot("connected", false, 1));
+      registry.handles.get("B").publish(transportSnapshotWithState("connected", false, 1, {
+        statuses: Object.freeze([{ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "off" }]),
+      }));
       registry.handles.get("B").effect({ streamEpoch: "epoch", sequence: 1, effect: { type: "notice", level: "info", message: "edge" } });
     });
     assert.equal(latest.notices.at(-1)?.message, "edge", "transient effect at the acquisition/mount edge reaches selected B");
+    assert.equal(latest.openAiFastModeState, "off", "selected B never inherits A's Fast state");
     assert.ok(operations.has("A") && operations.has("B"));
     const aAgain = views.prepareSelection("A");
     assert.strictEqual(aAgain, a);
     await React.act(async () => root.render(React.createElement(Consumer, { key: "A2", id: "A", binding: aAgain, mountKey: "A2" })));
     assert.equal(latest.agentPhase?.kind, "running_command", "page-stable slash classification survives keyed remount");
+    assert.equal(latest.openAiFastModeState, "effective", "reselected A restores only A's projected Fast state");
     await React.act(async () => registry.handles.get("A").publish(transportSnapshot("connected", true, 1)));
     assert.equal(latest.agentPhase?.kind, "waiting_model", "ordered canonical prompt activity supersedes command waiting classification");
     serverBusy = false;

@@ -179,7 +179,7 @@ export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, 
     retryInfo, contextUsage, forkingEntryId,
     isCompacting, compactError, compactResult, displayModel: displayModelValue, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
-    notices, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
+    notices, extensionDialog, extensionCustomUi, extensionStatuses, openAiFastModeState, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
     isAutoModelSelection,
     agentPhase,
     isNew,
@@ -318,6 +318,7 @@ export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, 
       isStreaming={agentRunning}
       model={displayModelValue}
       isAutoModelSelection={isAutoModelSelection}
+      openAiFastModeState={openAiFastModeState}
       modelNames={modelNames}
       modelList={modelList}
       onModelChange={handleModelChange}

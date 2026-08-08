@@ -64,12 +64,20 @@ interface ResourceLoaderLike {
   getSkills(): { skills: SkillLike[] };
 }
 
-interface ExtensionRunnerLike {
-  getRegisteredCommands(): Array<{
-    invocationName: string;
-    description?: string;
-    sourceInfo: SlashCommandInfo["sourceInfo"];
-  }>;
+export interface ResolvedExtensionCommandLike {
+  name: string;
+  invocationName: string;
+  description?: string;
+  sourceInfo: SlashCommandInfo["sourceInfo"];
+  /** Opaque by design: Pi Web does not model the SDK's full command context. */
+  handler?: unknown;
+}
+
+export interface ExtensionRunnerLike {
+  getRegisteredCommands?(): ResolvedExtensionCommandLike[];
+  getCommand?(invocationName: string): ResolvedExtensionCommandLike | undefined;
+  /** Returns a fresh SDK command context, narrowed defensively by the Fast adapter. */
+  createCommandContext?(): unknown;
   setUIContext?(uiContext?: unknown, mode?: "tui" | "rpc" | "json" | "print"): void;
 }
 

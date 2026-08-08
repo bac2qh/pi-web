@@ -1,7 +1,8 @@
 import { createAgentSessionFromServices, createAgentSessionServices, getAgentDir, initTheme, SessionManager, Theme } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
-import { isAbsolute, resolve as resolvePath } from "node:path";
+import { lstat, open } from "node:fs/promises";
+import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 import { invalidateModelsCache } from "./models-cache";
 import { cacheSessionPath, invalidateSessionListCache } from "./session-reader";
 import { cloneSessionBranch } from "./session-clone";
@@ -12,8 +13,19 @@ import {
   type HostedImplementationLifecycle,
 } from "./hosted-implementation-session";
 import type { SlashCommandInfo } from "@earendil-works/pi-coding-agent";
-import type { AgentSessionLike, ExtensionUiContextLike, ToolInfo } from "./pi-types";
+import type {
+  AgentSessionLike,
+  ExtensionRunnerLike,
+  ExtensionUiContextLike,
+  ResolvedExtensionCommandLike,
+  ToolInfo,
+} from "./pi-types";
 import type { ExtensionUiRequest, ExtensionUiResponse, ExtensionWidgetItem } from "./types";
+import {
+  PI_WEB_OPENAI_FAST_MODE_ESCAPED_EXTENSION_STATUS_KEY,
+  PI_WEB_OPENAI_FAST_MODE_STATUS_KEY,
+  type OpenAiFastModeState,
+} from "./openai-fast-mode-status";
 import {
   getProjectedSessionHub,
   installProjectedSessionHubCapability,
@@ -138,6 +150,198 @@ function rpcPublicErrorClass(error: unknown): string {
   } catch { return "Error"; }
 }
 
+const OPENAI_FAST_PACKAGE_NAME = "@benvargas/pi-openai-fast";
+const OPENAI_FAST_SUPPORTED_VERSION = "1.1.0";
+const OPENAI_FAST_COMMAND_NAME = "fast";
+const OPENAI_FAST_MAX_COMMANDS = 256;
+const OPENAI_FAST_MAX_SOURCE_PATH_BYTES = 4_096;
+const OPENAI_FAST_MAX_MANIFEST_ANCESTORS = 8;
+const OPENAI_FAST_MAX_MANIFEST_BYTES = 32_768;
+const OPENAI_FAST_MAX_NOTIFICATION_BYTES = 4_096;
+
+type FastModeModelSnapshot = Readonly<{ valid: true; key: string | null }> | Readonly<{ valid: false; key: null }>;
+type FastModeCommandIdentity = Readonly<{
+  invocationName: string;
+  sourcePath: string;
+  handler: (args: string, context: unknown) => unknown;
+}>;
+type FastModeCommandResolution =
+  | Readonly<{ kind: "absent" }>
+  | Readonly<{ kind: "lookup_failed" }>
+  | Readonly<{ kind: "unknown_contract"; commandIdentity: FastModeCommandIdentity | null }>
+  | Readonly<{ kind: "recognized"; commandIdentity: FastModeCommandIdentity }>;
+
+type PackageManifestIdentity = Readonly<{
+  found: boolean;
+  name: string | null;
+  version: string | null;
+}>;
+
+function fastModeModelSnapshot(model: unknown): FastModeModelSnapshot {
+  if (model === undefined || model === null) return { valid: true, key: null };
+  if (typeof model !== "object" || Array.isArray(model)) return { valid: false, key: null };
+  const { provider, id } = model as { provider?: unknown; id?: unknown };
+  if (typeof provider !== "string" || typeof id !== "string" || !provider || !id
+    || provider.includes("\0") || id.includes("\0")) return { valid: false, key: null };
+  const key = `${provider}/${id}`;
+  return Buffer.byteLength(key, "utf8") <= 1_024 ? { valid: true, key } : { valid: false, key: null };
+}
+
+async function readNearestPackageManifestIdentity(sourcePath: string): Promise<PackageManifestIdentity> {
+  if (!sourcePath || sourcePath.includes("\0") || !isAbsolute(sourcePath)
+    || Buffer.byteLength(sourcePath, "utf8") > OPENAI_FAST_MAX_SOURCE_PATH_BYTES) {
+    return { found: false, name: null, version: null };
+  }
+
+  let directory = dirname(resolvePath(sourcePath));
+  for (let depth = 0; depth < OPENAI_FAST_MAX_MANIFEST_ANCESTORS; depth += 1) {
+    const manifestPath = join(directory, "package.json");
+    try {
+      const manifestStat = await lstat(manifestPath);
+      if (!manifestStat.isFile()) return { found: true, name: null, version: null };
+    } catch (error) {
+      if ((error as { code?: unknown } | null)?.code !== "ENOENT") {
+        return { found: true, name: null, version: null };
+      }
+      const parent = dirname(directory);
+      if (parent === directory) break;
+      directory = parent;
+      continue;
+    }
+
+    let handle: Awaited<ReturnType<typeof open>>;
+    try {
+      handle = await open(manifestPath, "r");
+    } catch {
+      return { found: true, name: null, version: null };
+    }
+    try {
+      const buffer = Buffer.allocUnsafe(OPENAI_FAST_MAX_MANIFEST_BYTES + 1);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      if (bytesRead > OPENAI_FAST_MAX_MANIFEST_BYTES) {
+        return { found: true, name: null, version: null };
+      }
+      const parsed = JSON.parse(buffer.subarray(0, bytesRead).toString("utf8")) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { found: true, name: null, version: null };
+      }
+      const { name, version } = parsed as { name?: unknown; version?: unknown };
+      return {
+        found: true,
+        name: typeof name === "string" && Buffer.byteLength(name, "utf8") <= 256 ? name : null,
+        version: typeof version === "string" && Buffer.byteLength(version, "utf8") <= 128 ? version : null,
+      };
+    } catch {
+      return { found: true, name: null, version: null };
+    } finally {
+      await handle.close().catch(() => {});
+    }
+  }
+  return { found: false, name: null, version: null };
+}
+
+function commandIdentityFromResolved(command: ResolvedExtensionCommandLike): FastModeCommandIdentity | null {
+  const sourcePath = command.sourceInfo?.path;
+  const invocationName = command.invocationName;
+  if (command.name !== OPENAI_FAST_COMMAND_NAME
+    || command.sourceInfo?.origin !== "package"
+    || typeof sourcePath !== "string" || !isAbsolute(sourcePath) || sourcePath.includes("\0")
+    || Buffer.byteLength(sourcePath, "utf8") > OPENAI_FAST_MAX_SOURCE_PATH_BYTES
+    || typeof invocationName !== "string" || !/^fast(?::[1-9]\d*)?$/.test(invocationName)
+    || Buffer.byteLength(invocationName, "utf8") > 128
+    || typeof command.handler !== "function") return null;
+  return {
+    invocationName,
+    sourcePath: resolvePath(sourcePath),
+    handler: command.handler as (args: string, context: unknown) => unknown,
+  };
+}
+
+async function resolveAuthenticatedOpenAiFastCommand(
+  runner: ExtensionRunnerLike,
+): Promise<FastModeCommandResolution> {
+  if (typeof runner.getRegisteredCommands !== "function" || typeof runner.getCommand !== "function") {
+    return { kind: "lookup_failed" };
+  }
+
+  let commands: ResolvedExtensionCommandLike[];
+  try {
+    commands = runner.getRegisteredCommands();
+  } catch {
+    return { kind: "lookup_failed" };
+  }
+  if (!Array.isArray(commands) || commands.length > OPENAI_FAST_MAX_COMMANDS) return { kind: "lookup_failed" };
+
+  const identified: Array<{
+    command: ResolvedExtensionCommandLike;
+    identity: FastModeCommandIdentity | null;
+    version: string | null;
+  }> = [];
+  let packageMetadataLookupFailed = false;
+  for (const command of commands) {
+    if (!command || command.name !== OPENAI_FAST_COMMAND_NAME || command.sourceInfo?.origin !== "package") continue;
+    const sourcePath = command.sourceInfo.path;
+    if (typeof sourcePath !== "string") continue;
+    const manifest = await readNearestPackageManifestIdentity(sourcePath);
+    if (manifest.found && manifest.name === OPENAI_FAST_PACKAGE_NAME) {
+      identified.push({ command, identity: commandIdentityFromResolved(command), version: manifest.version });
+    } else if (manifest.found && manifest.name === null) {
+      packageMetadataLookupFailed = true;
+    }
+  }
+
+  if (identified.length === 0) return { kind: packageMetadataLookupFailed ? "lookup_failed" : "absent" };
+  if (identified.length !== 1) return { kind: "unknown_contract", commandIdentity: null };
+  const candidate = identified[0];
+  if (!candidate.identity || candidate.version !== OPENAI_FAST_SUPPORTED_VERSION) {
+    return { kind: "unknown_contract", commandIdentity: candidate.identity };
+  }
+
+  let current: ResolvedExtensionCommandLike | undefined;
+  try {
+    current = runner.getCommand(candidate.identity.invocationName);
+  } catch {
+    return { kind: "unknown_contract", commandIdentity: candidate.identity };
+  }
+  const currentIdentity = current ? commandIdentityFromResolved(current) : null;
+  if (!currentIdentity
+    || currentIdentity.sourcePath !== candidate.identity.sourcePath
+    || currentIdentity.handler !== candidate.identity.handler) {
+    return { kind: "unknown_contract", commandIdentity: candidate.identity };
+  }
+  return { kind: "recognized", commandIdentity: currentIdentity };
+}
+
+function hasBoundedSupportedModelsTail(message: string, prefix: string): boolean {
+  if (!message.startsWith(prefix) || !message.endsWith(".") || /[\r\n\0]/.test(message)) return false;
+  return message.slice(prefix.length, -1).length > 0;
+}
+
+/** Strict parser for the four authenticated @benvargas/pi-openai-fast@1.1.0 status shapes. */
+export function parseOpenAiFastStatusNotification(
+  message: unknown,
+  notifyType: unknown,
+  currentModelKey: string | null,
+): OpenAiFastModeState | null {
+  if (typeof message !== "string" || message.length > OPENAI_FAST_MAX_NOTIFICATION_BYTES
+    || notifyType !== "info" || /[\r\n\0]/.test(message)
+    || Buffer.byteLength(message, "utf8") > OPENAI_FAST_MAX_NOTIFICATION_BYTES) return null;
+
+  const reportedModel = currentModelKey ?? "none";
+  if (message === `Fast mode is off. Current model: ${reportedModel}.`) return "off";
+  if (currentModelKey === null) {
+    return hasBoundedSupportedModelsTail(
+      message,
+      "Fast mode is on. No model is selected. Supported models: ",
+    ) ? "unavailable" : null;
+  }
+  if (message === `Fast mode is on for ${currentModelKey}.`) return "effective";
+  return hasBoundedSupportedModelsTail(
+    message,
+    `Fast mode is on, but ${currentModelKey} does not support it. Supported models: `,
+  ) ? "unavailable" : null;
+}
+
 // Extensions require a complete Theme, while the web UI applies its own styling.
 class PlainTextTheme extends Theme {
   constructor() {
@@ -191,6 +395,20 @@ export class AgentSessionWrapper {
   private pendingCustomUiSetups = new Map<string, PendingCustomUiSetup>();
   private extensionStatuses = new Map<string, string>();
   private extensionWidgets = new Map<string, ExtensionWidgetItem>();
+  private fastModeState: OpenAiFastModeState | null = null;
+  private fastModePackageIdentified = false;
+  private fastModeRunner: ExtensionRunnerLike | null = null;
+  private fastModeRunnerGeneration = 0;
+  private fastModeCommandIdentity: FastModeCommandIdentity | null = null;
+  private fastModeLastProbedModelKey: string | null | undefined;
+  private fastModeRefreshRequestVersion = 0;
+  private fastModeRefreshCompletedVersion = 0;
+  private fastModeRefreshDesiredRunnerGeneration = 0;
+  private fastModeRefreshDesiredModelKey: string | null | undefined;
+  private fastModeRefreshPromise: Promise<void> | null = null;
+  private fastModeRefreshWaiters = new Map<number, Set<() => void>>();
+  private modelChangeQueueTail: Promise<void> = Promise.resolve();
+  private lastQueuedModelChange: { key: string; promise: Promise<unknown> } | null = null;
   private promptRunningCount = 0;
   private compactionRunningCount = 0;
   private nativeAgentTurnCount = 0;
@@ -337,10 +555,12 @@ export class AgentSessionWrapper {
       this.touchSemanticIdle("native_event");
       // One outer barrier covers canonical capture, projected publication,
       // stable exact-raw fanout, receipt resolution, and causal release.
+      let refreshFastModeForModelDrift = false;
       this.beginEventFanout();
       try {
         const prepared = this.projectedHub.prepareNativeInput(event);
         const lifecycle = prepared?.lifecycle ?? null;
+        refreshFastModeForModelDrift = lifecycle?.kind === "agent_settled";
         if (lifecycle?.kind === "agent_end") invalidateSessionListCache();
 
         // Pending starts are causal claims before raw fanout so a nested terminal
@@ -368,6 +588,7 @@ export class AgentSessionWrapper {
         else observeOutcome("rejected");
       } finally {
         this.endEventFanout();
+        if (refreshFastModeForModelDrift) this.refreshFastModeAfterModelDrift();
       }
     });
     this.touchSemanticIdle("startup");
@@ -434,6 +655,9 @@ export class AgentSessionWrapper {
       if (!bindingIsCurrent()) return;
       this.extensionsBound = true;
       this.applyForcedEmptySystemPrompt();
+      this.attachFastModeRunner(this.inner.extensionRunner);
+      await this.requestFastModeRefresh();
+      if (!bindingIsCurrent()) return;
       console.log("[pi-web] extension_binding stage=dispatched outcome=ok");
     })().catch((err) => {
       if (this.runtimeIsCurrent()) this.extensionBindingError = err;
@@ -454,6 +678,280 @@ export class AgentSessionWrapper {
       throw this.extensionBindingError instanceof Error
         ? this.extensionBindingError
         : new Error(String(this.extensionBindingError));
+    }
+  }
+
+  private fastModeAdapterIsCurrent(runner?: ExtensionRunnerLike, generation?: number): boolean {
+    return !this.destroying && this.runtimeIsCurrent()
+      && (runner === undefined || this.fastModeRunner === runner)
+      && (generation === undefined || this.fastModeRunnerGeneration === generation);
+  }
+
+  private currentFastModeModelSnapshot(): FastModeModelSnapshot {
+    return fastModeModelSnapshot(this.inner.model);
+  }
+
+  private publishFastModeState(next: OpenAiFastModeState | null): void {
+    if (!this.fastModeAdapterIsCurrent() || this.fastModeState === next) return;
+    this.fastModeState = next;
+    this.emit({
+      type: "extension_ui_request",
+      id: randomUUID(),
+      method: "setStatus",
+      statusKey: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY,
+      statusText: next === null ? undefined : next,
+    } as ExtensionUiRequest as AgentEvent);
+  }
+
+  private invalidateFastModeState(): void {
+    if (this.fastModePackageIdentified) this.publishFastModeState("unknown");
+  }
+
+  private beginFastModeRunnerReplacement(): void {
+    this.fastModeRunnerGeneration += 1;
+    this.fastModeRunner = null;
+    this.fastModeCommandIdentity = null;
+    this.fastModeLastProbedModelKey = undefined;
+    this.fastModeRefreshCompletedVersion = this.fastModeRefreshRequestVersion;
+    this.resolveFastModeRefreshWaiters();
+    this.invalidateFastModeState();
+  }
+
+  private attachFastModeRunner(runner: ExtensionRunnerLike): void {
+    this.fastModeRunnerGeneration += 1;
+    this.fastModeRunner = runner;
+    this.fastModeCommandIdentity = null;
+    this.fastModeLastProbedModelKey = undefined;
+  }
+
+  private fastModeRefreshSnapshotIsCurrent(
+    runner: ExtensionRunnerLike,
+    generation: number,
+    modelKey: string | null,
+  ): boolean {
+    if (!this.fastModeAdapterIsCurrent(runner, generation)) return false;
+    const currentModel = this.currentFastModeModelSnapshot();
+    return currentModel.valid && currentModel.key === modelKey;
+  }
+
+  private queueFastModeRefreshForCurrentModel(force = false): number {
+    const model = this.currentFastModeModelSnapshot();
+    const alreadyPending = this.fastModeRefreshCompletedVersion < this.fastModeRefreshRequestVersion;
+    if (!force && alreadyPending
+      && this.fastModeRefreshDesiredRunnerGeneration === this.fastModeRunnerGeneration
+      && this.fastModeRefreshDesiredModelKey === model.key) {
+      return this.fastModeRefreshRequestVersion;
+    }
+    this.fastModeRefreshRequestVersion += 1;
+    this.fastModeRefreshDesiredRunnerGeneration = this.fastModeRunnerGeneration;
+    this.fastModeRefreshDesiredModelKey = model.key;
+    return this.fastModeRefreshRequestVersion;
+  }
+
+  private async performFastModeRefresh(
+    runner: ExtensionRunnerLike,
+    generation: number,
+    model: FastModeModelSnapshot,
+  ): Promise<void> {
+    const resolution = await resolveAuthenticatedOpenAiFastCommand(runner);
+    if (!this.fastModeAdapterIsCurrent(runner, generation)) return;
+
+    if (resolution.kind === "absent" || resolution.kind === "lookup_failed") {
+      const retainUnknown = resolution.kind === "lookup_failed" && this.fastModePackageIdentified;
+      this.fastModePackageIdentified = retainUnknown;
+      this.fastModeCommandIdentity = null;
+      this.fastModeLastProbedModelKey = model.key;
+      this.publishFastModeState(retainUnknown ? "unknown" : null);
+      return;
+    }
+
+    this.fastModePackageIdentified = true;
+    this.fastModeCommandIdentity = resolution.commandIdentity;
+    if (!model.valid || resolution.kind === "unknown_contract") {
+      this.fastModeLastProbedModelKey = model.key;
+      this.publishFastModeState("unknown");
+      return;
+    }
+
+    if (this.fastModeState === null || this.fastModeLastProbedModelKey !== model.key) {
+      this.publishFastModeState("unknown");
+    }
+    if (typeof runner.createCommandContext !== "function") {
+      this.fastModeLastProbedModelKey = model.key;
+      this.publishFastModeState("unknown");
+      return;
+    }
+
+    let context: unknown;
+    try {
+      context = runner.createCommandContext();
+    } catch {
+      this.fastModeLastProbedModelKey = model.key;
+      this.publishFastModeState("unknown");
+      return;
+    }
+    if (!context || typeof context !== "object") {
+      this.fastModeLastProbedModelKey = model.key;
+      this.publishFastModeState("unknown");
+      return;
+    }
+
+    let contextModel: FastModeModelSnapshot;
+    let originalUi: unknown;
+    try {
+      const contextRecord = context as { model?: unknown; ui?: unknown };
+      contextModel = fastModeModelSnapshot(contextRecord.model);
+      originalUi = contextRecord.ui;
+    } catch {
+      this.fastModeLastProbedModelKey = model.key;
+      this.publishFastModeState("unknown");
+      return;
+    }
+    if (!contextModel.valid || contextModel.key !== model.key
+      || !originalUi || (typeof originalUi !== "object" && typeof originalUi !== "function")) {
+      const currentModel = this.currentFastModeModelSnapshot();
+      if (currentModel.valid && currentModel.key !== model.key) {
+        this.invalidateFastModeState();
+        this.queueFastModeRefreshForCurrentModel();
+      } else {
+        this.fastModeLastProbedModelKey = model.key;
+        this.publishFastModeState("unknown");
+      }
+      return;
+    }
+
+    let notifyCount = 0;
+    let capturedMessage: unknown;
+    let capturedType: unknown;
+    const captureNotify = (message: unknown, type?: unknown) => {
+      notifyCount = Math.min(2, notifyCount + 1);
+      if (notifyCount !== 1) return;
+      capturedMessage = message;
+      capturedType = type;
+    };
+    const uiProxy = new Proxy(originalUi as object, {
+      get(target, property, receiver) {
+        return property === "notify" ? captureNotify : Reflect.get(target, property, receiver);
+      },
+    });
+    const contextProxy = new Proxy(context as object, {
+      get(target, property, receiver) {
+        return property === "ui" ? uiProxy : Reflect.get(target, property, receiver);
+      },
+    });
+
+    try {
+      await resolution.commandIdentity.handler("status", contextProxy);
+    } catch {
+      if (this.fastModeRefreshSnapshotIsCurrent(runner, generation, model.key)) {
+        this.fastModeLastProbedModelKey = model.key;
+        this.publishFastModeState("unknown");
+      }
+      return;
+    }
+
+    if (!this.fastModeRefreshSnapshotIsCurrent(runner, generation, model.key)) {
+      if (this.fastModeAdapterIsCurrent(runner, generation)) {
+        this.invalidateFastModeState();
+        this.queueFastModeRefreshForCurrentModel();
+      }
+      return;
+    }
+
+    const parsed = notifyCount === 1
+      ? parseOpenAiFastStatusNotification(capturedMessage, capturedType, model.key)
+      : null;
+    this.fastModeLastProbedModelKey = model.key;
+    this.publishFastModeState(parsed ?? "unknown");
+  }
+
+  private resolveFastModeRefreshWaiters(): void {
+    for (const [version, waiters] of this.fastModeRefreshWaiters) {
+      if (version > this.fastModeRefreshCompletedVersion) continue;
+      this.fastModeRefreshWaiters.delete(version);
+      for (const resolve of waiters) resolve();
+    }
+  }
+
+  private startFastModeRefreshDrain(): void {
+    if (this.fastModeRefreshPromise || !this.fastModeAdapterIsCurrent() || !this.fastModeRunner) return;
+    const refresh = (async () => {
+      while (this.fastModeAdapterIsCurrent() && this.fastModeRunner
+        && this.fastModeRefreshCompletedVersion < this.fastModeRefreshRequestVersion) {
+        const requestedVersion = this.fastModeRefreshRequestVersion;
+        const runner = this.fastModeRunner;
+        const generation = this.fastModeRunnerGeneration;
+        const model = this.currentFastModeModelSnapshot();
+        try {
+          await this.performFastModeRefresh(runner, generation, model);
+        } catch {
+          if (this.fastModeAdapterIsCurrent(runner, generation)) {
+            this.fastModeLastProbedModelKey = model.key;
+            if (this.fastModePackageIdentified) this.publishFastModeState("unknown");
+          }
+        }
+        this.fastModeRefreshCompletedVersion = Math.max(this.fastModeRefreshCompletedVersion, requestedVersion);
+        this.resolveFastModeRefreshWaiters();
+      }
+    })();
+    const tracked = refresh.finally(() => {
+      if (this.fastModeRefreshPromise !== tracked) return;
+      this.fastModeRefreshPromise = null;
+      if (this.fastModeAdapterIsCurrent() && this.fastModeRunner
+        && this.fastModeRefreshCompletedVersion < this.fastModeRefreshRequestVersion) {
+        this.startFastModeRefreshDrain();
+      }
+    });
+    this.fastModeRefreshPromise = tracked;
+  }
+
+  private requestFastModeRefresh(force = false): Promise<void> {
+    if (!this.fastModeAdapterIsCurrent() || !this.fastModeRunner) return Promise.resolve();
+    const requestedVersion = this.queueFastModeRefreshForCurrentModel(force);
+    const completion = new Promise<void>((resolve) => {
+      const waiters = this.fastModeRefreshWaiters.get(requestedVersion) ?? new Set<() => void>();
+      waiters.add(resolve);
+      this.fastModeRefreshWaiters.set(requestedVersion, waiters);
+    });
+    this.startFastModeRefreshDrain();
+    return completion;
+  }
+
+  private refreshFastModeAfterModelDrift(): void {
+    if (!this.fastModeAdapterIsCurrent() || !this.fastModeRunner) return;
+    const model = this.currentFastModeModelSnapshot();
+    if (!model.valid || this.fastModeLastProbedModelKey === model.key) return;
+    this.invalidateFastModeState();
+    void this.requestFastModeRefresh();
+  }
+
+  private async convergeFastModeForGetState(): Promise<void> {
+    if (this.extensionBindingPromise) {
+      try { await this.extensionBindingPromise; } catch { return; }
+    }
+    if (!this.fastModeAdapterIsCurrent() || !this.fastModeRunner) return;
+    if (this.fastModeRefreshPromise) await this.fastModeRefreshPromise;
+    const model = this.currentFastModeModelSnapshot();
+    if (!model.valid || this.fastModeLastProbedModelKey === model.key) return;
+    this.invalidateFastModeState();
+    await this.requestFastModeRefresh();
+  }
+
+  private isAuthenticatedFastModePrompt(message: string): boolean {
+    const identity = this.fastModeCommandIdentity;
+    const runner = this.fastModeRunner;
+    if (!identity || !runner || typeof runner.getCommand !== "function" || !message.startsWith("/")) return false;
+    const spaceIndex = message.indexOf(" ");
+    const invocationName = spaceIndex === -1 ? message.slice(1) : message.slice(1, spaceIndex);
+    if (invocationName !== identity.invocationName) return false;
+    try {
+      const current = runner.getCommand(invocationName);
+      const currentIdentity = current ? commandIdentityFromResolved(current) : null;
+      return !!currentIdentity
+        && currentIdentity.sourcePath === identity.sourcePath
+        && currentIdentity.handler === identity.handler;
+    } catch {
+      return false;
     }
   }
 
@@ -771,6 +1269,8 @@ export class AgentSessionWrapper {
     publicErrorMessage?: string,
   ): void {
     if (!this.runtimeIsCurrent()) throw new Error("rpc_runtime_generation_closed");
+    const refreshFastModeAfterSettlement = this.isAuthenticatedFastModePrompt(message);
+    if (refreshFastModeAfterSettlement) this.invalidateFastModeState();
     const promptPromise = this.inner.prompt(message, {
       ...(promptImages?.length ? { images: promptImages } : {}),
       ...(streamingBehavior ? { streamingBehavior } : {}),
@@ -782,6 +1282,7 @@ export class AgentSessionWrapper {
       if (!this.runtimeIsCurrent()) return;
       if (!streamingBehavior) this.emit({ type: "prompt_done" });
       this.releasePromptRun();
+      if (refreshFastModeAfterSettlement) void this.requestFastModeRefresh(true);
       if (lifecycle) this.callLifecycle(lifecycle.targetSettled);
     }, (error) => {
       if (!this.runtimeIsCurrent()) return;
@@ -792,6 +1293,7 @@ export class AgentSessionWrapper {
       });
       if (!streamingBehavior) this.emit({ type: "prompt_done" });
       this.releasePromptRun();
+      if (refreshFastModeAfterSettlement) void this.requestFastModeRefresh(true);
       if (lifecycle) this.callLifecycle(() => lifecycle.targetFailed(error));
     });
   }
@@ -849,6 +1351,21 @@ export class AgentSessionWrapper {
     return true;
   }
 
+  private enqueueModelChange<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    if (this.lastQueuedModelChange?.key === key) {
+      return this.lastQueuedModelChange.promise as Promise<T>;
+    }
+    const queued = this.modelChangeQueueTail.then(operation, operation);
+    this.modelChangeQueueTail = queued.then(() => {}, () => {});
+    this.lastQueuedModelChange = { key, promise: queued };
+    void queued.then(() => {
+      if (this.lastQueuedModelChange?.promise === queued) this.lastQueuedModelChange = null;
+    }, () => {
+      if (this.lastQueuedModelChange?.promise === queued) this.lastQueuedModelChange = null;
+    });
+    return queued;
+  }
+
   async send(command: Record<string, unknown>): Promise<unknown> {
     const type = command.type as string;
     if (!RECOGNIZED_RPC_COMMANDS.has(type)) throw new Error(`Unsupported command: ${type}`);
@@ -893,6 +1410,7 @@ export class AgentSessionWrapper {
         return null;
 
       case "get_state": {
+        await this.convergeFastModeForGetState();
         const model = this.inner.model;
         const contextUsage = this.inner.getContextUsage();
         return {
@@ -903,7 +1421,7 @@ export class AgentSessionWrapper {
           isCompacting: this.compactionRunningCount > 0 || this.inner.isCompacting,
           autoCompactionEnabled: this.inner.autoCompactionEnabled,
           autoRetryEnabled: this.inner.autoRetryEnabled,
-          model: model ? { id: model.id, provider: model.provider } : undefined,
+          model: model ? { id: model.id, provider: model.provider } : null,
           messageCount: 0,
           pendingMessageCount: this.inner.pendingMessageCount,
           queuedMessages: {
@@ -915,6 +1433,10 @@ export class AgentSessionWrapper {
             : null,
           systemPrompt: this.inner.agent.state?.systemPrompt ?? "",
           thinkingLevel: this.inner.agent.state?.thinkingLevel ?? "off",
+          projection: {
+            streamEpoch: this.projectedHub.streamEpoch,
+            cursor: this.projectedHub.cursor,
+          },
           extensionStatuses: this.getExtensionStatuses(),
           extensionWidgets: this.getExtensionWidgets(),
         };
@@ -922,12 +1444,30 @@ export class AgentSessionWrapper {
 
       case "set_model": {
         const { provider, modelId } = command as { provider: string; modelId: string };
-        const model = this.inner.modelRuntime.getModel(provider, modelId);
-        if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
-        await this.inner.setModel(model);
-        invalidateModelsCache();
-        invalidateSessionListCache();
-        return { id: model.id, provider: model.provider };
+        return this.enqueueModelChange(`${provider}\0${modelId}`, async () => {
+          if (!this.runtimeIsCurrent()) throw new Error("rpc_runtime_generation_closed");
+          const model = this.inner.modelRuntime.getModel(provider, modelId);
+          if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
+          this.invalidateFastModeState();
+          try {
+            await this.inner.setModel(model);
+          } catch (error) {
+            if (this.runtimeIsCurrent()) await this.requestFastModeRefresh(true);
+            throw error;
+          }
+          if (!this.runtimeIsCurrent()) throw new Error("rpc_runtime_generation_closed");
+          await this.requestFastModeRefresh();
+          invalidateModelsCache();
+          invalidateSessionListCache();
+          return {
+            id: model.id,
+            provider: model.provider,
+            projection: {
+              streamEpoch: this.projectedHub.streamEpoch,
+              cursor: this.projectedHub.cursor,
+            },
+          };
+        });
       }
 
       case "clone": {
@@ -1079,7 +1619,7 @@ export class AgentSessionWrapper {
 
       case "get_commands": {
         const commands: SlashCommandInfo[] = [];
-        for (const registered of this.inner.extensionRunner.getRegisteredCommands()) {
+        for (const registered of this.inner.extensionRunner.getRegisteredCommands?.() ?? []) {
           commands.push({
             name: registered.invocationName,
             description: registered.description,
@@ -1117,6 +1657,7 @@ export class AgentSessionWrapper {
       case "reload": {
         await this.waitForExtensionsBound();
         if (!this.runtimeIsCurrent()) throw new Error("rpc_runtime_generation_closed");
+        this.beginFastModeRunnerReplacement();
         this.clearProjectedExtensionState();
         this.extensionStatuses.clear();
         this.extensionWidgets.clear();
@@ -1126,6 +1667,8 @@ export class AgentSessionWrapper {
           this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
         }
         this.applyForcedEmptySystemPrompt();
+        this.attachFastModeRunner(this.inner.extensionRunner);
+        await this.requestFastModeRefresh();
         return { success: true };
       }
 
@@ -1157,6 +1700,11 @@ export class AgentSessionWrapper {
   destroy(): void {
     if (!this._alive || this.destroying) return;
     this.destroying = true;
+    this.fastModeRunnerGeneration += 1;
+    this.fastModeRunner = null;
+    this.fastModeCommandIdentity = null;
+    this.fastModeRefreshCompletedVersion = this.fastModeRefreshRequestVersion;
+    this.resolveFastModeRefreshWaiters();
     // Owner deletion or process cleanup must not let an unresolved extension
     // binding dispatch its hosted kickoff against a disposed native session.
     this.cancelHostedKickoffBeforeDispatch(false);
@@ -1208,7 +1756,11 @@ export class AgentSessionWrapper {
   }
 
   private getExtensionStatuses(): Array<{ key: string; text: string }> {
-    return Array.from(this.extensionStatuses, ([key, text]) => ({ key, text }));
+    const statuses = Array.from(this.extensionStatuses, ([key, text]) => ({ key, text }));
+    if (this.fastModeState !== null) {
+      statuses.push({ key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: this.fastModeState });
+    }
+    return statuses;
   }
 
   private getExtensionWidgets(): ExtensionWidgetItem[] {
@@ -1443,13 +1995,16 @@ export class AgentSessionWrapper {
       onTerminalInput: () => () => {},
       setStatus: (key, text) => {
         if (!this.runtimeIsCurrent()) return;
-        if (text === undefined) this.extensionStatuses.delete(key);
-        else this.extensionStatuses.set(key, text);
+        const statusKey = key === PI_WEB_OPENAI_FAST_MODE_STATUS_KEY
+          ? PI_WEB_OPENAI_FAST_MODE_ESCAPED_EXTENSION_STATUS_KEY
+          : key;
+        if (text === undefined) this.extensionStatuses.delete(statusKey);
+        else this.extensionStatuses.set(statusKey, text);
         this.emit({
           type: "extension_ui_request",
           id: randomUUID(),
           method: "setStatus",
-          statusKey: key,
+          statusKey,
           statusText: text,
         } as ExtensionUiRequest as AgentEvent);
       },
@@ -1535,6 +2090,7 @@ export class AgentSessionWrapper {
       switchSession: async () => ({ cancelled: true }),
       reload: async () => {
         if (!this.runtimeIsCurrent()) return;
+        this.beginFastModeRunnerReplacement();
         this.clearProjectedExtensionState();
         this.extensionStatuses.clear();
         this.extensionWidgets.clear();
@@ -1543,7 +2099,10 @@ export class AgentSessionWrapper {
             if (this.runtimeIsCurrent()) this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
           },
         });
-        if (this.runtimeIsCurrent()) this.applyForcedEmptySystemPrompt();
+        if (!this.runtimeIsCurrent()) return;
+        this.applyForcedEmptySystemPrompt();
+        this.attachFastModeRunner(this.inner.extensionRunner);
+        await this.requestFastModeRefresh();
       },
     };
   }

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, {
@@ -9,10 +11,16 @@ const jiti = createJiti(import.meta.url, {
 });
 const { isExactCloneCommand } = await jiti.import("../hooks/useAgentSession.ts");
 const {
+  ChatInput,
   canSubmitStreamingComposer,
+  getOpenAiFastModePresentation,
   isStoredDraftTheSubmittedComposer,
   isSubmittedComposerStateUnchanged,
 } = await jiti.import("./ChatInput.tsx");
+const {
+  PI_WEB_OPENAI_FAST_MODE_STATUS_KEY,
+  splitOpenAiFastModeStatus,
+} = await jiti.import("../lib/openai-fast-mode-status.ts");
 
 test("recognizes only the exact trimmed clone command", () => {
   assert.equal(isExactCloneCommand("/clone"), true);
@@ -97,6 +105,103 @@ test("maps clone results before new-session creation and coalesces local submiss
   ]) {
     assert.ok(builtinSource.includes(message), `missing clone result message: ${message}`);
   }
+});
+
+test("reserved Fast host status is split strictly from ordinary extension statuses", () => {
+  const generic = { key: "generic", text: "still visible" };
+  assert.deepEqual(splitOpenAiFastModeStatus([
+    generic,
+    { key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" },
+  ]), {
+    fastModeState: "effective",
+    extensionStatuses: [generic],
+  });
+  assert.deepEqual(splitOpenAiFastModeStatus([
+    { key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "enabled-ish" },
+    generic,
+  ]), {
+    fastModeState: "unknown",
+    extensionStatuses: [generic],
+  });
+  assert.deepEqual(splitOpenAiFastModeStatus([
+    { key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "off" },
+    { key: PI_WEB_OPENAI_FAST_MODE_STATUS_KEY, text: "effective" },
+  ]), {
+    fastModeState: "unknown",
+    extensionStatuses: [],
+  });
+  assert.deepEqual(splitOpenAiFastModeStatus([generic]), {
+    fastModeState: null,
+    extensionStatuses: [generic],
+  });
+});
+
+test("Fast presentation names priority-tier behavior and fails closed without a selected model", () => {
+  const model = { provider: "openai", modelId: "gpt-5.4" };
+  const expectedLabels = {
+    effective: "Fast",
+    unavailable: "Fast unavailable",
+    off: "Fast off",
+    unknown: "Fast unknown",
+  };
+  for (const [state, label] of Object.entries(expectedLabels)) {
+    const presentation = getOpenAiFastModePresentation(state, model);
+    assert.equal(presentation.label, label);
+    assert.match(presentation.description, /OpenAI priority service tier/);
+    assert.match(presentation.description, /openai\/gpt-5\.4/);
+  }
+  assert.deepEqual(getOpenAiFastModePresentation(null, model), null);
+  const modelLess = getOpenAiFastModePresentation("effective", null);
+  assert.equal(modelLess.state, "unavailable");
+  assert.equal(modelLess.label, "Fast unavailable");
+  assert.match(modelLess.description, /no model is selected/i);
+});
+
+test("model selector keeps every Fast label visible, accessible, and anchored while disabled", async () => {
+  const baseProps = {
+    onSend: () => true,
+    onAbort: () => {},
+    isStreaming: false,
+    model: { provider: "openai", modelId: "gpt-5.4" },
+    modelList: [{ provider: "openai", id: "gpt-5.4", name: "A deliberately very long selected model display name" }],
+    onModelChange: () => {},
+  };
+  for (const [state, label] of Object.entries({
+    effective: "Fast",
+    unavailable: "Fast unavailable",
+    off: "Fast off",
+    unknown: "Fast unknown",
+  })) {
+    const markup = renderToStaticMarkup(React.createElement(ChatInput, {
+      ...baseProps,
+      isStreaming: state === "unknown",
+      openAiFastModeState: state,
+    }));
+    assert.match(markup, new RegExp(`data-openai-fast-mode="${state}"`));
+    assert.ok(markup.includes(label));
+    assert.match(markup, /aria-label="Select model\. Current selected model: openai\/gpt-5\.4\./);
+    assert.match(markup, /OpenAI priority service tier/);
+    if (state === "unknown") assert.match(markup, /<button[^>]*disabled=""[^>]*aria-label="Select model\./);
+  }
+
+  const noModelMarkup = renderToStaticMarkup(React.createElement(ChatInput, {
+    ...baseProps,
+    model: null,
+    openAiFastModeState: "unavailable",
+  }));
+  assert.match(noModelMarkup, />Select model</);
+  assert.match(noModelMarkup, /Fast unavailable/);
+  assert.match(noModelMarkup, /No model is selected/);
+
+  const absentMarkup = renderToStaticMarkup(React.createElement(ChatInput, {
+    ...baseProps,
+    openAiFastModeState: null,
+  }));
+  assert.doesNotMatch(absentMarkup, /data-openai-fast-mode=/);
+
+  const source = await readFile(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  assert.match(source, /flexShrink: 0,[\s\S]*data-openai-fast-mode|data-openai-fast-mode[\s\S]*flexShrink: 0/);
+  assert.match(source, /width: isMobile \? "100%" : undefined/);
 });
 
 test("threads clone success through refresh-only callback wiring", async () => {

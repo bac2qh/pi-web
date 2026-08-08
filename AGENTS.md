@@ -220,6 +220,12 @@ Newer Pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - Skill toggling edits only the `disable-model-invocation` frontmatter key on the target `SKILL.md`; keep that surgical so user formatting survives.
 - `/api/skills/install` shells through `npx skills add ... --agent pi`; project installs run with the selected cwd.
 
+### OpenAI Fast indicator compatibility adapter
+- Pi Web recognizes only the package-origin `@benvargas/pi-openai-fast@1.1.0` command after bounded nearest-manifest authentication. It invokes that command's `status` handler with a fresh command context, captures the single known notification locally, and fails closed: package absence has no badge; unsupported, ambiguous, stale, or failed contracts show `Fast unknown`.
+- The wrapper refreshes only after extension binding, the authenticated Fast command settles, model selection or settled model drift, and reload. Refreshes coalesce by wrapper/runner/model generation; ordinary prompts, reconnects, and unchanged `get_state` calls do not probe.
+- `pi-web:openai-fast-mode` is Pi-Web-owned status transport metadata whose value is only `effective | unavailable | off | unknown`. Extension attempts to use that key are escaped as ordinary statuses, and the browser removes the exact host entry before generic status rendering.
+- Model mutations are serialized in the wrapper, and the browser serializes overlapping local model intents. A successful `set_model` response includes the projected session epoch/cursor after Fast convergence; only that exact watermark can complete the local transition. If another caller or reconnect has already advanced the projection, an exact-watermarked `get_state` response applies the authoritative model and Fast state together while the badge remains `unknown`.
+
 ### Auth and model config
 - `ModelsConfig` combines models from `~/.pi/agent/models.json` with provider auth status from pi's `AuthStorage`/`ModelRegistry`.
 - OAuth/device-code/manual-code flows are streamed by `GET /api/auth/login/[provider]`; manual code responses POST back with a short-lived token stored in `globalThis.__piLoginCallbacks`.

@@ -4,6 +4,7 @@ import { scaledMenuFontSize } from "@/lib/display-preferences";
 import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
 import { isExactCloneCommand, type BuiltinSlashCommandResult, type CompactResultInfo, type QueuedMessages, type SlashCommandInfo } from "@/hooks/useAgentSession";
 import { clearDraft, getDraft, setDraft, type ChatDraftImage } from "@/lib/draft-store";
+import type { OpenAiFastModeState } from "@/lib/openai-fast-mode-status";
 import {
   buildEntriesFromFiles, buildAtInsertText, extractAtQuery, filterFileEntries,
   type AtQueryMatch, type FileIndexEntry,
@@ -32,6 +33,7 @@ interface Props {
   isStreaming: boolean;
   model?: { provider: string; modelId: string } | null;
   isAutoModelSelection?: boolean;
+  openAiFastModeState?: OpenAiFastModeState | null;
   modelNames?: Record<string, string>;
   modelList?: { id: string; name: string; provider: string }[];
   onModelChange?: (provider: string, modelId: string) => void;
@@ -117,6 +119,50 @@ function compareModelOptions(a: ModelOption, b: ModelOption): number {
   return MODEL_OPTION_COLLATOR.compare(a.name || a.modelId, b.name || b.modelId)
     || MODEL_OPTION_COLLATOR.compare(a.provider, b.provider)
     || MODEL_OPTION_COLLATOR.compare(a.modelId, b.modelId);
+}
+
+export function getOpenAiFastModePresentation(
+  state: OpenAiFastModeState | null | undefined,
+  model: { provider: string; modelId: string } | null | undefined,
+): { state: OpenAiFastModeState; label: string; description: string } | null {
+  if (!state) return null;
+  const modelKey = model ? `${model.provider}/${model.modelId}` : null;
+  // A model-less composer can never make an eligible request, even if a stale
+  // browser frame carried an otherwise valid effective state.
+  const visibleState: OpenAiFastModeState = state === "effective" && !modelKey ? "unavailable" : state;
+
+  switch (visibleState) {
+    case "effective":
+      return {
+        state: visibleState,
+        label: "Fast",
+        description: `Fast is active for selected model ${modelKey}. The OpenAI priority service tier will be requested for supported requests with this model.`,
+      };
+    case "unavailable":
+      return {
+        state: visibleState,
+        label: "Fast unavailable",
+        description: modelKey
+          ? `Fast is on, but unavailable for selected model ${modelKey}. The OpenAI priority service tier will not be requested for this model.`
+          : "Fast is on, but no model is selected. The OpenAI priority service tier will not be requested until an eligible model is selected.",
+      };
+    case "off":
+      return {
+        state: visibleState,
+        label: "Fast off",
+        description: modelKey
+          ? `Fast is off for selected model ${modelKey}. The OpenAI priority service tier will not be requested.`
+          : "Fast is off and no model is selected. The OpenAI priority service tier will not be requested.",
+      };
+    case "unknown":
+      return {
+        state: visibleState,
+        label: "Fast unknown",
+        description: modelKey
+          ? `Fast state is unknown for selected model ${modelKey}. Pi Web cannot determine whether the OpenAI priority service tier will be requested.`
+          : "Fast state is unknown and no model is selected. Pi Web cannot determine whether the OpenAI priority service tier will be requested after a model is selected.",
+      };
+  }
 }
 
 const THINKING_LEVELS = ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -230,7 +276,7 @@ function QueuedMessageRow({ kind, text }: { kind: "steer" | "follow-up"; text: s
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
-  onSend, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, onModelChange,
+  onSend, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, openAiFastModeState, modelNames, modelList, onModelChange,
   onCompact, onAbortCompaction, isCompacting, compactError, compactResult, toolPreset, onToolPresetChange,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   retryInfo, queuedMessages, onRecallQueue,
@@ -1008,6 +1054,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     ? (modelOptions.find((o) => o.modelId === model.modelId && o.provider === model.provider)?.name ?? model.modelId)
     : null;
   const currentName = displayModelName;
+  const modelSelectorText = currentName ?? "Select model";
+  const fastModePresentation = getOpenAiFastModePresentation(openAiFastModeState, model);
+  const modelSelectorDescription = [
+    model ? `Select model. Current selected model: ${model.provider}/${model.modelId}.` : "Select model. No model is selected.",
+    fastModePresentation?.description,
+  ].filter(Boolean).join(" ");
 
   const compactSavedTokens = compactResult
     ? Math.max(0, compactResult.tokensBefore - compactResult.estimatedTokensAfter)
@@ -1616,7 +1668,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               </svg>
             </button>
             {/* Model selector — visible always, disabled during streaming */}
-            {modelOptions.length > 0 && currentName && onModelChange && (
+            {modelOptions.length > 0 && onModelChange && (
                 <div ref={dropdownRef} style={{ position: "relative", flex: isMobile ? "1 1 auto" : undefined, minWidth: 0 }}>
                   <button
                     onClick={(e) => {
@@ -1625,6 +1677,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       setModelDropdownOpen((v) => !v);
                     }}
                     disabled={isStreaming}
+                    aria-label={modelSelectorDescription}
+                    title={modelSelectorDescription}
                     style={{
                       display: "flex", alignItems: "center", gap: 6,
                       justifyContent: isMobile ? "flex-start" : undefined,
@@ -1660,7 +1714,28 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       <line x1="20" y1="9" x2="23" y2="9" /><line x1="20" y1="14" x2="23" y2="14" />
                       <line x1="1" y1="9" x2="4" y2="9" /><line x1="1" y1="14" x2="4" y2="14" />
                     </svg>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{currentName}</span>
+                    <span style={{ flex: "1 1 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{modelSelectorText}</span>
+                    {fastModePresentation && (
+                      <span
+                        aria-hidden="true"
+                        data-openai-fast-mode={fastModePresentation.state}
+                        style={{
+                          flexShrink: 0,
+                          whiteSpace: "nowrap",
+                          padding: "1px 5px",
+                          borderRadius: 999,
+                          border: `1px solid ${fastModePresentation.state === "effective"
+                            ? "color-mix(in srgb, var(--accent) 55%, transparent)"
+                            : "var(--border)"}`,
+                          color: fastModePresentation.state === "effective" ? "var(--accent)" : "var(--text-dim)",
+                          fontFamily: "var(--font-mono)",
+                          fontSize: scaledMenuFontSize(9),
+                          lineHeight: 1.3,
+                        }}
+                      >
+                        {fastModePresentation.label}
+                      </span>
+                    )}
                   </button>
                   {modelDropdownOpen && modelDropdownRect && (() => {
                     const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
