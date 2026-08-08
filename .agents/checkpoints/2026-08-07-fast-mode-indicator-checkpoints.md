@@ -175,3 +175,15 @@ Plan: `.agents/plans/2026-08-07-fast-mode-indicator.md`
 **Uncertainty / gaps:** Intentional residuals are exact `1.1.0` compatibility only, no live provider request, structural rather than pixel layout validation, and conservative `Fast unknown` when exact reconciliation is unavailable. The child's first literal command inherited `NODE_ENV=production` and failed only because production React omits `act`; the prescribed sanitized run passed.
 
 **Recommended use:** Accept the implementation subject to the recorded validation and intentional fail-closed residuals.
+
+## Implementation Summary
+
+**Plan section:** Final implementation and Validation Contract closeout (Sections 1–4; VC-001 through VC-007).
+
+**Work and outcome:** Completed the authenticated Pi-Web-only `@benvargas/pi-openai-fast@1.1.0` observer, transition-driven wrapper convergence, reserved strict status transport, serialized/fail-closed model authority, exact-watermarked independent/reconnect reconciliation, generic-status separation, and accessible four-state model-selector badge. The installed extension, its configuration ownership, and provider request mutation remain unchanged. All final independent-review blocker/high/medium findings were fixed, and the final reviewer reported no remaining fix-worthy finding.
+
+**Validation / evidence:** `env -u NODE_ENV node --test lib/rpc-manager.test.mjs lib/session-protocol.test.mjs lib/session-view-projection.test.mjs components/SessionAgentTransport.test.mjs components/ChatInput.test.mjs` passed 232 tests with 0 failures; `/Users/xin/Documents/repos/pi-web/node_modules/.bin/tsc --noEmit -p tsconfig.json` passed; `npm run lint` passed; and `git diff --check` passed. Reviewer run `c578293c-4a56-4235-a76d-d91f09d2e9cf` independently accepted the final diff. No production build was run because repository instructions explicitly prohibit `next build` during development.
+
+**Departures from approved obligations:** No obligation is incomplete, blocked, waived, or superseded. The disclosed Section 2 implementation refinement—exact epoch/cursor authority in existing `set_model` and `get_state` responses, plus atomic model/status repair when a later caller or reconnect advances projection—was completed to satisfy the approved fail-closed truth guarantee; it adds no protocol-version change and exposes no model key in the reserved status value. All other work followed the approved scope.
+
+**Implementation commit:** `b3a1743` (`feat: show authoritative OpenAI Fast status`).
