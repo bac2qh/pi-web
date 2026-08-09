@@ -39,3 +39,7 @@
 ## 2026-08-08
 
 - Updated hosted-session, custom-server, and removal-policy memory after adding strict wrapper-owned `session_shutdown` for published release paths while preserving bare unpublished rollback, the independent ten-second network deadline, and Hide/Restore as the only web removal workflow.
+
+## 2026-08-09
+
+- Updated browser-local display-preference memory after adding independent preferred sidebar/file-viewer widths, joint temporary clamping around a protected conversation width, accessible desktop separators, reset-by-key-removal semantics, and responsive/expanded precedence.
