@@ -45,6 +45,7 @@ app/api/
   sessions/[id]/route.ts          GET/PATCH session
   sessions/[id]/context/route.ts  GET ?leafId= — context for a specific leaf
   sessions/[id]/export/route.ts   GET exported HTML for a session
+  session-dag/route.ts            GET/PATCH machine-wide session dependency graph
   sidebar-state/route.ts          GET/PATCH shared pin and hidden-sidebar state
   agent/new/route.ts              POST { cwd, message, toolNames?, provider?, modelId? }
   agent/[id]/route.ts             GET state | POST any command
@@ -83,6 +84,12 @@ lib/
   hosted-implementation-session.ts  process-local Start/Orchestrate host capability
   session-clone.ts    disposable native active-branch extraction for /clone
   session-reader.ts   SessionManager wrappers + path cache + buildSessionContext adapter
+  session-dag.ts      strict dependency-graph model, reducer, history, and Mermaid compiler
+  session-dag-store.ts locked atomic pi-web-session-dag.json persistence
+  session-dag-route.ts injectable GET/PATCH route behavior and listing-race retries
+  session-dag-svg.ts validated inert SVG preparation + explicit completion controls
+  session-list-refresh.ts HMR-stable session discovery invalidation/pub-sub seam
+  right-panel-tabs.ts pure permanent-DAG/file tab focus and close transitions
   sidebar-session-state.ts  client-safe pin/hide/recent/tree derivation
   sidebar-state-store.ts    locked atomic pi-web-sidebar.json persistence
   tool-presets.ts     PRESET_NONE/DEFAULT/FULL + getPresetFromTools()
@@ -99,6 +106,8 @@ components/
   AppShell.tsx        layout + URL state + tab management
   AutomaticFileOpenConfirmation.tsx  narrow-width agent-path confirmation
   SessionSidebar.tsx  Pinned/Recent/Project presentations + FileExplorer
+  SessionDagPanel.tsx structured dependency authoring, refresh, and mutation queue
+  SessionDagPreview.tsx serialized Mermaid render + explicit completion interaction
   GlobalStatusProvider.tsx one running/discovery socket per loaded page
   SessionRegistryProvider.tsx page-owned session view registry and transport
   ChatWindow.tsx      chat composition + completion sound wrapper
@@ -114,7 +123,7 @@ components/
   FileExplorer.tsx    file tree inside sidebar
   FileIcons.tsx       file icon helpers
   FileViewer.tsx      file content in a tab
-  TabBar.tsx          tab bar (Chat + open file tabs)
+  TabBar.tsx          permanent DAG + closable file right-panel tabs
 
 hooks/
   useAgentSession.ts  messages + projected WebSocket effects + HTTP reconciliation + fork/clone/navigate logic
@@ -172,6 +181,16 @@ hooks/
 
 ### Session parent metadata and removal
 `parentSession` in the header is **display metadata only** — it has zero effect on chat content. Pi may rewrite an entire session file during migrations, but Pi Web exposes no permanent session-delete control or `DELETE /api/sessions/[id]` handler. Hide/Restore is the web removal workflow and updates only sidebar metadata.
+
+### Machine-wide session dependency graph
+- `GET/PATCH /api/session-dag` owns one strict graph in `getAgentDir()/pi-web-session-dag.json`, separate from native session JSONL and `pi-web-sidebar.json`. The store is private, size/count bounded, lock-serialized, and published by same-directory atomic rename; malformed or oversized state is refused without reconciliation or pruning.
+- `A → B` means only that A must be marked complete before B becomes eligible. The DAG feature never starts, stops, schedules, hides, reparents, renames, or otherwise mutates a Pi session. Exact session IDs are identity; form numbers, titles, project labels, worktree branches, and native ancestry are presentation only. Cycles, self-edges, reverse pairs, and disconnected components are allowed, while an exact duplicate directed pair is not.
+- Add/replace proves both IDs exist in one generation-current complete session listing under the graph lock. Accepted IDs remain durable if their session later disappears; unavailable nodes can still be completed, undone/redone, copied, or deleted. Sidebar Hidden has no graph meaning.
+- Completing an eligible node archives all active outgoing edges in one sequenced batch. Sinks use a zero-visible-edge batch—there is no stored or rendered sentinel. Undo/Redo move only the expected history tip and preserve the batch timestamp/sequence; a direct semantic mutation or new completion after Undo clears redo.
+- PATCH envelopes carry a stable mutation ID, base revision, and compare-and-set targets. Exact retries use bounded private receipts; mutation-ID reuse, stale revisions, changed targets, and capacity conflicts return authoritative `409` state without silent client replay. Only add/replace consult session discovery.
+- The right panel always has a non-closable first **DAG** tab and starts closed. First activation lazily mounts the DAG in Preview; it remains mounted afterward so mode, drafts, focus, feedback, and expansion provenance survive file switches and hide/reopen. Closing the final file keeps the panel open and falls back to DAG without resetting expansion.
+- Raw structured forms are canonical; Mermaid is generated one-way from the global active graph. Preview uses strict serialized Mermaid with SVG-only labels, then XML-parses and validates one current-render graph root, accessibility metadata, inert node aliases, active-content safety, and geometry. Eligible namespaced controls live in a trusted sibling SVG layer inside the same ShadowRoot so validated Mermaid CSS cannot select them. Preview failure never removes Raw.
+- `sessions_changed` refreshes only current labels/list metadata. Graph authority refreshes on activation/reopen, explicit Refresh, browser focus, and `online`; there is no DAG polling or DAG-specific WebSocket.
 
 ### ToolCall field normalization
 Pi stores toolCall blocks as `{type:"toolCall", id, name, arguments}` but `ToolCallContent` uses `{toolCallId, toolName, input}`. `normalizeToolCalls()` in `lib/normalize.ts` handles this — called from `session-reader.ts` for file loads and `session-view-projection.ts` for projected live effects.

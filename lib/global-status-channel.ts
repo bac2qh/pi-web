@@ -1,10 +1,12 @@
 import {
   getRunningRpcSessionProjection,
-  getSessionListRefreshGeneration,
   subscribeRunningSessions,
-  subscribeSessionListRefresh,
   type RunningSessionIdsView,
 } from "./rpc-manager";
+import {
+  getSessionListRefreshGeneration,
+  subscribeSessionListRefresh,
+} from "./session-list-refresh";
 import {
   GLOBAL_STATUS_CHANNEL,
   GLOBAL_STATUS_PROTOCOL,

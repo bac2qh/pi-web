@@ -93,10 +93,6 @@ export function fileViewerExpansionAfterToggle(
   };
 }
 
-export function fileViewerExpansionAfterFinalClose(): FileViewerExpansionState {
-  return INITIAL_FILE_VIEWER_EXPANSION;
-}
-
 export function isSameFileOpenContext(
   captured: FileOpenContextIdentity,
   current: FileOpenContextIdentity,

@@ -92,7 +92,7 @@ test("shared sidebar metadata stays operation-only, optimistic, and separate fro
   assert.doesNotMatch(routeSource, /pinnedSessionIds\s*[:=]\s*body|explicitlyHiddenSessionIds\s*[:=]\s*body/);
 });
 
-test("the shared row exposes unread, rename, keyboard, touch, pin, hide, restore, and no permanent deletion", async () => {
+test("the shared row exposes copy ID, unread, rename, keyboard, touch, pin, hide, restore, and no permanent deletion", async () => {
   const [sidebarSource, cssSource, appShellSource] = await Promise.all([
     readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
@@ -105,6 +105,10 @@ test("the shared row exposes unread, rename, keyboard, touch, pin, hide, restore
   assert.match(selectionControl, /tabIndex=\{0\}/);
   assert.match(selectionControl, /event\.key === "Enter" \|\| event\.key === " "/);
   assert.match(sidebarSource, /className="session-row-select"/);
+  assert.match(sidebarSource, /copyText\(session\.id\)/);
+  assert.match(sidebarSource, /className="session-row-action session-row-copy-action"/);
+  assert.match(sidebarSource, /Session ID could not be copied\./);
+  assert.match(sidebarSource, /event\.stopPropagation\(\)/);
   assert.match(sidebarSource, /<SessionUnreadAction/);
   assert.match(sidebarSource, /title="Rename"/);
   assert.match(sidebarSource, /aria-pressed=\{isPinned\}/);
@@ -112,7 +116,7 @@ test("the shared row exposes unread, rename, keyboard, touch, pin, hide, restore
   assert.match(sidebarSource, /hiddenKind === "explicit" \? `Restore/);
   assert.match(sidebarSource, /Hidden by parent/);
   assert.match(sidebarSource, /onHideChange=\{hiddenSessionKinds\.get\(node\.session\.id\) === "inherited"/);
-  assert.match(sidebarSource, /const rowActionCount = onHideChange \? 3 : 2/);
+  assert.match(sidebarSource, /const rowActionCount = onHideChange \? 4 : 3/);
   assert.match(sidebarSource, /const metadataActionPaddingRight = 25 \+ \(rowActionCount - 1\) \* 29/);
   assert.match(sidebarSource, /paddingRight: metadataActionPaddingRight/);
   assert.doesNotMatch(sidebarSource, /\bDelete\b/);
@@ -125,6 +129,7 @@ test("the shared row exposes unread, rename, keyboard, touch, pin, hide, restore
   assert.match(cssSource, /\.session-row:focus-within \.session-row-actions/);
   assert.match(cssSource, /any-pointer: coarse/);
   assert.match(cssSource, /\.session-row-compact-action:focus/);
+  assert.match(cssSource, /\.session-row-copy-status/);
 });
 
 test("the unread row action reports state, stops navigation, and synchronizes duplicate presentations", () => {

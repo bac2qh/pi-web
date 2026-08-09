@@ -576,7 +576,7 @@ test("authored local Markdown links preserve plain and modifier-click behavior",
   }
 });
 
-test("viewer source preserves all variants and AppShell mounts only the active tab while CSS close keeps it mounted", async () => {
+test("viewer source preserves all variants and AppShell mounts only the selected file while CSS close keeps the right panel mounted", async () => {
   const [viewer, shell] = await Promise.all([
     readFile(new URL("./FileViewer.tsx", import.meta.url), "utf8"),
     readFile(new URL("./AppShell.tsx", import.meta.url), "utf8"),
@@ -584,9 +584,10 @@ test("viewer source preserves all variants and AppShell mounts only the active t
   for (const truth of ["isImagePath", "isAudioPath", "isDocumentPreviewPath", "MarkdownFilePreview", "SyntaxHighlighter", "download", "preview", "DOCX_PREVIEW_MAX_BYTES", "sandbox"]) assert.match(viewer, new RegExp(truth));
   assert.doesNotMatch(viewer, /EventSource|type:\s*["']watch["']/);
   assert.equal((viewer.match(/useFileWatch\(/g) ?? []).length, 4, "one common hook call in each mutually exclusive mounted variant");
-  assert.match(shell, /activeFileTab\?\.filePath\s*\?\s*\(\s*<FileViewer/);
+  assert.match(shell, /fileTabs\.map\(\(fileTab, index\)[\s\S]*?const selected = activeRightPanelTabId === fileTab\.id/);
+  assert.match(shell, /\{selected && \(\s*<FileViewer/);
   assert.match(shell, /right-panel-closed/);
-  assert.doesNotMatch(shell, /rightPanelOpen\s*&&\s*activeFileTab\?\.filePath/);
+  assert.doesNotMatch(shell, /rightPanelOpen\s*&&[\s\S]{0,80}<FileViewer/);
 });
 
 test("viewer content uses the independent scale while chrome and opaque renderers keep their owners", async () => {

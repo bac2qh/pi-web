@@ -39,3 +39,7 @@
 ## 2026-08-08
 
 - Updated hosted-session, custom-server, and removal-policy memory after adding strict wrapper-owned `session_shutdown` for published release paths while preserving bare unpublished rollback, the independent ten-second network deadline, and Hide/Restore as the only web removal workflow.
+
+## 2026-08-09
+
+- Added session-dependency-graph memory after implementing the machine-wide exact-ID graph, reversible server-sequenced completion history, strict private persistence/concurrency contract, non-enforcement boundary, permanent retained DAG tab, and isolated Mermaid/control rendering.

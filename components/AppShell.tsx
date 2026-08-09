@@ -7,7 +7,14 @@ import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
 import { FileViewer } from "./FileViewer";
-import { TabBar, type Tab } from "./TabBar";
+import {
+  TabBar,
+  rightPanelTabDomId,
+  rightPanelTabPanelDomId,
+  type DagTab,
+  type FileTab,
+} from "./TabBar";
+import { SessionDagPanel } from "./SessionDagPanel";
 import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
@@ -21,7 +28,6 @@ import { getFileName } from "@/lib/file-paths";
 import type { FileOpenOptions } from "@/lib/file-links";
 import {
   INITIAL_FILE_VIEWER_EXPANSION,
-  fileViewerExpansionAfterFinalClose,
   fileViewerExpansionAfterOpen,
   fileViewerExpansionAfterToggle,
   fileViewerExpansionAfterViewportChange,
@@ -30,6 +36,10 @@ import {
   shouldConfirmAutomaticFileOpen,
 } from "@/lib/file-viewer-layout";
 import { buildAtMentionText, buildFileAtMentionsText } from "@/lib/file-fuzzy";
+import {
+  RIGHT_PANEL_DAG_TAB_ID,
+  activeRightPanelTabAfterFileClose,
+} from "@/lib/right-panel-tabs";
 import type { SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo } from "@/lib/pi-types";
@@ -38,6 +48,8 @@ import type { SessionViewBinding } from "@/lib/session-view-transport";
 
 type SessionCopyField = "file" | "id";
 type TopPanel = "branches" | "system" | "session" | "display";
+
+const DAG_TAB: DagTab = { kind: "dag", id: RIGHT_PANEL_DAG_TAB_ID, label: "DAG" };
 
 interface PendingAutomaticFileOpen {
   filePath: string;
@@ -158,9 +170,10 @@ export function AppShell() {
     return () => ro.disconnect();
   }, [activeTopPanel]);
 
-  // Right panel — file tabs only
-  const [fileTabs, setFileTabs] = useState<Tab[]>([]);
-  const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
+  // Right panel — one permanent DAG tab followed by closable file tabs.
+  const [fileTabs, setFileTabs] = useState<FileTab[]>([]);
+  const [activeRightPanelTabId, setActiveRightPanelTabId] = useState<string>(RIGHT_PANEL_DAG_TAB_ID);
+  const [dagActivated, setDagActivated] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const rightPanelRef = useRef<HTMLDivElement | null>(null);
   const [fileViewerExpansion, setFileViewerExpansion] = useState(INITIAL_FILE_VIEWER_EXPANSION);
@@ -183,6 +196,25 @@ export function AppShell() {
       rightPanelOpen,
     ));
   }, [isNarrowFileViewerViewport, rightPanelOpen]);
+
+  useEffect(() => {
+    const panel = rightPanelRef.current;
+    if (!rightPanelOpen || !panel) return;
+    const selectedTab = panel.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]');
+    if (!selectedTab) return;
+    const activeElement = panel.ownerDocument.activeElement;
+    const panelId = selectedTab.getAttribute("aria-controls");
+    const selectedPanel = panelId ? panel.ownerDocument.getElementById(panelId) : null;
+    const focusRemainsVisible = activeElement === selectedTab
+      || Boolean(activeElement && selectedPanel?.contains(activeElement))
+      || Boolean(activeElement instanceof Element && activeElement.closest(".file-viewer-expand-button"));
+    const focusIsInsidePanel = Boolean(activeElement && panel.contains(activeElement));
+    const panelReplacesOtherContent = fileViewerExpandedActive || isMobile;
+    if (focusRemainsVisible || (!focusIsInsidePanel && !panelReplacesOtherContent)) return;
+
+    const frame = requestAnimationFrame(() => selectedTab.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [activeRightPanelTabId, fileViewerExpandedActive, isMobile, rightPanelOpen]);
 
   // Same @mention format as the chat input's @ autocomplete, so the agent's
   // read tool resolves it the same way (it strips the @ prefix).
@@ -383,11 +415,11 @@ export function AppShell() {
     const tabId = `file:${filePath}`;
     setFileTabs((prev) => {
       const existing = prev.find((t) => t.id === tabId);
-      if (!existing) return [...prev, { id: tabId, label: fileName, filePath, sourceSessionId }];
+      if (!existing) return [...prev, { kind: "file", id: tabId, label: fileName, filePath, sourceSessionId }];
       if (!sourceSessionId || existing.sourceSessionId === sourceSessionId) return prev;
       return prev.map((t) => t.id === tabId ? { ...t, sourceSessionId } : t);
     });
-    setActiveFileTabId(tabId);
+    setActiveRightPanelTabId(tabId);
     setRightPanelOpen(true);
     setFileViewerExpansion((current) => fileViewerExpansionAfterOpen(
       current,
@@ -449,18 +481,28 @@ export function AppShell() {
     pendingAutomaticFileOpen,
   ]);
 
+  const handleSelectRightPanelTab = useCallback((tabId: string) => {
+    setActiveRightPanelTabId(tabId);
+    if (tabId === RIGHT_PANEL_DAG_TAB_ID) setDagActivated(true);
+  }, []);
+
   const handleCloseFileTab = useCallback((tabId: string) => {
-    const remaining = fileTabs.filter((t) => t.id !== tabId);
-    setFileTabs(remaining);
-    if (remaining.length === 0) {
-      setRightPanelOpen(false);
-      setFileViewerExpansion(fileViewerExpansionAfterFinalClose());
+    const nextActiveTabId = activeRightPanelTabAfterFileClose(
+      fileTabs.map((tab) => tab.id),
+      activeRightPanelTabId,
+      tabId,
+    );
+    setFileTabs((current) => current.filter((tab) => tab.id !== tabId));
+    setActiveRightPanelTabId(nextActiveTabId);
+    if (nextActiveTabId === RIGHT_PANEL_DAG_TAB_ID) setDagActivated(true);
+  }, [activeRightPanelTabId, fileTabs]);
+
+  const handleRightPanelToggle = useCallback(() => {
+    if (!rightPanelOpen && activeRightPanelTabId === RIGHT_PANEL_DAG_TAB_ID) {
+      setDagActivated(true);
     }
-    setActiveFileTabId((cur) => {
-      if (cur !== tabId) return cur;
-      return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
-    });
-  }, [fileTabs]);
+    setRightPanelOpen((open) => !open);
+  }, [activeRightPanelTabId, rightPanelOpen]);
 
   const handleViewFullHistory = useCallback(() => {
     if (!selectedSession) return;
@@ -477,7 +519,8 @@ export function AppShell() {
   // While restoring initial session from URL, don't show the placeholder
   const showPlaceholder = initialSessionRestored && !showChat;
 
-  const activeFileTab = fileTabs.find((t) => t.id === activeFileTabId) ?? null;
+  const rightPanelTabs = [DAG_TAB, ...fileTabs];
+  const dagPanelActive = rightPanelOpen && activeRightPanelTabId === RIGHT_PANEL_DAG_TAB_ID;
 
   const sidebarContent = (
     <>
@@ -1203,10 +1246,12 @@ export function AppShell() {
         </div>
       </div>
 
-      {/* Right panel: file viewer — always mounted, width animated via CSS */}
+      {/* Right panel — always mounted; DAG mounts lazily and then remains mounted. */}
       <div
         ref={rightPanelRef}
         className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}${fileViewerExpandedActive ? " right-panel-expanded" : ""}`}
+        aria-hidden={!rightPanelOpen}
+        inert={!rightPanelOpen}
         style={{
           display: "flex",
           flexDirection: "column",
@@ -1214,17 +1259,16 @@ export function AppShell() {
           background: "var(--bg)",
         }}
       >
-        {/* Right panel tab bar */}
         <div style={{ display: "flex", alignItems: "center", flexShrink: 0, background: "var(--bg-panel)", borderBottom: "1px solid var(--border)", height: 36 }}>
           <div style={{ flex: 1, overflow: "hidden" }}>
             <TabBar
-              tabs={fileTabs}
-              activeTabId={activeFileTabId ?? ""}
-              onSelectTab={setActiveFileTabId}
+              tabs={rightPanelTabs}
+              activeTabId={activeRightPanelTabId}
+              onSelectTab={handleSelectRightPanelTab}
               onCloseTab={handleCloseFileTab}
             />
           </div>
-          {rightPanelOpen && activeFileTab && (
+          {rightPanelOpen && (
             <button
               type="button"
               className="file-viewer-expand-button"
@@ -1232,8 +1276,8 @@ export function AppShell() {
                 current,
                 isNarrowFileViewerViewport,
               ))}
-              title={fileViewerExpandedActive ? "Restore file viewer" : "Expand file viewer"}
-              aria-label={fileViewerExpandedActive ? "Restore file viewer" : "Expand file viewer"}
+              title={fileViewerExpandedActive ? "Restore right panel" : "Expand right panel"}
+              aria-label={fileViewerExpandedActive ? "Restore right panel" : "Expand right panel"}
             >
               {fileViewerExpandedActive ? (
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -1250,24 +1294,42 @@ export function AppShell() {
           )}
         </div>
 
-        {/* File content */}
-        <div style={{ flex: 1, overflow: "hidden" }}>
-          {activeFileTab?.filePath ? (
-            <FileViewer
-              filePath={activeFileTab.filePath}
-              cwd={activeCwd ?? undefined}
-              sourceSessionId={activeFileTab.sourceSessionId}
-              onOpenFile={(filePath) => handleOpenFile(
-                filePath,
-                getFileName(filePath),
-                activeFileTab.sourceSessionId,
-              )}
-            />
-          ) : (
-            <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: scaledMenuFontSize(12) }}>
-              No file open
-            </div>
-          )}
+        <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
+          <div
+            role="tabpanel"
+            id={rightPanelTabPanelDomId(0)}
+            aria-labelledby={rightPanelTabDomId(0)}
+            hidden={activeRightPanelTabId !== RIGHT_PANEL_DAG_TAB_ID}
+            style={{ height: "100%", overflow: "hidden" }}
+          >
+            {dagActivated && <SessionDagPanel active={dagPanelActive} />}
+          </div>
+          {fileTabs.map((fileTab, index) => {
+            const selected = activeRightPanelTabId === fileTab.id;
+            return (
+              <div
+                key={fileTab.id}
+                role="tabpanel"
+                id={rightPanelTabPanelDomId(index + 1)}
+                aria-labelledby={rightPanelTabDomId(index + 1)}
+                hidden={!selected}
+                style={{ height: "100%", overflow: "hidden" }}
+              >
+                {selected && (
+                  <FileViewer
+                    filePath={fileTab.filePath}
+                    cwd={activeCwd ?? undefined}
+                    sourceSessionId={fileTab.sourceSessionId}
+                    onOpenFile={(filePath) => handleOpenFile(
+                      filePath,
+                      getFileName(filePath),
+                      fileTab.sourceSessionId,
+                    )}
+                  />
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -1278,12 +1340,12 @@ export function AppShell() {
         onDismiss={dismissAutomaticFileOpen}
       />
     )}
-    {/* Normal file panel toggle — suppressed while the viewer is expanded */}
+    {/* Normal right-panel toggle — suppressed while the panel is expanded. */}
     <button
       className={`file-panel-toggle${fileViewerExpandedActive ? " file-panel-toggle-hidden" : ""}`}
-      onClick={() => setRightPanelOpen((v) => !v)}
-      title={rightPanelOpen ? "Hide file panel" : "Show file panel"}
-      aria-label={rightPanelOpen ? "Hide file panel" : "Show file panel"}
+      onClick={handleRightPanelToggle}
+      title={rightPanelOpen ? "Hide right panel" : "Show right panel"}
+      aria-label={rightPanelOpen ? "Hide right panel" : "Show right panel"}
       style={{
         position: "fixed", top: 0, right: 0, zIndex: 300,
         display: "flex", alignItems: "center", justifyContent: "center",

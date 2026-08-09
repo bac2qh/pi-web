@@ -4,9 +4,9 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   resolveSessionPath,
   resolveSessionIdByPath,
-  invalidateSessionListCache,
   buildSessionContext,
 } from "@/lib/session-reader";
+import { notifySessionListRefresh } from "@/lib/session-list-refresh";
 
 // BranchNavigator still traverses recursively, so keep the response tree shallow.
 const MAX_PROJECTED_TREE_DEPTH = 200;
@@ -182,7 +182,7 @@ export async function PATCH(
     }
     const sm = SessionManager.open(filePath);
     sm.appendSessionInfo(name.trim());
-    invalidateSessionListCache();
+    notifySessionListRefresh();
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });

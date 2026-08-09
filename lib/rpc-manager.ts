@@ -5,6 +5,7 @@ import { lstat, open } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 import { invalidateModelsCache } from "./models-cache";
 import { cacheSessionPath, invalidateSessionListCache } from "./session-reader";
+import { notifySessionListRefresh } from "./session-list-refresh";
 import { cloneSessionBranch } from "./session-clone";
 import {
   invalidateHostedImplementationCapability,
@@ -1594,7 +1595,7 @@ export class AgentSessionWrapper {
         const name = (command.name as string | undefined)?.trim();
         if (!name) throw new Error("Session name cannot be empty");
         this.inner.setSessionName(name);
-        invalidateSessionListCache();
+        notifySessionListRefresh();
         return null;
       }
 
@@ -2214,8 +2215,6 @@ declare global {
   var __piRunningSessionIds: Set<string> | undefined;
   var __piRunningSessionPublishers: Map<string, object> | undefined;
   var __piRunningPublisherEpochs: WeakMap<object, object> | undefined;
-  var __piSessionListRefreshListeners: Set<(generation: number) => void> | undefined;
-  var __piSessionListRefreshGeneration: number | undefined;
 }
 
 function closeRpcRuntimeGeneration(generation: RpcRuntimeGeneration): Promise<void> {
@@ -2379,11 +2378,6 @@ function getRunningListeners(): Set<(ids: RunningSessionIdsView) => void> {
   return globalThis.__piRunningListeners;
 }
 
-function getSessionListRefreshListeners(): Set<(generation: number) => void> {
-  if (!globalThis.__piSessionListRefreshListeners) globalThis.__piSessionListRefreshListeners = new Set();
-  return globalThis.__piSessionListRefreshListeners;
-}
-
 /** Subscribe to running-session-id changes. Returns an unsubscribe function. */
 export function subscribeRunningSessions(listener: (ids: RunningSessionIdsView) => void): () => void {
   const listeners = getRunningListeners();
@@ -2391,27 +2385,11 @@ export function subscribeRunningSessions(listener: (ids: RunningSessionIdsView) 
   return () => { listeners.delete(listener); };
 }
 
-/** Subscribe to a request to reload the ordinary native session list. */
-export function subscribeSessionListRefresh(listener: (generation: number) => void): () => void {
-  const listeners = getSessionListRefreshListeners();
-  listeners.add(listener);
-  return () => { listeners.delete(listener); };
-}
-
-/** Current replay token for initial and reconnected SSE consumers. */
-export function getSessionListRefreshGeneration(): number {
-  return globalThis.__piSessionListRefreshGeneration ?? 0;
-}
-
-/** Invalidate server discovery and prompt connected browsers to reload it. */
-export function notifySessionListRefresh(): void {
-  invalidateSessionListCache();
-  const generation = getSessionListRefreshGeneration() + 1;
-  globalThis.__piSessionListRefreshGeneration = generation;
-  for (const listener of getSessionListRefreshListeners()) {
-    try { listener(generation); } catch { /* ignore listener errors */ }
-  }
-}
+export {
+  getSessionListRefreshGeneration,
+  notifySessionListRefresh,
+  subscribeSessionListRefresh,
+} from "./session-list-refresh";
 
 /** Publish one wrapper's current running state into the HMR-stable ID-only projection. */
 export function publishRunningSessionState(

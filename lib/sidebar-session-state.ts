@@ -450,6 +450,10 @@ export function deriveSidebarSessionLists(
   };
 }
 
+export function getSessionDisplayTitle(session: SessionInfo): string {
+  return session.name || session.firstMessage.slice(0, 50) || session.id.slice(0, 12);
+}
+
 export function getGlobalSessionPrefix(
   session: SessionInfo,
   projectPrefixes: ReadonlyMap<string, string>,

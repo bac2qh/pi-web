@@ -1,5 +1,6 @@
 "use client";
 
+import { copyText } from "@/lib/clipboard";
 import { scaledMenuFontSize } from "@/lib/display-preferences";
 import {
   acceptAuthoritativeSidebarState,
@@ -7,6 +8,7 @@ import {
   createDefaultSidebarState,
   deriveSidebarSessionLists,
   getGlobalSessionPrefix,
+  getSessionDisplayTitle,
   parseSidebarState,
   replaySidebarStateOperations,
   type HiddenSessionKind,
@@ -2181,10 +2183,12 @@ function SessionItem({
   const [hovered, setHovered] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
+  const [copyFeedback, setCopyFeedback] = useState<"copied" | "failed" | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const copyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const title = session.name || session.firstMessage.slice(0, 50) || session.id.slice(0, 12);
-  const rowActionCount = onHideChange ? 3 : 2;
+  const title = getSessionDisplayTitle(session);
+  const rowActionCount = onHideChange ? 4 : 3;
   const metadataActionPaddingRight = 25 + (rowActionCount - 1) * 29;
 
   const startRename = useCallback((e: React.MouseEvent) => {
@@ -2219,6 +2223,23 @@ function SessionItem({
     e.stopPropagation();
     onHideChange?.();
   }, [onHideChange]);
+
+  const handleCopyIdClick = useCallback((event: React.MouseEvent) => {
+    event.stopPropagation();
+    void copyText(session.id).then(() => {
+      if (copyFeedbackTimerRef.current) clearTimeout(copyFeedbackTimerRef.current);
+      setCopyFeedback("copied");
+      copyFeedbackTimerRef.current = setTimeout(() => setCopyFeedback(null), 1_400);
+    }, () => {
+      if (copyFeedbackTimerRef.current) clearTimeout(copyFeedbackTimerRef.current);
+      setCopyFeedback("failed");
+      copyFeedbackTimerRef.current = setTimeout(() => setCopyFeedback(null), 2_400);
+    });
+  }, [session.id]);
+
+  useEffect(() => () => {
+    if (copyFeedbackTimerRef.current) clearTimeout(copyFeedbackTimerRef.current);
+  }, []);
 
   // Fixed-height outer wrapper — content swaps in place so the list never reflows
   const ITEM_HEIGHT = 54;
@@ -2404,8 +2425,41 @@ function SessionItem({
             </svg>
           </button>
 
-          {/* Unread, rename, and Hide/Restore remain available on focus and touch. */}
+          {/* Copy ID, unread, rename, and Hide/Restore remain available on focus and touch. */}
           <div className="session-row-actions" style={{ position: "absolute", right: hasChildren ? 60 : 34, bottom: 2, display: "flex", gap: 3, padding: 2, background: "var(--bg-hover)", borderRadius: 6, zIndex: 2 }}>
+              <button
+                type="button"
+                onClick={handleCopyIdClick}
+                title={copyFeedback === "copied" ? "Copied" : copyFeedback === "failed" ? "Copy failed" : "Copy session ID"}
+                aria-label={copyFeedback === "copied"
+                  ? `Session ID copied for ${title}`
+                  : copyFeedback === "failed"
+                    ? `Session ID could not be copied for ${title}`
+                    : `Copy session ID for ${title}`}
+                className="session-row-action session-row-copy-action"
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  width: 26, height: 24, padding: 0,
+                  background: "var(--bg-hover)", border: "1px solid var(--border)",
+                  borderRadius: 7,
+                  color: copyFeedback === "copied" ? "var(--accent)" : copyFeedback === "failed" ? "#dc2626" : "var(--text-muted)",
+                  cursor: "pointer", flexShrink: 0,
+                }}
+              >
+                {copyFeedback === "copied" ? (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="m5 12 4 4L19 6" />
+                  </svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="11" height="11" rx="2" />
+                    <path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3" />
+                  </svg>
+                )}
+              </button>
+              <span className="session-row-copy-status" role="status" aria-live="polite">
+                {copyFeedback === "copied" ? "Session ID copied." : copyFeedback === "failed" ? "Session ID could not be copied." : ""}
+              </span>
               <SessionUnreadAction
                 title={title}
                 isUnread={isUnread}

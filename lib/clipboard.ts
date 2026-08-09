@@ -2,17 +2,22 @@ export function copyText(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
     return navigator.clipboard.writeText(text);
   }
+
+  let textarea: HTMLTextAreaElement | null = null;
   try {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    document.body.removeChild(ta);
+    textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    if (document.execCommand("copy") === false) {
+      throw new Error("Clipboard copy was rejected");
+    }
     return Promise.resolve();
-  } catch {
-    return Promise.reject();
+  } catch (error) {
+    return Promise.reject(error);
+  } finally {
+    textarea?.remove();
   }
 }
