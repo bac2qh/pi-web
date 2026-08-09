@@ -139,3 +139,15 @@ Plan: `.agents/plans/2026-08-08-session-dag-view.md`
 **Uncertainty / gaps:** Neither reviewer independently reran Chrome; they inspected the retained machine result and tracked report. No platform screen-reader pass exists. The workflow result object itself failed serialization after child completion, so the recoverable child run IDs—not the aggregate state—are authoritative for review output.
 
 **Recommended use:** Explicitly stage only intended paths, verify the cached merge result (including tests and the lint dependency fix), create the merge commit, append the mandatory commit-naming final summary, and then perform guarded fast-forward closeout if local `main` remains the captured ancestor.
+
+## Implementation Summary
+
+**Plan section:** Entire approved session-DAG plan and Validation Contract VC-001 through VC-006, plus the user's explicit decision that DAG and files share one right-panel display object and authorization to integrate the resizable-panels implementation deliberately.
+
+**Work and outcome:** Merge commit `6a7d5fff93bd8c209c16637ff8b96943163d9a9b` combines the complete session DAG with local-main resizable panels without dropping either history. One shared, content-agnostic right-panel container now owns width, persistence, responsive clamping, expansion, collapse, and the permanent DAG/file tab set. DAG mount/drafts and final-file fallback remain stable across resize and layout transitions. Integrated source contracts, maintained architecture, memory, browser evidence, and narrow ignores for transient agent runtime state are included; raw review artifacts are absent.
+
+**Validation / evidence:** After all reviewer fixes were staged with no working-tree delta, `NODE_ENV=test node --test components/*.test.mjs lib/*.test.mjs` passed 827/827, `node_modules/.bin/tsc --noEmit` passed, `npm run lint` passed with no warnings, and cached-tree whitespace, unmerged-entry, conflict-marker, and transient-artifact checks passed. Isolated product-level Chrome/CDP validation passed at 1280, 1000, 999, 641, and 640 CSS pixels with zero console errors and exact width/draft persistence outcomes recorded in `.agents/reports/2026-08-08-session-dag-browser-validation.md`. Fresh reviewers `3af888ed` and `d3781567` found no functional defect and independently reproduced the required command evidence. The merge commit has parents `756b025d3da86ab07e491847b1c644e9b2c8e194` and local-main `03f45cd918584058611e66f1e7cf8a8ef0b747a3`. No production build was run, as required.
+
+**Departures from approved obligations:** None. The review workflow's aggregate-result serialization failure occurred only after both reviewers completed; their retained child outputs were recovered, synthesized, and checkpointed, so review evidence was not lost. The known absence of a platform screen-reader run remains a documented validation limitation, not an unfulfilled plan obligation.
+
+**Implementation commit:** `6a7d5fff93bd8c209c16637ff8b96943163d9a9b` (`merge: integrate resizable right panel with session DAG`).
