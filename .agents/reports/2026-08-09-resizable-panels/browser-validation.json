@@ -1,0 +1,293 @@
+{
+  "version": 2,
+  "method": {
+    "engine": "Chromium headless via Chrome DevTools Protocol",
+    "input": [
+      "trusted mouse",
+      "trusted touch",
+      "trusted keyboard"
+    ],
+    "retainedExecutableHarness": false
+  },
+  "viewportChecks": {
+    "default1440": {
+      "theme": "light",
+      "sidebar": 260,
+      "center": 575,
+      "right": 605,
+      "overflow": false
+    },
+    "at999": {
+      "expanded": true,
+      "right": 999,
+      "handles": 0,
+      "overflow": false
+    },
+    "at641": {
+      "expanded": true,
+      "right": 641,
+      "handles": 0,
+      "overflow": false
+    },
+    "at640": {
+      "expandedFlag": false,
+      "right": 640,
+      "handles": 0,
+      "overflow": false
+    },
+    "at1000": {
+      "sidebar": 237,
+      "center": 320,
+      "right": 443,
+      "handles": 2,
+      "overflow": false
+    },
+    "darkTheme": {
+      "center": 430,
+      "overflow": false
+    }
+  },
+  "interactions": {
+    "pointer": {
+      "sidebar": 360,
+      "right": 505,
+      "center": 575,
+      "cleanup": {
+        "cursor": "",
+        "userSelect": ""
+      },
+      "captureReleased": true,
+      "liveAria": {
+        "sidebar": {
+          "now": 360,
+          "min": 180,
+          "max": 480,
+          "text": "360 pixels",
+          "label": "Resize sidebar",
+          "controls": "session-sidebar",
+          "role": "separator",
+          "orientation": "vertical",
+          "tabIndex": 0
+        },
+        "right": {
+          "now": 505,
+          "min": 300,
+          "max": 760,
+          "text": "505 pixels",
+          "label": "Resize file viewer",
+          "controls": "file-panel",
+          "role": "separator",
+          "orientation": "vertical",
+          "tabIndex": 0
+        }
+      }
+    },
+    "cleanup": {
+      "blur": true,
+      "pointerCancel": true,
+      "lostCapture": true,
+      "conditionalUnmount": true,
+      "hiddenFocusCleared": true,
+      "captureReleased": true,
+      "activeClassCleared": true
+    },
+    "keyboard": {
+      "arrows": true,
+      "shiftedArrow": true,
+      "home": true,
+      "end": true,
+      "enterReset": true,
+      "doubleClickReset": true,
+      "liveAriaAfterReset": {
+        "sidebar": {
+          "now": 260,
+          "min": 180,
+          "max": 480,
+          "text": "260 pixels",
+          "label": "Resize sidebar",
+          "controls": "session-sidebar",
+          "role": "separator",
+          "orientation": "vertical",
+          "tabIndex": 0
+        },
+        "right": {
+          "now": 605,
+          "min": 300,
+          "max": 860,
+          "text": "605 pixels",
+          "label": "Resize file viewer",
+          "controls": "file-panel",
+          "role": "separator",
+          "orientation": "vertical",
+          "tabIndex": 0
+        }
+      }
+    },
+    "pointerBounds": {
+      "fastExitPastContent": true,
+      "sidebarAtMaximum": 480,
+      "rightAtMaximum": 640,
+      "centerReserved": 320,
+      "overflow": false
+    },
+    "activeDragContraction": {
+      "unmovedDragDidNotPersistClamp": true,
+      "cleanup": true,
+      "restored": {
+        "sidebar": 400,
+        "right": 700
+      }
+    },
+    "persistence": {
+      "storedIndependently": true,
+      "contracted": {
+        "sidebar": 251,
+        "center": 320,
+        "right": 429
+      },
+      "restored": {
+        "sidebar": 400,
+        "right": 700
+      },
+      "storagePreserved": true
+    },
+    "resetDefaults": {
+      "at1000": {
+        "sidebar": 260,
+        "right": 420
+      },
+      "at1200": {
+        "sidebar": 260,
+        "right": 504
+      },
+      "storageCleared": true,
+      "absentStorageReload": true
+    },
+    "storageGuards": {
+      "malformedFallback": true,
+      "outOfRangeBounded": true,
+      "temporaryRestorationDoesNotWrite": true
+    },
+    "coarsePointer": {
+      "worked": true,
+      "delta": -30,
+      "cleanup": true
+    }
+  },
+  "lifecycle": {
+    "mountedIdentityPreserved": true,
+    "collapseReopen": {
+      "sidebarPreserved": true,
+      "rightPreserved": true,
+      "hiddenHandlesAbsent": true
+    },
+    "viewer": {
+      "exercised": true,
+      "manualExpandRestore": true,
+      "automaticNarrowExpand": true,
+      "narrowRestoreSuppression": true,
+      "nextOpenClearsSuppression": true,
+      "hiddenSeparatorFocusCleared": true,
+      "mountedIdentity": true,
+      "finalTabClose": true
+    }
+  },
+  "accessibility": {
+    "initial": {
+      "sidebar": {
+        "now": 260,
+        "min": 180,
+        "max": 480,
+        "text": "260 pixels",
+        "label": "Resize sidebar",
+        "controls": "session-sidebar",
+        "role": "separator",
+        "orientation": "vertical",
+        "tabIndex": 0
+      },
+      "right": {
+        "now": 605,
+        "min": 300,
+        "max": 860,
+        "text": "605 pixels",
+        "label": "Resize file viewer",
+        "controls": "file-panel",
+        "role": "separator",
+        "orientation": "vertical",
+        "tabIndex": 0
+      }
+    },
+    "tree": [
+      {
+        "name": "Resize sidebar",
+        "value": 260,
+        "orientation": "vertical",
+        "focusable": true
+      },
+      {
+        "name": "Resize file viewer",
+        "value": 605,
+        "orientation": "vertical",
+        "focusable": true
+      }
+    ],
+    "focus": {
+      "focused": true,
+      "line": "rgba(37, 99, 235, 0.9)",
+      "titleMentionsReset": true
+    }
+  },
+  "validationContract": {
+    "VC-001": {
+      "passed": true,
+      "evidence": [
+        "trusted pointer resize",
+        "fast over-bound exit with capture",
+        "320px center geometry",
+        "blur/cancel/lost-capture/conditional-unmount cleanup",
+        "no document overflow"
+      ],
+      "sourceCrossCheck": "pointermove performs direct CSS/ARIA mutation without React state update"
+    },
+    "VC-002": {
+      "passed": true,
+      "evidence": [
+        "independent reload restoration",
+        "absent/malformed/out-of-range storage",
+        "active-drag viewport contraction",
+        "temporary clamp round trip",
+        "Enter/double-click storage removal",
+        "responsive 42% reset"
+      ]
+    },
+    "VC-003": {
+      "passed": true,
+      "evidence": [
+        "accessibility tree role/name/orientation/focusability",
+        "visible focus line and reset title",
+        "live bounded ARIA after pointer/keyboard",
+        "arrows/Shift/Home/End/reset",
+        "trusted coarse touch pointer"
+      ]
+    },
+    "VC-004": {
+      "passed": true,
+      "evidence": [
+        "1000/999/641/640 geometry",
+        "conditional handles",
+        "collapse/reopen widths",
+        "manual and automatic expansion",
+        "narrow restore suppression and next-open reset",
+        "mounted DOM identity",
+        "final-tab close",
+        "light/dark geometry"
+      ]
+    }
+  },
+  "privacy": {
+    "contentCaptured": false,
+    "identifiersCaptured": false
+  },
+  "completedAt": "2026-08-09T06:12:54.434Z",
+  "result": "passed"
+}
