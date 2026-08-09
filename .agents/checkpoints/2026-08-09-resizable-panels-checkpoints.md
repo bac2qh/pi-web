@@ -97,3 +97,15 @@ Plan: `.agents/plans/2026-08-09-resizable-panels.md`
 **Departures from approved obligations:** None. The browser executable harness was intentionally temporary under the approved no-new-DOM/browser-framework strategy; the sanitized retained report is the browser receipt. Visibility-loss and blocked-storage fallbacks are source-verified, while adjacent cleanup/storage paths were browser-exercised.
 
 **Implementation commit:** Pending.
+
+## Implementation Summary
+
+**Plan section:** Final implementation boundary for Design / Implementation Strategy steps 1–8 and Validation Contract VC-001–VC-005.
+
+**Work and outcome:** The complete resizable-panels implementation, focused/full tests, browser receipt, review handoffs, and durable memory were committed as `3880f7b47193d36b078e2c3292492781e782dbc7`. Both eligible desktop boundaries now resize accessibly and persist independently while the maintained responsive, collapse, expansion, and mounted-tree contracts remain intact.
+
+**Validation / evidence:** Parent final validation before the implementation commit passed 776/776 full Node tests, 16/16 focused panel/file-layout tests, TypeScript, ESLint, and staged/unstaged diff checks. Browser receipt `.agents/reports/2026-08-09-resizable-panels/browser-validation.json` records VC-001–VC-004 behavior; scope and command review satisfy VC-005. Independent final review `be5235dd` found no blocker or major issue and recommended acceptance.
+
+**Departures from approved obligations:** None. No obligation is incomplete, blocked, waived, superseded, or divergent. The non-retained temporary browser harness, source-only visibility-loss/blocked-storage checks, transient inactive-handle ARIA sampling gap, and regex interaction invariants are evidence limitations already disclosed in the handoffs; they do not change the implemented behavior or approved test strategy.
+
+**Implementation commit:** `3880f7b47193d36b078e2c3292492781e782dbc7` (`feat: add accessible resizable application panels`).
