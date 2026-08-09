@@ -103,3 +103,13 @@ Plan: `.agents/plans/2026-08-08-session-dag-view.md`
 **Preserved state:** Local `main` is restored at `03f45cd918584058611e66f1e7cf8a8ef0b747a3`; its unrelated unstaged `.agents/plans/2026-07-21-clone-session.md` change and untracked runtime/subagent/plan files remain untouched. The complete validated DAG implementation and final summary remain committed in the retained task worktree `/Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-08-08-session-dag-view` on branch `2026-08-08-session-dag-view`.
 
 **Safe retry point:** Start from the retained task branch after this recovery entry. Reconcile the resizable-panel and DAG changes in the three named paths through an explicitly authorized integration/fix step, rerun the affected and required validation, commit that result and an updated final summary if needed, then repeat guarded closeout against the then-current captured local `main`.
+
+## Closeout Recovery
+
+**Completed transitions:** At the user's request, closeout was retried from clean task tip `7512d1da83a265c22260f00754ab0d85f2dd6541` against unchanged local `main` `03f45cd918584058611e66f1e7cf8a8ef0b747a3`. Preflight again found no staged or ongoing main Git operation and no overlap with unrelated main-worktree dirt. The normal merge ran under `.agents/scripts/main-branch-lock.sh` and reproduced the same three content conflicts: `.agents/memory/log.md`, `app/globals.css`, and `components/AppShell.tsx`. No conflict was resolved. After verifying `HEAD`, `ORIG_HEAD`, `MERGE_HEAD`, the exact conflict set, and the preserved unrelated-plan diff, the merge was aborted under the mutex. Main HEAD, unstaged binary diff, empty staged diff, untracked path set, merge state, and lock release were verified restored.
+
+**Blocker:** The resizable-panel and DAG edits still require an intentional combined implementation in the three conflicting paths; retrying the unchanged merge cannot select that design safely.
+
+**Preserved state:** Local `main` remains restored at `03f45cd918584058611e66f1e7cf8a8ef0b747a3` with its unrelated tracked and untracked dirt untouched. The validated DAG implementation, final summary, prior recovery evidence, and commit-identity correction remain on retained branch `2026-08-08-session-dag-view` and its retained task worktree.
+
+**Safe retry point:** Reconcile both features on the retained task branch through an explicitly authorized integration/fix step, rerun affected and required validation, commit the integrated result and any required summary update, then retry guarded closeout. Another unchanged merge attempt will reproduce these conflicts.
