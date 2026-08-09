@@ -18,3 +18,7 @@
 - Mounted file views use the same allowed-root-or-session-reference authorization as file GET. Each consumed subscription owns one bounded watcher and path-free connected/change frames; reconnect reauthorizes, and socket/path/view/server teardown releases the watcher.
 - Semantic wrapper idle is 30 minutes. Accepted commands and native/projected activity touch it, heartbeat does not, and active prompt/compaction/streaming/binding/hosted work cannot expire. The server owns one 30-second ping/pong heartbeat and one ten-second natural-drain coordinator before force-releasing only residual Pi-owned resources.
 - Subsequent production-route, live-tip transcript, and stale-running-status corrections preserve this transport boundary. Final user acceptance is practical rather than a claim that the exact combined 30-socket S7 matrix was reconstructed; consult the S7 report/checkpoint for accepted departures.
+
+## 2026-08-08
+
+- Server shutdown now starts published `AgentSession` semantic cleanup at the existing gateway runtime-owner boundary and observes its shared promise. The original absolute ten-second socket/connection deadline remains independent: natural drain and residual Pi-owned force complete on that clock before server close strictly awaits extension `session_shutdown` handlers, final gateway cleanup, and public Next cleanup. A nonsettling handler may therefore keep semantic close pending after network resources settle, but it cannot delay or reset network force.

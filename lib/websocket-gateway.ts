@@ -49,8 +49,9 @@ export type PiWebTransportGatewayV1 = {
   ): () => boolean;
   registerRuntimeOwner?(
     ownerClass: "rpc",
-    ownerClose: (reason: PiWebOwnerCloseReason) => void,
+    ownerClose: (reason: PiWebOwnerCloseReason) => void | Promise<void>,
   ): { token: PiWebRuntimeOwnerToken; unregister(): boolean };
+  waitForRuntimeOwnerCleanup?(): Promise<void>;
   issueTicket(channel: string, ticketContext?: unknown): { ticket: string; expiresAt: number };
   consumeTicket(ticket: string): {
     handler: PiWebTransportChannelHandler;
@@ -119,13 +120,14 @@ export function getWebSocketGateway(): PiWebTransportGatewayV1 {
 }
 
 export function requireOwnerLifecycleGateway(gateway: PiWebTransportGatewayV1): PiWebTransportGatewayV1 & Required<Pick<PiWebTransportGatewayV1,
-  "registerRuntimeOwner" | "beginShutdown" | "isAcceptingOwners"
+  "registerRuntimeOwner" | "waitForRuntimeOwnerCleanup" | "beginShutdown" | "isAcceptingOwners"
 >> {
   if (gateway.ownerLifecycleVersion !== 1 || typeof gateway.registerRuntimeOwner !== "function"
+    || typeof gateway.waitForRuntimeOwnerCleanup !== "function"
     || typeof gateway.beginShutdown !== "function" || typeof gateway.isAcceptingOwners !== "function") {
     throw new PiWebTransportGatewayAccessError("gateway_version_mismatch");
   }
   return gateway as PiWebTransportGatewayV1 & Required<Pick<PiWebTransportGatewayV1,
-    "registerRuntimeOwner" | "beginShutdown" | "isAcceptingOwners"
+    "registerRuntimeOwner" | "waitForRuntimeOwnerCleanup" | "beginShutdown" | "isAcceptingOwners"
   >>;
 }

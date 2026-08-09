@@ -35,3 +35,7 @@
 - Added sidebar-unread memory after extending the existing browser-local blue dot with a shared manual Mark unread/read action, preserving explicit-open and running transitions while keeping unread outside shared sidebar metadata and native session state.
 - Updated dependency-security memory after adopting the exact local `bac2qh/pi` coding-agent artifact, pinning reproducible build/model inputs and exact `0.84.0` companions, preserving the compatibility import key, and recording the local-only release and credential-cache boundaries.
 - Added OpenAI Fast indicator memory after introducing the authenticated `@benvargas/pi-openai-fast@1.1.0` observer, transition-driven wrapper refresh, reserved host status transport, and exact-watermarked browser model/status convergence.
+
+## 2026-08-08
+
+- Updated hosted-session, custom-server, and removal-policy memory after adding strict wrapper-owned `session_shutdown` for published release paths while preserving bare unpublished rollback, the independent ten-second network deadline, and Hide/Restore as the only web removal workflow.

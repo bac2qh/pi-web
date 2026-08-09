@@ -423,6 +423,7 @@ export class AgentSessionWrapper {
   private extensionsBound = false;
   private extensionBindingPromise: Promise<void> | null = null;
   private extensionBindingError: unknown = null;
+  private extensionBindingFailureReported = false;
   private forceEmptySystemPrompt = false;
   private unsubscribe: (() => void) | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -435,6 +436,8 @@ export class AgentSessionWrapper {
   private hostedKickoffLifecycle: HostedImplementationLifecycle | null = null;
   private nativeDisposed = false;
   private destroying = false;
+  private closing = false;
+  private shutdownPromise: Promise<void> | null = null;
   private _alive = true;
   private ensuredSessionTransportTarget: EnsuredSessionTransportTarget | null = null;
   private readonly projectedHub: ProjectedSessionEventHub;
@@ -473,16 +476,18 @@ export class AgentSessionWrapper {
   }
 
   isAlive(): boolean {
-    return this._alive && this.runtimeGenerationGuard();
+    return !this.closing && this._alive && this.runtimeGenerationGuard();
   }
 
   bindRuntimeGeneration(guard: () => boolean): void {
-    if (!this._alive || typeof guard !== "function" || !guard()) throw new Error("rpc_runtime_generation_closed");
+    if (this.closing || !this._alive || typeof guard !== "function" || !guard()) {
+      throw new Error("rpc_runtime_generation_closed");
+    }
     this.runtimeGenerationGuard = guard;
   }
 
   private runtimeIsCurrent(): boolean {
-    return this._alive && this.runtimeGenerationGuard();
+    return !this.closing && this._alive && this.runtimeGenerationGuard();
   }
 
   private reportIdle(category: RpcSemanticIdleCategory | "deferred_active" | "disposed"): void {
@@ -504,7 +509,7 @@ export class AgentSessionWrapper {
     const exposedSessionFile = this.sessionFile
       ? normalizedExistingSessionPath(this.sessionFile)
       : null;
-    if (!this._alive || !sessionId || managerSessionId !== sessionId
+    if (!this.runtimeIsCurrent() || !sessionId || managerSessionId !== sessionId
       || !sessionFile || !cwd
       || (this.sessionFile && exposedSessionFile !== sessionFile)) {
       throw new Error("rpc_ensured_session_identity_unavailable");
@@ -518,7 +523,7 @@ export class AgentSessionWrapper {
 
   getEnsuredSessionTransportTarget(): EnsuredSessionTransportTarget | null {
     const target = this.ensuredSessionTransportTarget;
-    if (!target || !this._alive) return null;
+    if (!target || !this.runtimeIsCurrent()) return null;
     try {
       const manager = this.inner.sessionManager;
       const exposedSessionFile = this.sessionFile
@@ -549,6 +554,7 @@ export class AgentSessionWrapper {
   }
 
   start(): void {
+    if (!this.runtimeIsCurrent()) throw new Error("rpc_runtime_generation_closed");
     const startupAuthority = this.captureRunningPublisherAuthority();
     this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
       if (!this.runtimeIsCurrent()) return;
@@ -601,10 +607,18 @@ export class AgentSessionWrapper {
   }
 
   beginExtensionBinding(options: ExtensionBindingOptions = {}): void {
-    void this.ensureExtensionsBound(options).catch((err) => {
-      if (!this.runtimeIsCurrent()) return;
-      console.error(`[pi-web] extension_binding stage=failed errorClass=${rpcPublicErrorClass(err)}`);
+    if (!this.runtimeIsCurrent()) return;
+    void this.ensureExtensionsBound(options).catch((error) => {
+      if (this._alive) this.reportExtensionBindingFailure(error);
     });
+  }
+
+  private reportExtensionBindingFailure(error: unknown): void {
+    if (this.extensionBindingFailureReported) return;
+    this.extensionBindingFailureReported = true;
+    try {
+      console.error(`[pi-web] extension_binding stage=failed errorClass=${rpcPublicErrorClass(error)}`);
+    } catch { /* diagnostics are isolated */ }
   }
 
   private ensureExtensionsBound(options: ExtensionBindingOptions = {}): Promise<void> {
@@ -616,10 +630,20 @@ export class AgentSessionWrapper {
     if (this.extensionBindingPromise) return this.extensionBindingPromise;
 
     this.extensionBindingError = null;
-    this.extensionBindingPromise = (async () => {
+    let resolveBinding: () => void = () => {};
+    let rejectBinding: (reason?: unknown) => void = () => {};
+    const bindingPromise = new Promise<void>((resolve, reject) => {
+      resolveBinding = resolve;
+      rejectBinding = reject;
+    });
+    // Install the joinable promise before native binding can synchronously
+    // reenter generation shutdown.
+    this.extensionBindingPromise = bindingPromise;
+    void (async () => {
       if (!this.runtimeIsCurrent()) return;
       const bindingGuard = this.runtimeGenerationGuard;
-      const bindingIsCurrent = () => this._alive && this.runtimeGenerationGuard === bindingGuard && bindingGuard();
+      const bindingIsCurrent = () => !this.closing && this._alive
+        && this.runtimeGenerationGuard === bindingGuard && bindingGuard();
       const uiContext = this.createExtensionUiContext();
       if (typeof this.inner.bindExtensions === "function") {
         const bindExtensions = this.inner.bindExtensions as (bindings: {
@@ -659,12 +683,12 @@ export class AgentSessionWrapper {
       await this.requestFastModeRefresh();
       if (!bindingIsCurrent()) return;
       console.log("[pi-web] extension_binding stage=dispatched outcome=ok");
-    })().catch((err) => {
-      if (this.runtimeIsCurrent()) this.extensionBindingError = err;
-      throw err;
+    })().then(resolveBinding, (error) => {
+      if (this.runtimeIsCurrent()) this.extensionBindingError = error;
+      rejectBinding(error);
     });
 
-    return this.extensionBindingPromise;
+    return bindingPromise;
   }
 
   private async waitForExtensionsBound(): Promise<void> {
@@ -1239,12 +1263,13 @@ export class AgentSessionWrapper {
         return;
       }
       this.reportIdle("disposed");
-      this.destroy();
+      void this.shutdown().catch(() => {});
     }, delay);
     this.idleTimer?.unref?.();
   }
 
   onEvent(listener: EventListener): () => void {
+    if (!this.runtimeIsCurrent()) return () => {};
     this.listeners.push(listener);
     for (const event of this.pendingUiRequests.values()) listener(event);
     return () => {
@@ -1304,7 +1329,7 @@ export class AgentSessionWrapper {
    * in this wrapper-owned background task.
    */
   startHostedPrompt(message: string, lifecycle: HostedImplementationLifecycle): boolean {
-    if (!this._alive || this.hostedKickoffState !== "none") return false;
+    if (!this.runtimeIsCurrent() || this.hostedKickoffState !== "none") return false;
     this.hostedKickoffState = "scheduled";
     this.hostedKickoffLifecycle = lifecycle;
     this.callLifecycle(lifecycle.ownershipAccepted);
@@ -1531,7 +1556,7 @@ export class AgentSessionWrapper {
         const newSessionId = SessionManager.open(newSessionFile, sessionDir).getSessionId();
         cacheSessionPath(newSessionId, newSessionFile);
         invalidateSessionListCache();
-        this.destroy();
+        await this.shutdown();
         return { cancelled: false, newSessionId };
       }
 
@@ -1695,6 +1720,48 @@ export class AgentSessionWrapper {
       default:
         throw new Error(`Unsupported command: ${type}`);
     }
+  }
+
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    if (!this._alive) return Promise.resolve();
+
+    // Close every public admission guard before any asynchronous teardown work.
+    this.closing = true;
+    const bindingPromise = this.extensionBindingPromise;
+    this.shutdownPromise = Promise.resolve().then(async () => {
+      try {
+        if (bindingPromise) {
+          try { await bindingPromise; }
+          catch (error) { this.reportExtensionBindingFailure(error); }
+        }
+
+        // Compaction owns separate abort controllers; AgentSession.abort() only
+        // settles active agent work. Attempt both before notifying extensions.
+        const failures: unknown[] = [];
+        try { this.inner.abortCompaction(); } catch (error) { failures.push(error); }
+        try { await this.inner.abort(); } catch (error) { failures.push(error); }
+        try {
+          await this.inner.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+        } catch (error) {
+          failures.push(error);
+        }
+        if (failures.length === 1) throw failures[0];
+        if (failures.length > 1) throw new AggregateError(failures, "rpc_session_shutdown_failed");
+      } finally {
+        this.destroy();
+      }
+    });
+    void this.shutdownPromise.catch((error) => {
+      try {
+        console.error(`[pi-web] session_shutdown stage=failed errorClass=${rpcPublicErrorClass(error)}`);
+      } catch { /* diagnostics are isolated */ }
+    });
+
+    // Publication owns this kickoff, so cancellation is synchronous even when
+    // extension binding or shutdown handlers remain pending.
+    this.cancelHostedKickoffBeforeDispatch(false);
+    return this.shutdownPromise;
   }
 
   destroy(): void {
@@ -1870,7 +1937,7 @@ export class AgentSessionWrapper {
         .then(() => factory(tui, PLAIN_TEXT_THEME, CUSTOM_UI_KEYBINDINGS, done))
         .then((component) => {
           this.pendingCustomUiSetups.delete(id);
-          if (completed || setup.destroyed || !this._alive) {
+          if (completed || setup.destroyed || !this.runtimeIsCurrent()) {
             try { (component as CustomUiComponent | undefined)?.dispose?.(); } catch { /* isolated extension cleanup */ }
             finish(undefined as T);
             return;
@@ -1890,7 +1957,7 @@ export class AgentSessionWrapper {
         })
         .catch((error) => {
           this.pendingCustomUiSetups.delete(id);
-          if (completed || setup.destroyed || !this._alive) {
+          if (completed || setup.destroyed || !this.runtimeIsCurrent()) {
             finish(undefined as T);
             return;
           }
@@ -2133,6 +2200,7 @@ type RpcRuntimeGeneration = {
   serverInstanceId: string;
   token: PiWebRuntimeOwnerToken | null;
   active: boolean;
+  cleanupPromise: Promise<void> | null;
   registry: Map<string, AgentSessionWrapper>;
   locks: Map<string, Promise<RpcSessionStartResult>>;
 };
@@ -2150,17 +2218,41 @@ declare global {
   var __piSessionListRefreshGeneration: number | undefined;
 }
 
-function closeRpcRuntimeGeneration(generation: RpcRuntimeGeneration): void {
-  if (!generation.active) return;
+function closeRpcRuntimeGeneration(generation: RpcRuntimeGeneration): Promise<void> {
+  if (generation.cleanupPromise) return generation.cleanupPromise;
+  if (!generation.active) return Promise.resolve();
+
+  let resolveCleanup: () => void = () => {};
+  let rejectCleanup: (reason?: unknown) => void = () => {};
+  const cleanupPromise = new Promise<void>((resolve, reject) => {
+    resolveCleanup = resolve;
+    rejectCleanup = reject;
+  });
+  generation.cleanupPromise = cleanupPromise;
+  // Caller-owned/HMR retirement can be fire-and-forget. Wrapper shutdown owns
+  // the single bounded diagnostic; this handler only prevents rejection leaks.
+  void cleanupPromise.catch(() => {});
+
   generation.active = false;
   invalidateHostedImplementationCapability();
-  for (const session of [...generation.registry.values()]) session.destroy();
+  const sessions = [...generation.registry.values()];
   generation.registry.clear();
   generation.locks.clear();
   if (globalThis.__piRpcRuntimeGeneration === generation) {
     globalThis.__piSessions = generation.registry;
     globalThis.__piStartLocks = generation.locks;
   }
+
+  const shutdowns = sessions.map((session) => {
+    try { return session.shutdown(); }
+    catch (error) { return Promise.reject(error); }
+  });
+  void Promise.allSettled(shutdowns).then((results) => {
+    const failures = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+    if (failures.length > 0) rejectCleanup(new AggregateError(failures, "rpc_runtime_cleanup_failed"));
+    else resolveCleanup();
+  });
+  return cleanupPromise;
 }
 
 export function activateRpcRuntimeOwner(): RpcRuntimeGeneration {
@@ -2181,6 +2273,7 @@ export function activateRpcRuntimeOwner(): RpcRuntimeGeneration {
     if (existing?.active) closeRpcRuntimeGeneration(existing);
     const generation: RpcRuntimeGeneration = {
       identity: {}, gateway: null, serverInstanceId: "caller_owned", token: null, active: true,
+      cleanupPromise: null,
       registry: globalThis.__piSessions ?? new Map(), locks: globalThis.__piStartLocks ?? new Map(),
     };
     globalThis.__piRpcRuntimeGeneration = generation;
@@ -2201,7 +2294,7 @@ export function activateRpcRuntimeOwner(): RpcRuntimeGeneration {
   if (existing?.active) closeRpcRuntimeGeneration(existing);
   const generation: RpcRuntimeGeneration = {
     identity: {}, gateway: ownerGateway, serverInstanceId: ownerGateway.serverInstanceId,
-    token: null, active: true, registry: new Map(), locks: new Map(),
+    token: null, active: true, cleanupPromise: null, registry: new Map(), locks: new Map(),
   };
   const registration = ownerGateway.registerRuntimeOwner("rpc", () => closeRpcRuntimeGeneration(generation));
   generation.token = registration.token;

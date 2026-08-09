@@ -97,6 +97,8 @@ function createPiWebTransportGateway(options = {}) {
   const peerConnectionCounts = new Map();
   const activeReservations = new Set();
   const runtimeOwners = new Map();
+  const pendingRuntimeOwnerCleanups = new Set();
+  let runtimeOwnerCleanupFailed = false;
   let activeConnectionCount = 0;
   let shuttingDown = false;
   let closed = false;
@@ -119,6 +121,27 @@ function createPiWebTransportGateway(options = {}) {
   const assertOpen = () => {
     if (closed) throw gatewayError("gateway_closed");
     if (shuttingDown) throw gatewayError("gateway_shutting_down");
+  };
+
+  const closeRuntimeOwner = (record, reason) => {
+    let result;
+    try { result = record.ownerClose(reason); }
+    catch {
+      runtimeOwnerCleanupFailed = true;
+      emitDiagnostic("owner_failed", { ownerClass: record.ownerClass });
+      return;
+    }
+    if (result === undefined) return;
+    const cleanup = Promise.resolve(result);
+    pendingRuntimeOwnerCleanups.add(cleanup);
+    cleanup.then(
+      () => { pendingRuntimeOwnerCleanups.delete(cleanup); },
+      () => {
+        pendingRuntimeOwnerCleanups.delete(cleanup);
+        runtimeOwnerCleanupFailed = true;
+        emitDiagnostic("owner_failed", { ownerClass: record.ownerClass });
+      },
+    );
   };
 
   const revokeRegistrationTickets = (registration) => {
@@ -280,7 +303,7 @@ function createPiWebTransportGateway(options = {}) {
           if (!record.active || runtimeOwners.get(ownerClass) !== record) return false;
           record.active = false;
           runtimeOwners.delete(ownerClass);
-          try { ownerClose("owner_replaced"); } catch { emitDiagnostic("owner_failed", { ownerClass }); }
+          closeRuntimeOwner(record, "owner_replaced");
           return true;
         },
       };
@@ -497,10 +520,19 @@ function createPiWebTransportGateway(options = {}) {
       for (const record of runtimeOwners.values()) {
         if (!record.active) continue;
         record.active = false;
-        try { record.ownerClose(reason); } catch { emitDiagnostic("owner_failed", { ownerClass: record.ownerClass }); }
+        closeRuntimeOwner(record, reason);
       }
       emitDiagnostic("gateway_shutdown_started");
       return true;
+    },
+
+    async waitForRuntimeOwnerCleanup() {
+      // Owner replacement can leave an older generation settling while a new
+      // one is active. Observe every pending generation before final close.
+      while (pendingRuntimeOwnerCleanups.size > 0) {
+        await Promise.allSettled([...pendingRuntimeOwnerCleanups]);
+      }
+      if (runtimeOwnerCleanupFailed) throw gatewayError("runtime_owner_cleanup_failed");
     },
 
     getSocketChannelClass(socket) {

@@ -355,6 +355,7 @@ async function startPiWebServer(options = {}) {
 
   const gateway = createGateway({ diagnostics });
   if (gateway.ownerLifecycleVersion !== 1 || typeof gateway.beginShutdown !== "function"
+    || typeof gateway.waitForRuntimeOwnerCleanup !== "function"
     || typeof gateway.isAcceptingOwners !== "function") {
     try { gateway.close(); } catch { /* preserve compatibility failure */ }
     throw new Error("gateway_owner_lifecycle_unavailable");
@@ -407,6 +408,7 @@ async function startPiWebServer(options = {}) {
       let forced = false;
       let webSocketCallbackSettled = false;
       let httpCallbackSettled = false;
+      let runtimeOwnerCleanupOutcome = Promise.resolve(null);
       const collectSync = (stage) => {
         try { stage(); } catch (error) { errors.push(error); }
       };
@@ -443,7 +445,15 @@ async function startPiWebServer(options = {}) {
 
       httpServer.off("upgrade", upgradeHandler);
       collectSync(() => heartbeat.close());
-      collectSync(() => gateway.beginShutdown("server_shutdown"));
+      collectSync(() => {
+        gateway.beginShutdown("server_shutdown");
+        // Attach rejection observation immediately, but do not await semantic
+        // cleanup until the independent absolute network deadline has run.
+        runtimeOwnerCleanupOutcome = gateway.waitForRuntimeOwnerCleanup().then(
+          () => null,
+          (error) => error,
+        );
+      });
       for (const client of webSocketServer.clients ?? []) {
         if (gateway.isSocketEnlisted?.(client)) continue;
         try { if (client.readyState === 1) client.close(1001); } catch (error) { errors.push(error); }
@@ -512,6 +522,8 @@ async function startPiWebServer(options = {}) {
         errors.push(new Error("owned_resources_failed_to_settle"));
       }
 
+      const runtimeOwnerCleanupError = await runtimeOwnerCleanupOutcome;
+      if (runtimeOwnerCleanupError) errors.push(runtimeOwnerCleanupError);
       collectSync(() => gateway.close());
       collectSync(() => uninstallGateway(gateway));
       try { await app?.close(); } catch (error) { errors.push(error); }

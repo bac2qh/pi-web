@@ -6,3 +6,7 @@
 - The decision followed an observed deletion path that destroyed a live wrapper and invalidated extension contexts without `session_shutdown`, while surviving extension work could still reference that stale context. Removing the observed trigger was preferred over adding graceful-teardown machinery to this feature.
 - Hide/Restore remains presentation metadata only: it does not rewrite or unlink JSONL, reparent descendants, change pins, close or navigate away from a selected chat, stop running work, or dispose a wrapper.
 - This decision does not claim graceful shutdown parity for other native-disposal paths. A stale-context failure outside permanent deletion requires separate evidence and a separately approved change.
+
+## 2026-08-08
+
+- The separately approved published-wrapper lifecycle fix now dispatches and awaits `session_shutdown` for existing release paths such as idle expiry, contextual Fork, failed published ensure, generation retirement, and server shutdown. This does not reinstate permanent Delete: Hide/Restore remains the only Pi Web removal workflow and still does not release a wrapper.

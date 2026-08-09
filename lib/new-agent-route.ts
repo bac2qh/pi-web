@@ -99,7 +99,10 @@ export function createNewAgentPost(
       // failures remain target-owned because command acceptance can be ambiguous.
       if (failedEnsureOwner) {
         try {
-          failedEnsureOwner.destroy();
+          await failedEnsureOwner.shutdown();
+        } catch {
+          // The shared shutdown operation reports only its bounded error class;
+          // preserve the setup failure that made this owner unreachable.
         } finally {
           if (failedEnsureSessionId) {
             const currentOwner = getRpcSession(failedEnsureSessionId);

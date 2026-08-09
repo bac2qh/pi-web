@@ -74,6 +74,7 @@ export interface ResolvedExtensionCommandLike {
 }
 
 export interface ExtensionRunnerLike {
+  emit(event: { type: "session_shutdown"; reason: "quit" }): Promise<unknown>;
   getRegisteredCommands?(): ResolvedExtensionCommandLike[];
   getCommand?(invocationName: string): ResolvedExtensionCommandLike | undefined;
   /** Returns a fresh SDK command context, narrowed defensively by the Fast adapter. */
