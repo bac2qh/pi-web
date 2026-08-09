@@ -13,8 +13,11 @@
 # testing
 /coverage
 
-# agent runtime worktrees
+# agent runtime worktrees and transient coordination
 /.agents/worktrees/
+/.agents/locks/
+/.agents/runtime/
+/.pi-subagents/
 
 # next.js
 /.next/

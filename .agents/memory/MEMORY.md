@@ -2,7 +2,7 @@
 
 ## Topics
 
-- [Browser-local display preferences](display-preferences.md) — independent Width/Transcript/Menu/File Viewer ownership, proportional file typography, opaque-renderer boundaries, and responsive control handoff.
+- [Browser-local display preferences](display-preferences.md) — independent content controls and side-panel width preferences, preferred/effective constraint ownership, proportional file typography, opaque-renderer boundaries, and responsive handoff.
 - [Agent response file links](agent-response-file-links.md) — assistant-only path actions, exact-workspace containment, text-preview safety, and narrow confirmation/expansion provenance.
 - [Clone session host boundary](clone-session.md) — durable `/clone` semantics, source-stable lifecycle, concurrency guards, and native Pi extraction boundary.
 - [Hosted implementation sessions](hosted-implementation-sessions.md) — same-process Start/Orchestrate ownership transfer, capability/fallback boundary, cleanup, discovery, and source isolation.

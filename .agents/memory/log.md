@@ -43,3 +43,6 @@
 ## 2026-08-09
 
 - Added session-dependency-graph memory after implementing the machine-wide exact-ID graph, reversible server-sequenced completion history, strict private persistence/concurrency contract, non-enforcement boundary, permanent retained DAG tab, and isolated Mermaid/control rendering.
+- Updated browser-local display-preference memory after adding independent preferred sidebar/right-panel widths, joint temporary clamping around a protected conversation width, accessible desktop separators, reset-by-key-removal semantics, and responsive/expanded precedence.
+- Reconciled the session DAG and resizable-panel histories so DAG and file tabs share one right-panel width owner, preserve mounted DAG state across resize/layout transitions, and restore the same preference after temporary responsive clamping.
+- Added root ignores for agent locks, runtime browser evidence, and subagent coordination artifacts so private transient state remains outside commits while durable checkpoints and reports stay tracked.

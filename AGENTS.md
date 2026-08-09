@@ -76,6 +76,7 @@ lib/
   file-paths.ts        client/server path encoding helpers
   file-types.ts        shared preview limits, languages, and automatic text eligibility
   file-viewer-layout.ts pure responsive expansion/confirmation policy transitions
+  panel-layout.ts      pure preferred/effective side-panel width constraints
   text-preview-file.ts bounded server-side text file reader
   markdown.ts          shared markdown helpers
   npx.ts               npx runner used by skill install
@@ -103,7 +104,7 @@ lib/
   worktree.ts         project/worktree resolution and git worktree operations
 
 components/
-  AppShell.tsx        layout + URL state + tab management
+  AppShell.tsx        layout + URL state + tabs + side-panel resize ownership
   AutomaticFileOpenConfirmation.tsx  narrow-width agent-path confirmation
   SessionSidebar.tsx  Pinned/Recent/Project presentations + FileExplorer
   SessionDagPanel.tsx structured dependency authoring, refresh, and mutation queue
@@ -130,6 +131,7 @@ hooks/
   useAudio.ts         completion sound + browser AudioContext unlock
   useDragDrop.ts      shared drag/drop state
   useIsMobile.ts      responsive breakpoint hook
+  useResizablePanel.ts shared pointer/keyboard/persistence owner for side-panel widths
   useTheme.ts         theme state
 ```
 
@@ -252,9 +254,14 @@ Newer Pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - API-key routes store and remove keys through `AuthStorage`. Status endpoints must never return the raw key.
 - The model test route is `app/api/models-config/test/route.ts`; `app/api/models/test/` is not a real route.
 
-### Expanded file viewer
-- `AppShell` owns manual and automatic-narrow expansion provenance. Expansion changes shell/panel classes only: sidebar and center/chat remain mounted but leave layout and hit testing, while the existing right panel fills `100dvh` and the fixed panel toggle is suppressed.
-- Desktop expansion must override both the panel's `42%`/`300px` rule and its direct children's separate `42vw`/`300px` rule. At `640px` and below, the normal mobile panel remains the sole full-width mode; from `641px` through `999px`, every committed file open automatically uses expanded presentation. Narrow restore suppression lasts until the next open, and automatic expansion clears at `1000px` without clearing manual expansion.
+### Resizable application panels
+- At `1000px` and wider, the open sidebar and open, non-expanded right panel expose focusable pointer/keyboard separators. `useResizablePanel` mutates only `--sidebar-width` or `--right-panel-width` during pointer movement, then commits one React/browser-local preference update; resize cancellation must restore pointer capture, cursor, and selection state.
+- `lib/panel-layout.ts` distinguishes browser-local preferred widths from current effective widths. The sidebar uses `260px` within `180–480px`; an unset right panel keeps responsive `42%` behavior within `300–1200px`; joint clamping reserves at least `320px` for conversation without overwriting either preference.
+- The right-panel width belongs to the shared display container, not its selected content. DAG and file tabs therefore share `pi-right-panel-width`, switching tabs never changes geometry, and final-file fallback to DAG preserves the same width. Collapse, expansion, `<1000px` automatic full-width behavior, and `<=640px` mobile layout suppress the relevant handles without clearing preferences.
+
+### Expanded right panel
+- `AppShell` owns manual and automatic-narrow expansion provenance (the pure helper retains its historical file-viewer names). Expansion changes shell/panel classes only: sidebar and center/chat remain mounted but leave layout and hit testing, while the shared DAG/file right panel fills `100dvh` and the fixed panel toggle is suppressed.
+- Desktop expansion must override both the panel's variable-width/`300px` rule and its direct children's separate variable-width/`300px` rule. At `640px` and below, the normal mobile panel remains the sole full-width mode; from `641px` through `999px`, an unsuppressed open right panel uses expanded presentation. Narrow restore suppression lasts until the next committed file open, and automatic expansion clears at `1000px` without clearing manual expansion.
 - Explorer Markdown stays separate from chat `MarkdownBody`. `MarkdownFilePreview` centers direct reading blocks at `1000px` maximum while direct code, wrapped tables, and standalone images use the wider padded surface with inner overflow.
 
 ### Assistant-returned file paths
@@ -295,4 +302,5 @@ Location: `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`
 --text --text-muted --text-dim
 --accent --user-bg --tool-bg
 --font-mono
+--sidebar-width --right-panel-width
 ```

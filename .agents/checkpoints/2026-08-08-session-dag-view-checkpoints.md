@@ -113,3 +113,29 @@ Plan: `.agents/plans/2026-08-08-session-dag-view.md`
 **Preserved state:** Local `main` remains restored at `03f45cd918584058611e66f1e7cf8a8ef0b747a3` with its unrelated tracked and untracked dirt untouched. The validated DAG implementation, final summary, prior recovery evidence, and commit-identity correction remain on retained branch `2026-08-08-session-dag-view` and its retained task worktree.
 
 **Safe retry point:** Reconcile both features on the retained task branch through an explicitly authorized integration/fix step, rerun affected and required validation, commit the integrated result and any required summary update, then retry guarded closeout. Another unchanged merge attempt will reproduce these conflicts.
+
+## Implementation Summary
+
+**Plan section:** User-authorized cross-feature integration of the permanent DAG/file right panel with the resizable-panels implementation; Validation Contract VC-001 and VC-006.
+
+**Work and outcome:** Deliberately merged local `main` commit `03f45cd918584058611e66f1e7cf8a8ef0b747a3` into the retained task branch and resolved the three known conflicts without dropping either feature. `AppShell` now gives DAG and file tabs one content-agnostic right-panel resizer, CSS variable, browser-local preference, and responsive/expansion owner; tab switches, final-file fallback, and hide/reopen preserve width and mounted DAG drafts. Maintained architecture and memory now use the user-facing “right panel” term while retaining historical pure-helper/storage names where compatibility requires them. The merged memory log keeps both feature histories. A final lint dependency correction was added without changing behavior.
+
+**Validation / evidence:** The focused integrated layout/tab/view tests passed before the full run. The final `NODE_ENV=test node --test components/*.test.mjs lib/*.test.mjs` passed 827/827; `node_modules/.bin/tsc --noEmit`, `npm run lint`, `git diff --check`, the staged-tree whitespace check, and the conflict-marker scan passed. Isolated Chrome/CDP validation at 1280, 1000, 999, 641, and 640 CSS pixels verified pointer resizing, one width across DAG/file switches, unfinished-draft retention, expansion/restore, final-file DAG fallback, hide/reopen, responsive handle precedence, temporary effective clamping without preference loss, and reload restoration with zero console errors. Privacy-safe evidence is summarized in `.agents/reports/2026-08-08-session-dag-browser-validation.md`; the ignored machine result is `.agents/runtime/session-dag-resize-integration/browser-validation.json`. No production build was run.
+
+**Departures from approved obligations:** None. This authorized integration preserves every DAG obligation and adopts the already-implemented resizable-panel behavior for the shared container; final independent review, the merge commit, the mandatory commit-naming summary, and guarded closeout remain pending.
+
+**Implementation commit:** Pending.
+
+## Handoff
+
+**Source:** Async fresh review workflow `af459174-33f4-474b-a05b-37ff51eadf4f`; completed children `3af888ed` (`right-panel-correctness`) and `d3781567` (`integration-evidence`). The workflow aggregate failed only while serializing an undefined convenience `status` field after both children had completed; their outputs were recovered from the retained child runs and synthesized here.
+
+**Purpose:** Independently review the deliberate DAG/resizable-panel merge for functional regressions, responsive/focus/state ownership, test and documentation quality, privacy, artifact hygiene, and guarded-closeout readiness.
+
+**Outcome:** Both reviewers found no functional source defect. They verified that resizing is content-agnostic, the shared container owns DAG/file width, mounted DAG state survives every intended transition, and the working tree passes the claimed gates. Their blockers were procedural and accepted: the validated unstaged corrections had to be explicitly added to the merge index, and raw `.pi-subagents/` output had to be removed. One reviewer also proved that `.agents/runtime/` and `.pi-subagents/` were not actually ignored despite the report/policy language; the parent added narrow root ignore rules for `.agents/locks/`, `.agents/runtime/`, and `.pi-subagents/`, while retaining `.agents/worktrees/`, so transient evidence/coordination cannot be accidentally staged. No existing runtime bytes were deleted by that rule.
+
+**Evidence:** Reviewer `3af888ed` cited `components/AppShell.tsx:205-207,363,1406-1502`, `app/globals.css:1357-1405`, and the staged-versus-working test mismatch; reviewer `d3781567` independently reproduced 827/827 tests, typecheck, lint, focused integration checks, whitespace/conflict-marker checks, verified empty unmerged entries, and found no exact IDs, pairs, Mermaid source, or mutation payloads in tracked integration evidence. Parent inspection confirmed both findings and the successful product-level CDP run. Raw reviewer artifacts were used only for this synthesis and then removed from the checkout.
+
+**Uncertainty / gaps:** Neither reviewer independently reran Chrome; they inspected the retained machine result and tracked report. No platform screen-reader pass exists. The workflow result object itself failed serialization after child completion, so the recoverable child run IDs—not the aggregate state—are authoritative for review output.
+
+**Recommended use:** Explicitly stage only intended paths, verify the cached merge result (including tests and the lint dependency fix), create the merge commit, append the mandatory commit-naming final summary, and then perform guarded fast-forward closeout if local `main` remains the captured ancestor.

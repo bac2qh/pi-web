@@ -1219,6 +1219,43 @@ html.dark .session-dag-feedback[data-kind="success"] { color: #86efac; }
   }
 }
 
+/* Pane borders remain the idle separators; these net-zero siblings only widen
+   the pointer target and provide focus/active feedback. */
+.panel-resize-handle {
+  position: relative;
+  z-index: 220;
+  width: 12px;
+  margin: 0 -6px;
+  flex: 0 0 12px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+.panel-resize-handle::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 5px;
+  width: 2px;
+  pointer-events: none;
+  background: transparent;
+  transition: background 0.12s ease, box-shadow 0.12s ease;
+}
+.panel-resize-handle:hover::after {
+  background: color-mix(in srgb, var(--text-muted) 70%, var(--border));
+}
+.panel-resize-handle:focus-visible::after,
+.panel-resize-handle.is-resizing::after {
+  background: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+@media (max-width: 999px) {
+  .panel-resize-handle {
+    display: none !important;
+    pointer-events: none !important;
+  }
+}
+
 /* Desktop sidebar: animate width */
 @media (min-width: 641px) {
   .sidebar-overlay-backdrop {
@@ -1230,8 +1267,8 @@ html.dark .session-dag-feedback[data-kind="success"] { color: #86efac; }
     transition: width 0.2s ease, min-width 0.2s ease;
   }
   .sidebar-container.sidebar-open {
-    width: 260px;
-    min-width: 260px;
+    width: var(--sidebar-width, 260px);
+    min-width: var(--sidebar-width, 260px);
   }
   .sidebar-container.sidebar-closed {
     width: 0;
@@ -1240,8 +1277,12 @@ html.dark .session-dag-feedback[data-kind="success"] { color: #86efac; }
   }
   /* keep inner content at fixed width so it doesn't reflow during animation */
   .sidebar-container > * {
-    width: 260px;
-    min-width: 260px;
+    width: var(--sidebar-width, 260px);
+    min-width: var(--sidebar-width, 260px);
+  }
+  .sidebar-container.panel-resizing,
+  .sidebar-container.panel-resizing > * {
+    transition: none !important;
   }
 }
 
@@ -1321,7 +1362,7 @@ html.dark .session-dag-feedback[data-kind="success"] { color: #86efac; }
     flex-shrink: 0;
   }
   .right-panel-container.right-panel-open {
-    width: 42%;
+    width: var(--right-panel-width, 42%);
     min-width: 300px;
   }
   .right-panel-container.right-panel-closed {
@@ -1331,12 +1372,17 @@ html.dark .session-dag-feedback[data-kind="success"] { color: #86efac; }
   }
   /* keep inner content at fixed width so it doesn't reflow during animation */
   .right-panel-container > * {
-    width: 42vw;
+    width: var(--right-panel-width, 42vw);
     min-width: 300px;
+  }
+  .right-panel-container.panel-resizing,
+  .right-panel-container.panel-resizing > * {
+    transition: none !important;
   }
 
   .app-shell.file-viewer-expanded > .sidebar-overlay-backdrop,
   .app-shell.file-viewer-expanded > .sidebar-container,
+  .app-shell.file-viewer-expanded > .panel-resize-handle,
   .app-shell.file-viewer-expanded > .center-pane-width-container {
     display: none !important;
     pointer-events: none !important;

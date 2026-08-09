@@ -61,6 +61,13 @@ Target: `.agents/plans/2026-08-08-session-dag-view.md`
 - Hide/reopen retained the mounted DAG, Preview mode, selected DAG tab, and the same ShadowRoot. Crossing to 500 CSS pixels moved focus from the now-hidden expansion button to the selected DAG tab after the transition and settled at a full 500-pixel panel width.
 - The privacy-safe machine-readable result is retained outside Git at `.agents/runtime/session-dag-final-browser/browser-validation.json`; it records counts, roles, state revisions, and screenshot paths but no session IDs, pairs, Mermaid source, or mutation payloads.
 
+### Integrated shared right-panel resizing follow-up
+
+- After deliberately merging the resizable-panels implementation into the retained DAG task branch, the DAG and file views were exercised as children of one shared right-panel container. A pointer drag grew the panel from 538 to a stored 634 CSS pixels while Raw was active; switching to `AGENTS.md`, returning to DAG, expanding/restoring, closing the final file, and hiding/reopening all retained the same width. The unfinished Raw draft survived every transition.
+- Responsive crossings verified the intended precedence: 999 and 641 CSS pixels used the automatic full-width panel with no resize handle; 640 used the sole mobile full-width mode; 1000 restored the split layout and handle while temporarily clamping the effective width to 461 pixels without changing the 634-pixel preference. Returning to 1280 and reloading restored 634 pixels.
+- The isolated run produced zero browser console errors. Its privacy-safe result and four screenshots remain outside Git at `.agents/runtime/session-dag-resize-integration/browser-validation.json`; the result records only widths, Boolean state-preservation outcomes, handle visibility, and artifact paths.
+- Post-integration validation passed all 827 Node tests, TypeScript, lint with no warnings, staged/unstaged whitespace checks, and the conflict-marker scan. No production build was run.
+
 ## Residual limitations
 
 - Browser validation inspected DOM accessibility, focus, keyboard behavior, and SVG structure; it did not run a platform screen reader.

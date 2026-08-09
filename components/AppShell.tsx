@@ -1,7 +1,7 @@
 "use client";
 
 import { scaledMenuFontSize } from "@/lib/display-preferences";
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useLayoutEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
@@ -23,6 +23,7 @@ import { DisplayControls } from "./DisplayControls";
 import { AutomaticFileOpenConfirmation } from "./AutomaticFileOpenConfirmation";
 import { useTheme } from "@/hooks/useTheme";
 import { useIsMobile, useIsNarrowFileViewerViewport } from "@/hooks/useIsMobile";
+import { useResizablePanel } from "@/hooks/useResizablePanel";
 import { copyText } from "@/lib/clipboard";
 import { getFileName } from "@/lib/file-paths";
 import type { FileOpenOptions } from "@/lib/file-links";
@@ -36,6 +37,22 @@ import {
   shouldConfirmAutomaticFileOpen,
 } from "@/lib/file-viewer-layout";
 import { buildAtMentionText, buildFileAtMentionsText } from "@/lib/file-fuzzy";
+import {
+  PANEL_LAYOUT_MOBILE_MAX_WIDTH,
+  PANEL_RESIZE_MIN_VIEWPORT_WIDTH,
+  RIGHT_PANEL_FALLBACK_WIDTH,
+  RIGHT_PANEL_MAX_WIDTH,
+  RIGHT_PANEL_MIN_WIDTH,
+  RIGHT_PANEL_WIDTH_STORAGE_KEY,
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_WIDTH_STORAGE_KEY,
+  getDefaultRightPanelWidth,
+  getRightPanelWidthBounds,
+  getSidebarWidthBounds,
+  resolveEffectivePanelLayout,
+} from "@/lib/panel-layout";
 import {
   RIGHT_PANEL_DAG_TAB_ID,
   activeRightPanelTabAfterFileClose,
@@ -56,6 +73,10 @@ interface PendingAutomaticFileOpen {
   displayPath: string;
   sessionId: string | null;
   cwd: string | null;
+}
+
+function getViewportWidth(): number {
+  return typeof window === "undefined" ? PANEL_RESIZE_MIN_VIEWPORT_WIDTH : window.innerWidth;
 }
 
 export function AppShell() {
@@ -175,13 +196,138 @@ export function AppShell() {
   const [activeRightPanelTabId, setActiveRightPanelTabId] = useState<string>(RIGHT_PANEL_DAG_TAB_ID);
   const [dagActivated, setDagActivated] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
-  const rightPanelRef = useRef<HTMLDivElement | null>(null);
   const [fileViewerExpansion, setFileViewerExpansion] = useState(INITIAL_FILE_VIEWER_EXPANSION);
   const fileViewerExpandedActive = isFileViewerExpandedForViewport(
     fileViewerExpansion,
     isNarrowFileViewerViewport,
     rightPanelOpen,
   ) && !isMobile;
+  const panelResizeEligible = !isNarrowFileViewerViewport && !fileViewerExpandedActive;
+  const sidebarResizeEnabled = panelResizeEligible && sidebarOpen;
+  const rightPanelResizeEnabled = panelResizeEligible && rightPanelOpen;
+  const sidebarWidthRef = useRef(SIDEBAR_DEFAULT_WIDTH);
+  const rightPanelWidthRef = useRef(RIGHT_PANEL_FALLBACK_WIDTH);
+  const reconciledViewportWidthRef = useRef<number | null>(null);
+
+  const getSidebarResizeBounds = useCallback(() => getSidebarWidthBounds({
+    viewportWidth: getViewportWidth(),
+    rightPanelVisible: rightPanelResizeEnabled,
+    rightPanelWidth: rightPanelWidthRef.current,
+  }), [rightPanelResizeEnabled]);
+  const getRightPanelResizeBounds = useCallback(() => getRightPanelWidthBounds({
+    viewportWidth: getViewportWidth(),
+    sidebarVisible: sidebarResizeEnabled,
+    sidebarWidth: sidebarWidthRef.current,
+  }), [sidebarResizeEnabled]);
+  const getResponsiveRightPanelWidth = useCallback(
+    () => getDefaultRightPanelWidth(getViewportWidth()),
+    [],
+  );
+
+  const sidebarResizer = useResizablePanel({
+    ariaLabel: "Resize sidebar",
+    cssVariable: "--sidebar-width",
+    defaultWidth: SIDEBAR_DEFAULT_WIDTH,
+    enabled: sidebarResizeEnabled,
+    getBounds: getSidebarResizeBounds,
+    growthDirection: "right",
+    maxWidth: SIDEBAR_MAX_WIDTH,
+    minWidth: SIDEBAR_MIN_WIDTH,
+    storageKey: SIDEBAR_WIDTH_STORAGE_KEY,
+    widthRef: sidebarWidthRef,
+  });
+  const rightPanelResizer = useResizablePanel({
+    ariaLabel: "Resize right panel",
+    cssVariable: "--right-panel-width",
+    defaultWidth: RIGHT_PANEL_FALLBACK_WIDTH,
+    enabled: rightPanelResizeEnabled,
+    getBounds: getRightPanelResizeBounds,
+    getDefaultWidth: getResponsiveRightPanelWidth,
+    growthDirection: "left",
+    maxWidth: RIGHT_PANEL_MAX_WIDTH,
+    minWidth: RIGHT_PANEL_MIN_WIDTH,
+    storageKey: RIGHT_PANEL_WIDTH_STORAGE_KEY,
+    widthRef: rightPanelWidthRef,
+  });
+  const sidebarPanelRef = sidebarResizer.panelRef;
+  const rightPanelRef = rightPanelResizer.panelRef;
+  const cancelSidebarResize = sidebarResizer.cancelResize;
+  const cancelRightPanelResize = rightPanelResizer.cancelResize;
+  const getSidebarPreferredWidth = sidebarResizer.getPreferredWidth;
+  const getRightPanelPreferredWidth = rightPanelResizer.getPreferredWidth;
+  const setReconciledSidebarWidth = sidebarResizer.setReconciledWidth;
+  const setReconciledRightPanelWidth = rightPanelResizer.setReconciledWidth;
+
+  const reconcileEffectivePanelWidths = useCallback((updateReactState = true) => {
+    if (!sidebarResizer.ready || !rightPanelResizer.ready) return;
+    const viewportWidth = getViewportWidth();
+    const mobile = viewportWidth <= PANEL_LAYOUT_MOBILE_MAX_WIDTH;
+    const narrowFileViewer = viewportWidth < PANEL_RESIZE_MIN_VIEWPORT_WIDTH;
+    const expanded = !mobile && isFileViewerExpandedForViewport(
+      fileViewerExpansion,
+      narrowFileViewer,
+      rightPanelOpen,
+    );
+    const splitLayoutVisible = !mobile && !expanded;
+    const layout = resolveEffectivePanelLayout({
+      viewportWidth,
+      sidebarVisible: splitLayoutVisible && sidebarOpen,
+      rightPanelVisible: splitLayoutVisible && rightPanelOpen,
+      sidebarPreferredWidth: getSidebarPreferredWidth(),
+      rightPanelPreferredWidth: getRightPanelPreferredWidth(),
+    });
+    setReconciledSidebarWidth(
+      layout.sidebarWidth,
+      updateReactState,
+      layout.sidebarBounds,
+    );
+    setReconciledRightPanelWidth(
+      layout.rightPanelWidth,
+      updateReactState,
+      layout.rightPanelBounds,
+    );
+  }, [
+    fileViewerExpansion,
+    getRightPanelPreferredWidth,
+    getSidebarPreferredWidth,
+    rightPanelOpen,
+    rightPanelResizer.ready,
+    setReconciledRightPanelWidth,
+    setReconciledSidebarWidth,
+    sidebarOpen,
+    sidebarResizer.ready,
+  ]);
+
+  useLayoutEffect(() => {
+    const viewportWidth = getViewportWidth();
+    const viewportChanged = reconciledViewportWidthRef.current !== null
+      && reconciledViewportWidthRef.current !== viewportWidth;
+    cancelSidebarResize(!viewportChanged);
+    cancelRightPanelResize(!viewportChanged);
+    reconcileEffectivePanelWidths();
+    reconciledViewportWidthRef.current = viewportWidth;
+  }, [cancelRightPanelResize, cancelSidebarResize, reconcileEffectivePanelWidths]);
+
+  useEffect(() => {
+    let commitTimer: ReturnType<typeof setTimeout> | null = null;
+    const onResize = () => {
+      cancelSidebarResize(false);
+      cancelRightPanelResize(false);
+      reconcileEffectivePanelWidths(false);
+      reconciledViewportWidthRef.current = getViewportWidth();
+      if (commitTimer) clearTimeout(commitTimer);
+      commitTimer = setTimeout(() => {
+        commitTimer = null;
+        reconcileEffectivePanelWidths();
+      }, 120);
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      if (commitTimer) clearTimeout(commitTimer);
+    };
+  }, [cancelRightPanelResize, cancelSidebarResize, reconcileEffectivePanelWidths]);
+
   const [pendingAutomaticFileOpen, setPendingAutomaticFileOpen] = useState<PendingAutomaticFileOpen | null>(null);
   const automaticFileTriggerRef = useRef<HTMLElement | null>(null);
 
@@ -214,7 +360,7 @@ export function AppShell() {
 
     const frame = requestAnimationFrame(() => selectedTab.focus());
     return () => cancelAnimationFrame(frame);
-  }, [activeRightPanelTabId, fileViewerExpandedActive, isMobile, rightPanelOpen]);
+  }, [activeRightPanelTabId, fileViewerExpandedActive, isMobile, rightPanelOpen, rightPanelRef]);
 
   // Same @mention format as the chat input's @ autocomplete, so the agent's
   // read tool resolves it the same way (it strips the @ prefix).
@@ -457,7 +603,7 @@ export function AppShell() {
         ?.querySelector<HTMLButtonElement>('button[data-active-file-tab="true"]')
         ?.focus();
     });
-  }, []);
+  }, [rightPanelRef]);
 
   const confirmAutomaticFileOpen = useCallback(() => {
     if (!pendingAutomaticFileOpen) return;
@@ -698,6 +844,8 @@ export function AppShell() {
 
       {/* Left sidebar */}
       <div
+        ref={sidebarPanelRef}
+        id="session-sidebar"
         className={`sidebar-container${sidebarOpen ? " sidebar-open" : " sidebar-closed"}${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}
         style={{
           background: "var(--bg-panel)",
@@ -710,6 +858,15 @@ export function AppShell() {
       >
         {sidebarContent}
       </div>
+      {sidebarResizer.ready && sidebarResizeEnabled && (
+        <div
+          {...sidebarResizer.separatorProps}
+          aria-controls="session-sidebar"
+          className="panel-resize-handle sidebar-resize-handle"
+          data-resize-handle="sidebar"
+          title="Resize sidebar. Use arrow keys to adjust, hold Shift for larger steps, or press Enter or double-click to reset."
+        />
+      )}
 
       {/* Center: chat */}
       <div className="center-pane-width-container" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
@@ -1246,9 +1403,20 @@ export function AppShell() {
         </div>
       </div>
 
+      {rightPanelResizer.ready && rightPanelResizeEnabled && (
+        <div
+          {...rightPanelResizer.separatorProps}
+          aria-controls="right-panel"
+          className="panel-resize-handle right-panel-resize-handle"
+          data-resize-handle="right-panel"
+          title="Resize right panel. Use arrow keys to adjust, hold Shift for larger steps, or press Enter or double-click to reset."
+        />
+      )}
+
       {/* Right panel — always mounted; DAG mounts lazily and then remains mounted. */}
       <div
         ref={rightPanelRef}
+        id="right-panel"
         className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}${fileViewerExpandedActive ? " right-panel-expanded" : ""}`}
         aria-hidden={!rightPanelOpen}
         inert={!rightPanelOpen}
