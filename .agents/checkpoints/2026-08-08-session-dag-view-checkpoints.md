@@ -81,3 +81,15 @@ Plan: `.agents/plans/2026-08-08-session-dag-view.md`
 **Uncertainty / gaps:** No platform screen reader was run. Full hostile-stylesheet injection through the complete sanitizer was covered by prior Chrome probes plus focused predicates rather than repeated in the final product run; the final product run directly exercised legitimate dark-gradient output.
 
 **Recommended use:** Treat the review loop as clean after retaining the prose correction. Remove `.pi-subagents/`, rerun affected/final gates, inspect the final diff, and proceed to commit and guarded closeout.
+
+## Implementation Summary
+
+**Plan section:** Entire approved plan, including the Objective, Design / Implementation Strategy, Test Strategy, and Validation Contract VC-001 through VC-006.
+
+**Work and outcome:** Completed the machine-wide non-enforcing exact-ID session dependency graph. The implementation includes strict private persistence and conflict-aware GET/PATCH authority; structured form/edge authoring; reversible sequenced completion batches with terminal-node and deterministic form-fallback behavior; linear Undo/Redo; current-label refresh without session startup; a permanent lazy/retained DAG right-panel tab; validated theme-aware Mermaid output with isolated explicit controls; sidebar and Raw copy actions; maintained architecture documentation; browser evidence; and durable memory. The implementation commit contains only intended source, tests, plan-execution evidence, documentation, and memory state.
+
+**Validation / evidence:** `NODE_ENV=test node --test components/*.test.mjs lib/*.test.mjs` passed 817/817 after the final fixes and prose updates. `node_modules/.bin/tsc --noEmit`, `npm run lint`, `git diff --check`, and the staged-tree whitespace check passed. Independent final reviewers passed 52 focused tests and the same 817-test suite and reported no remaining functional or security defect. `.agents/reports/2026-08-08-session-dag-browser-validation.md` records the privacy-safe CDP evidence for lazy/permanent tabs, responsive focus/layout, authoring, conflict handling, unavailable sessions, copy behavior, strict SVG failure/recovery, light/dark gradients, isolated pointer/keyboard controls, history, rename refresh, state preservation, and non-enforcement. No production build was run, as required by the repository's development instructions; no platform screen-reader pass was available.
+
+**Departures from approved obligations:** None.
+
+**Implementation commit:** `1074ef949bc3ca017d3051aa3765f86b80f55f15` (`feat: add machine-wide session dependency graph`).
