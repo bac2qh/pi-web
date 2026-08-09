@@ -93,3 +93,13 @@ Plan: `.agents/plans/2026-08-08-session-dag-view.md`
 **Departures from approved obligations:** None.
 
 **Implementation commit:** `1074ef949bc3ca017d3051aa3765f86b80f55f15` (`feat: add machine-wide session dependency graph`).
+
+## Closeout Recovery
+
+**Completed transitions:** Validation, implementation commit `1074ef949bc3ca017d3051aa3765f86b80f55f15`, and final-summary commit `f14622e2384afbb69db84cbef6e73b6645e227e0` completed on task branch `2026-08-08-session-dag-view`. Closeout captured local `main` at `03f45cd918584058611e66f1e7cf8a8ef0b747a3`, proved no staged or ongoing Git operation and no overlap between the 36 task paths and 1,919 unrelated main-worktree dirt paths, then attempted the required normal merge under `.agents/scripts/main-branch-lock.sh`. Git reported content conflicts in `.agents/memory/log.md`, `app/globals.css`, and `components/AppShell.tsx`. No conflict was resolved. `ORIG_HEAD`, the conflict set, and the preserved unrelated-plan diff proved that `git merge --abort` could restore the captured state; the abort ran under the same mutex. Main HEAD, branch, pre-attempt unstaged binary diff, empty staged diff, untracked path set, and absence of merge state were then verified exactly.
+
+**Blocker:** Local `main` advanced through the resizable-panels implementation, and its memory-log, global-style, and AppShell changes conflict with this task's additions. Closeout policy forbids guessing a conflict resolution during guarded integration.
+
+**Preserved state:** Local `main` is restored at `03f45cd918584058611e66f1e7cf8a8ef0b747a3`; its unrelated unstaged `.agents/plans/2026-07-21-clone-session.md` change and untracked runtime/subagent/plan files remain untouched. The complete validated DAG implementation and final summary remain committed in the retained task worktree `/Users/xin/Documents/repos/pi-web/.agents/worktrees/2026-08-08-session-dag-view` on branch `2026-08-08-session-dag-view`.
+
+**Safe retry point:** Start from the retained task branch after this recovery entry. Reconcile the resizable-panel and DAG changes in the three named paths through an explicitly authorized integration/fix step, rerun the affected and required validation, commit that result and an updated final summary if needed, then repeat guarded closeout against the then-current captured local `main`.
