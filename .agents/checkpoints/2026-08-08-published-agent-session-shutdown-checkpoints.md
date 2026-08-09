@@ -107,3 +107,15 @@ Plan: `.agents/plans/2026-08-08-published-agent-session-shutdown.md`
 **Uncertainty / gaps:** Intentional residuals are strict nonsettling-handler wait, bare unpublished rollback, excluded `AgentSessionRuntime` adoption, pi-subagents' separate process-global collision, and the nested-worktree dependency-link requirement for the real-production fixture. No source risk requiring a fix remains.
 
 **Recommended use:** Accept the implementation subject to the recorded final gates; do not weaken strict waiting or couple semantic completion to S6's network deadline.
+
+## Implementation Summary
+
+**Plan section:** Final implementation and Validation Contract closeout — Sections 1–3; VC-001 through VC-005.
+
+**Work and outcome:** Completed strict wrapper-owned shutdown for every published release path without adopting `AgentSessionRuntime`: admission closes synchronously, started binding is joined, native compaction and agent work are aborted, one extension `session_shutdown { reason: "quit" }` is strictly awaited, and native disposal remains exact once. Idle expiry, contextual Fork, failed published ensure, generation retirement, and server shutdown share that operation; prepared-but-unpublished rollback remains bare disposal. Runtime-owner cleanup is observed across active and retired generations only after S6's unchanged absolute network drain/force phase. Maintained documentation and durable memory now match the implemented lifecycle.
+
+**Validation / evidence:** `env -u NODE_ENV node --test lib/rpc-manager.test.mjs lib/session-channel-integration.test.mjs lib/s6-lifecycle.test.mjs lib/pi-web-server.test.mjs` passed 210 tests; `env -u NODE_ENV node --test lib/*.test.mjs components/*.test.mjs` passed 766 tests with the documented temporary nested-worktree dependency link, which was removed immediately; `/Users/xin/Documents/repos/pi-web/node_modules/.bin/tsc --noEmit -p tsconfig.json`, `npm run lint`, `node --check bin/pi-web-transport-gateway.js`, `node --check bin/pi-web-server.js`, and `git diff --check` passed. Final independent reviewer run `4cddd6ce` found no blocker or fix worth doing now after independently passing the focused and static gates. No production build was run because repository instructions explicitly prohibit `next build` during development.
+
+**Departures from approved obligations:** None. No obligation is incomplete, blocked, waived, superseded, or divergent. The intentionally strict nonsettling-handler wait, bare unpublished rollback, excluded `AgentSessionRuntime` adoption, and separate pi-subagents process-global collision are approved boundaries or disclosed out-of-scope residuals rather than departures.
+
+**Implementation commit:** `7ca523172c5fb7c59e432e034a00380b5810baeb` (`fix: shut down published agent sessions gracefully`).
