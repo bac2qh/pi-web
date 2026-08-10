@@ -103,3 +103,15 @@ Plan: `.agents/plans/2026-08-10-highlight-current-dag-session.md`
 **Departures from approved obligations:** None. The unavailable platform screen-reader pass is a disclosed validation limitation, not a waived product obligation; native semantics and accessibility attributes/keyboard behavior were covered by the existing controls and bounded browser inspection.
 
 **Implementation commit:** Pending.
+
+## Implementation Summary
+
+**Plan section:** Mandatory final implementation record after all Objective, Test Strategy, and Validation Contract obligations completed.
+
+**Work and outcome:** Implementation commit `70e709effd8328055b69cd6984368eb738dba05a` contains the complete selected-session graphical Preview marker, trusted SVG/CSS lifecycle hardening, focused tests, maintained documentation/memory, checkpoint history, and privacy-safe browser report. The resulting behavior is limited to one exact selected-session marker on an existing rendered Preview node.
+
+**Validation / evidence:** Final source passed the required focused suite 25/25, the complete repository suite 831/831, TypeScript, literal lint, whitespace checks, clean independent review, and the tracked isolated Chrome/CDP matrix across exact selection and lifecycle transitions, light/dark themes, desktop/mobile layouts, DOM/request/revision/focus/scroll invariants, and completion controls. The implementation commit had no unstaged delta and no retained worktree dependency link or owned validation process.
+
+**Departures from approved obligations:** None. Incomplete: none. Blocked: none. Waived: none. Superseded: none. Divergent: none. The disclosed lack of a platform screen-reader pass remains a bounded validation limitation and did not change or waive any approved behavior.
+
+**Implementation commit:** `70e709effd8328055b69cd6984368eb738dba05a` (`feat: highlight selected session in DAG preview`).
