@@ -10,4 +10,10 @@
 - The right panel permanently owns a non-closable first DAG tab but starts closed. First activation lazily mounts Preview; the mounted panel then retains Raw drafts, mode, feedback, expansion state, and the shared browser-local right-panel width across file tabs and hide/reopen. Resizing belongs to the container, never to DAG or file content.
 - Structured Raw forms are canonical and Mermaid is one-way output. Mermaid output is XML/CSS/SVG validated inside a ShadowRoot; the validated graph SVG and trusted sibling completion-control SVG remain separate so Mermaid styling cannot select the controls. Only explicit eligible controls are interactive.
 
-References: `.agents/plans/2026-08-08-session-dag-view.md`, `AGENTS.md`, `lib/session-dag.ts`, `lib/session-dag-store.ts`, `lib/session-dag-route.ts`, `lib/session-dag-svg.ts`, and `components/SessionDagPanel.tsx`.
+## 2026-08-10
+
+- Graphical Preview marks one existing rendered node only when its exact session ID equals `AppShell`'s selected chat session. A nonmember, completed node, null selection, hidden Preview, render replacement/failure, or unmount leaves no marker; Raw remains unchanged.
+- Selection marking resolves through the compiler's session-to-alias map and the validated render's alias-to-node map. It is a separate commit-phase DOM update, so selecting a chat does not rerender Mermaid, replace the ShadowRoot/SVG, fetch or mutate graph state, move focus, or scroll.
+- The marker is a trusted `data-session-dag-current` attribute styled inside the ShadowRoot. Generated SVG/CSS cannot pre-seed or select trusted marker/control namespaces, and nested generated CSS is refused before trusted sibling completion controls mount.
+
+References: `.agents/plans/2026-08-08-session-dag-view.md`, `.agents/plans/2026-08-10-highlight-current-dag-session.md`, `AGENTS.md`, `lib/session-dag.ts`, `lib/session-dag-store.ts`, `lib/session-dag-route.ts`, `lib/session-dag-svg.ts`, `components/SessionDagPanel.tsx`, and `components/SessionDagPreview.tsx`.

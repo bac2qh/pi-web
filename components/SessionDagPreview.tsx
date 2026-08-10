@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useDisplayPreferences } from "@/hooks/useDisplayPreferences";
 import { useTheme } from "@/hooks/useTheme";
 import {
@@ -16,11 +16,14 @@ import {
   createSessionDagCompleteLayer,
   getSessionDagControlPosition,
   prepareSessionDagSvg,
+  updateSessionDagCurrentNode,
+  type PreparedSessionDagSvg,
   type SessionDagSvgFailureStage,
 } from "@/lib/session-dag-svg";
 
 interface Props {
   active: boolean;
+  selectedSessionId: string | null;
   compiled: CompiledSessionDag | null;
   compileError: unknown;
   revision: number;
@@ -56,6 +59,7 @@ function logPreviewFailure(
 
 export function SessionDagPreview({
   active,
+  selectedSessionId,
   compiled,
   compileError,
   revision,
@@ -66,6 +70,12 @@ export function SessionDagPreview({
   const { isDark } = useTheme();
   const { transcriptFontSize } = useDisplayPreferences();
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const preparedRenderRef = useRef<{
+    compiled: CompiledSessionDag;
+    prepared: PreparedSessionDagSvg;
+  } | null>(null);
+  const markedNodeRef = useRef<SVGGElement | null>(null);
+  const currentSelectionRef = useRef({ active, selectedSessionId });
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
   const [renderStage, setRenderStage] = useState("idle");
@@ -75,8 +85,22 @@ export function SessionDagPreview({
     : "compile-failure";
 
   useEffect(() => {
+    const clearPreparedRender = () => {
+      markedNodeRef.current = updateSessionDagCurrentNode(
+        markedNodeRef.current,
+        false,
+        null,
+        null,
+        null,
+      );
+      preparedRenderRef.current = null;
+    };
     const container = containerRef.current;
-    if (!container || !active) return;
+    if (!container || !active) {
+      clearPreparedRender();
+      return;
+    }
+    clearPreparedRender();
     const renderRoot = container.shadowRoot ?? container.attachShadow({ mode: "open" });
     if (!compiled) {
       const error = compileError ?? new Error("Dependency graph compilation failed");
@@ -192,12 +216,22 @@ export function SessionDagPreview({
         failureStage = error instanceof SessionDagSvgError ? error.stage : "controls";
         throw error;
       }
+      preparedRenderRef.current = { compiled, prepared };
+      const currentSelection = currentSelectionRef.current;
+      markedNodeRef.current = updateSessionDagCurrentNode(
+        markedNodeRef.current,
+        currentSelection.active,
+        currentSelection.selectedSessionId,
+        compiled,
+        prepared,
+      );
       setRenderStage("complete");
     };
 
     render().catch((error: unknown) => {
       if (cancelled) return;
       const stage = error instanceof SessionDagSvgError ? error.stage : failureStage;
+      clearPreparedRender();
       renderRoot.replaceChildren();
       setFailure({ stage, errorClass: boundedErrorClass(error) });
       setRenderStage("failed");
@@ -212,6 +246,7 @@ export function SessionDagPreview({
 
     return () => {
       cancelled = true;
+      clearPreparedRender();
     };
   }, [
     active,
@@ -224,6 +259,27 @@ export function SessionDagPreview({
     revision,
     transcriptFontSize,
   ]);
+
+  useLayoutEffect(() => {
+    currentSelectionRef.current = { active, selectedSessionId };
+    const rendered = preparedRenderRef.current;
+    markedNodeRef.current = updateSessionDagCurrentNode(
+      markedNodeRef.current,
+      active,
+      selectedSessionId,
+      rendered?.compiled ?? null,
+      rendered?.prepared ?? null,
+    );
+    return () => {
+      markedNodeRef.current = updateSessionDagCurrentNode(
+        markedNodeRef.current,
+        false,
+        null,
+        null,
+        null,
+      );
+    };
+  }, [active, selectedSessionId]);
 
   return (
     <div className="session-dag-preview">

@@ -31,6 +31,9 @@ const UNSAFE_PROTOCOL = /(?:javascript|data|file|https?):/iu;
 const LOCAL_CSS_URL = /url\(\s*(?:"(#[A-Za-z_][A-Za-z0-9_.:-]*)"|'(#[A-Za-z_][A-Za-z0-9_.:-]*)'|(#[A-Za-z_][A-Za-z0-9_.:-]*))\s*\)/giu;
 const LOCAL_SVG_URL = /^url\(\s*#[A-Za-z_][A-Za-z0-9_.:-]*\s*\)$/u;
 const SESSION_DAG_CONTROLS_ACCESSIBLE_LABEL = "Dependency graph completion controls";
+const SESSION_DAG_TRUSTED_CLASS_PREFIX = "session-dag-";
+const SESSION_DAG_TRUSTED_ATTRIBUTE_PREFIX = "data-session-dag-";
+export const SESSION_DAG_CURRENT_NODE_ATTRIBUTE = `${SESSION_DAG_TRUSTED_ATTRIBUTE_PREFIX}current`;
 
 export const SESSION_DAG_SHADOW_STYLES = `
 :host {
@@ -49,6 +52,12 @@ export const SESSION_DAG_SHADOW_STYLES = `
   max-width: 100%;
   height: auto;
   overflow: visible;
+}
+[data-session-dag-current="true"] > .label-container {
+  fill: var(--bg-selected) !important;
+  stroke: var(--accent) !important;
+  stroke-width: 3px !important;
+  stroke-linejoin: round;
 }
 .session-dag-complete-layer {
   pointer-events: none;
@@ -95,6 +104,38 @@ export class SessionDagSvgError extends Error {
 export interface PreparedSessionDagSvg {
   svg: SVGSVGElement;
   nodeGroupsByAlias: Map<string, SVGGElement>;
+}
+
+export function hasReservedSessionDagClass(value: string): boolean {
+  return value.split(/\s+/u).some((token) => (
+    token.toLowerCase().startsWith(SESSION_DAG_TRUSTED_CLASS_PREFIX)
+  ));
+}
+
+export function hasReservedSessionDagAttribute(name: string): boolean {
+  return name.toLowerCase().startsWith(SESSION_DAG_TRUSTED_ATTRIBUTE_PREFIX);
+}
+
+export function hasNestedSessionDagStyleRules(styleRule: CSSStyleRule): boolean {
+  const nestedRules = (styleRule as CSSStyleRule & { cssRules?: CSSRuleList }).cssRules;
+  return Boolean(nestedRules?.length);
+}
+
+export function updateSessionDagCurrentNode(
+  currentNode: SVGGElement | null,
+  active: boolean,
+  selectedSessionId: string | null,
+  compiled: Pick<CompiledSessionDag, "aliasesBySessionId"> | null,
+  prepared: Pick<PreparedSessionDagSvg, "nodeGroupsByAlias"> | null,
+): SVGGElement | null {
+  currentNode?.removeAttribute(SESSION_DAG_CURRENT_NODE_ATTRIBUTE);
+  if (!active || !selectedSessionId || !compiled || !prepared) return null;
+
+  const alias = compiled.aliasesBySessionId.get(selectedSessionId);
+  const nextNode = alias ? prepared.nodeGroupsByAlias.get(alias) : undefined;
+  if (!nextNode) return null;
+  nextNode.setAttribute(SESSION_DAG_CURRENT_NODE_ATTRIBUTE, "true");
+  return nextNode;
 }
 
 export function getSessionDagNodeAlias(
@@ -196,7 +237,11 @@ export function isSessionDagStyleSelectorScoped(selectorText: string, renderId: 
       || selector.startsWith(`${rootSelector}:`)
       || selector.startsWith(`${rootSelector}[`);
     const selectorWithinRoot = selector.slice(rootSelector.length);
-    return beginsAtRoot && !/[+~]/u.test(selectorWithinRoot) && !selectorWithinRoot.includes(".session-dag-");
+    const normalizedSelector = selectorWithinRoot.toLowerCase();
+    return beginsAtRoot
+      && !/[+~]/u.test(selectorWithinRoot)
+      && !normalizedSelector.includes(SESSION_DAG_TRUSTED_CLASS_PREFIX)
+      && !normalizedSelector.includes(SESSION_DAG_TRUSTED_ATTRIBUTE_PREFIX);
   });
 }
 
@@ -229,6 +274,9 @@ function assertScopedStyleSheet(
       const styleRule = rule as CSSStyleRule;
       if (!isSessionDagStyleSelectorScoped(styleRule.selectorText, renderId)) {
         throw new SessionDagSvgError("safety", "Mermaid output contains unscoped SVG styling");
+      }
+      if (hasNestedSessionDagStyleRules(styleRule)) {
+        throw new SessionDagSvgError("safety", "Mermaid output contains unsupported SVG styling");
       }
       assertSafeCssDeclarations(styleRule.style, allowedLocalReferenceIds);
       continue;
@@ -268,6 +316,12 @@ function assertSafeSessionDagSvg(svg: SVGSVGElement, renderId: string): void {
         throw new SessionDagSvgError("safety", "Mermaid output contains interactive SVG content");
       }
       if (attribute.namespaceURI === XMLNS_NAMESPACE) continue;
+      if (attribute.localName === "class" && hasReservedSessionDagClass(attribute.value)) {
+        throw new SessionDagSvgError("safety", "Mermaid output contains a reserved SVG class");
+      }
+      if (hasReservedSessionDagAttribute(attribute.localName)) {
+        throw new SessionDagSvgError("safety", "Mermaid output contains a reserved SVG attribute");
+      }
       if (attribute.value.includes("\\")) {
         throw new SessionDagSvgError("safety", "Mermaid output contains escaped SVG content");
       }

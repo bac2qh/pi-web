@@ -1470,7 +1470,12 @@ export function AppShell() {
             hidden={activeRightPanelTabId !== RIGHT_PANEL_DAG_TAB_ID}
             style={{ height: "100%", overflow: "hidden" }}
           >
-            {dagActivated && <SessionDagPanel active={dagPanelActive} />}
+            {dagActivated && (
+              <SessionDagPanel
+                active={dagPanelActive}
+                selectedSessionId={selectedSession?.id ?? null}
+              />
+            )}
           </div>
           {fileTabs.map((fileTab, index) => {
             const selected = activeRightPanelTabId === fileTab.id;

@@ -30,6 +30,7 @@ import { SessionDagPreview } from "./SessionDagPreview";
 
 interface Props {
   active: boolean;
+  selectedSessionId: string | null;
 }
 
 type DagMode = "preview" | "raw";
@@ -90,7 +91,7 @@ function operationButtonStyle(active = false): React.CSSProperties {
   };
 }
 
-export function SessionDagPanel({ active }: Props) {
+export function SessionDagPanel({ active, selectedSessionId }: Props) {
   const { subscribeSessionsChanged } = useGlobalStatus();
   const [graphState, setGraphState] = useState<SessionDagState | null>(null);
   const graphStateRef = useRef<SessionDagState | null>(null);
@@ -497,6 +498,7 @@ export function SessionDagPanel({ active }: Props) {
           >
             <SessionDagPreview
               active={active && mode === "preview"}
+              selectedSessionId={selectedSessionId}
               compiled={compilation.compiled}
               compileError={compilation.error}
               revision={graphState.revision}
