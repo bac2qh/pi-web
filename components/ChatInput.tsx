@@ -2,7 +2,7 @@
 
 import { scaledMenuFontSize } from "@/lib/display-preferences";
 import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
-import { isExactCloneCommand, type BuiltinSlashCommandResult, type CompactResultInfo, type QueuedMessages, type SlashCommandInfo } from "@/hooks/useAgentSession";
+import { isExactCloneCommand, isExactSideCommand, type BuiltinSlashCommandResult, type CompactResultInfo, type QueuedMessages, type SlashCommandInfo } from "@/hooks/useAgentSession";
 import { clearDraft, getDraft, setDraft, type ChatDraftImage } from "@/lib/draft-store";
 import type { OpenAiFastModeState } from "@/lib/openai-fast-mode-status";
 import {
@@ -31,6 +31,7 @@ interface Props {
   onFollowUp?: (message: string, images?: AttachedImage[]) => void;
   onPromptWithStreamingBehavior?: (message: string, behavior: "steer" | "followUp", images?: AttachedImage[]) => void;
   isStreaming: boolean;
+  isSideSession?: boolean;
   model?: { provider: string; modelId: string } | null;
   isAutoModelSelection?: boolean;
   openAiFastModeState?: OpenAiFastModeState | null;
@@ -90,9 +91,13 @@ export function isStoredDraftTheSubmittedComposer(
   ));
 }
 
+export function isExactHostDerivationCommand(value: string): boolean {
+  return isExactCloneCommand(value) || isExactSideCommand(value);
+}
+
 export function canSubmitStreamingComposer(value: string, imageCount: number): boolean {
   const message = value.trim();
-  return Boolean(message) && (imageCount === 0 || isExactCloneCommand(message));
+  return Boolean(message) && (imageCount === 0 || isExactHostDerivationCommand(message));
 }
 
 function mergeFailedSubmissionText(submitted: string, newer: string): string {
@@ -192,6 +197,7 @@ type SlashCommandPaletteItem = SlashCommandInfo | {
 type SlashCommandSource = SlashCommandPaletteItem["source"];
 
 const BUILTIN_SLASH_COMMANDS: SlashCommandPaletteItem[] = [
+  { name: "side", description: "Open a durable side conversation from a safe live snapshot", source: "builtin" },
   { name: "clone", description: "Duplicate the current active branch", source: "builtin" },
   { name: "compact", description: "Compress context, optionally with instructions", source: "builtin" },
   { name: "reload", description: "Reload extensions, skills, prompts, and tools", source: "builtin" },
@@ -286,6 +292,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onPromptWithStreamingBehavior,
   draftKey,
   cwd,
+  isSideSession = false,
 }: Props, ref) {
   const isMobile = useIsMobile();
   const [value, setValue] = useState(() => (draftKey ? getDraft(draftKey)?.value ?? "" : ""));
@@ -516,10 +523,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     if (isStreaming) return;
     onAudioUnlock?.();
 
-    // Exact clone is always a host command, even when images are attached.
+    // Exact host derivation commands stay in Pi Web even with images attached.
     // Only clear the composer if it still contains the submitted state when
     // the asynchronous command finishes.
-    if (isExactCloneCommand(msg)) {
+    if (isExactHostDerivationCommand(msg)) {
       if (!onBuiltinCommand) return;
       const submittedValue = value;
       const submittedImages = attachedImages;
@@ -623,10 +630,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const filteredSlashCommands = (() => {
     if (slashQuery === null) return [];
-    const commands = [...(isStreaming ? [] : BUILTIN_SLASH_COMMANDS), ...(slashCommands ?? [])];
+    const visibleBuiltins = BUILTIN_SLASH_COMMANDS.filter((command) => (
+      (!isStreaming || command.name === "side")
+      && (!isSideSession || (command.name !== "side" && command.name !== "clone"))
+    ));
+    const commands = [...visibleBuiltins, ...(slashCommands ?? [])];
     return [...commands]
       .filter((command) => {
         const name = command.name.toLowerCase();
+        if (isSideSession && (name === "side" || name === "clone")) return false;
         const description = command.description?.toLowerCase() ?? "";
         return name.includes(slashQuery) || description.includes(slashQuery);
       })
@@ -813,10 +825,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     if (!msg && !attachedImages.length) return;
     onAudioUnlock?.();
 
-    // Clone must stay in the web host even while the composer is offering
+    // Host derivation commands stay local while the composer is offering
     // steer/follow-up delivery controls or images are attached. Errors and
     // newer composer edits intentionally preserve input.
-    if (isExactCloneCommand(msg)) {
+    if (isExactHostDerivationCommand(msg)) {
       if (!onBuiltinCommand) return;
       const submittedValue = value;
       const submittedImages = attachedImages;

@@ -111,7 +111,7 @@ async function flushMountedWork() {
   });
 }
 
-async function mountExistingSessionHook(fetchImpl) {
+async function mountExistingSessionHook(fetchImpl, options = {}) {
   const previous = {
     window: globalThis.window,
     document: globalThis.document,
@@ -135,6 +135,8 @@ async function mountExistingSessionHook(fetchImpl) {
       sessionViewTransport: views,
       newScreenGeneration: 1,
       newSessionCwd: null,
+      onSessionSided: options.onSessionSided,
+      onSideSessionChange: options.onSideSessionChange,
     });
     return React.createElement("span", null, "hook");
   }
@@ -155,6 +157,180 @@ async function mountExistingSessionHook(fetchImpl) {
     },
   };
 }
+
+test("mounted side command coalesces creation, selects the child, and reports canonical side metadata", async () => {
+  const sided = [];
+  const sideMetadata = [];
+  const sideRequests = [];
+  let resolveSide;
+  const sideResponse = new Promise((resolve) => { resolveSide = resolve; });
+  const mounted = await mountExistingSessionHook(async (input, init = {}) => {
+    const url = String(input);
+    if (url.startsWith("/api/sessions/synthetic/state")) {
+      return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    }
+    if (url.startsWith("/api/sessions/synthetic?")) {
+      return Response.json({
+        sessionId: "synthetic", filePath: "", tree: [], leafId: "post-boundary",
+        sideSession: { markerEntryId: "boundary", parentSessionId: "parent-session" },
+        context: { messages: [], entryIds: [], thinkingLevel: "off", model: null },
+      });
+    }
+    if (url.startsWith("/api/models")) {
+      return Response.json({ models: {}, defaultModel: null, modelList: [] });
+    }
+    if (url === "/api/agent/synthetic" && init.method === "POST") {
+      const command = JSON.parse(String(init.body));
+      if (command.type === "side") {
+        sideRequests.push(command);
+        await sideResponse;
+        return Response.json({ success: true, data: { created: true, newSessionId: "side-child" } });
+      }
+      if (command.type === "get_commands") return Response.json({ success: true, data: { commands: [] } });
+      if (command.type === "get_tools") return Response.json({ success: true, data: { tools: [] } });
+      throw new Error(`unexpected command ${command.type}`);
+    }
+    if (url === "/api/agent/synthetic") {
+      return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    }
+    throw new Error(`unexpected ${url}`);
+  }, {
+    onSessionSided: (id) => sided.push(id),
+    onSideSessionChange: (value) => sideMetadata.push(value),
+  });
+  try {
+    assert.deepEqual(sideMetadata.at(-1), { markerEntryId: "boundary", parentSessionId: "parent-session" });
+    let first;
+    let second;
+    await React.act(async () => {
+      first = mounted.latest().handleBuiltinSlashCommand("/side");
+      second = mounted.latest().handleBuiltinSlashCommand("  /side  ");
+      await Promise.resolve();
+    });
+    assert.equal(sideRequests.length, 1);
+    resolveSide();
+    let results;
+    await React.act(async () => { results = await Promise.all([first, second]); });
+    assert.deepEqual(results, [
+      { handled: true, message: "Side conversation created" },
+      { handled: true, message: "Side conversation created" },
+    ]);
+    assert.deepEqual(sided, ["side-child"]);
+  } finally {
+    await mounted.cleanup();
+  }
+});
+
+test("a delayed side creation cannot steal a newer same-session branch selection", async () => {
+  const sided = [];
+  let resolveSide;
+  const sideResponse = new Promise((resolve) => { resolveSide = resolve; });
+  const mounted = await mountExistingSessionHook(async (input, init = {}) => {
+    const url = String(input);
+    if (url.startsWith("/api/sessions/synthetic/context?")) {
+      return Response.json({
+        context: { messages: [], entryIds: [], thinkingLevel: "off", model: null },
+      });
+    }
+    if (url.startsWith("/api/sessions/synthetic/state")) {
+      return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    }
+    if (url.startsWith("/api/sessions/synthetic?")) {
+      return Response.json({
+        sessionId: "synthetic", filePath: "", tree: [], leafId: "initial-leaf",
+        sideSession: null,
+        context: { messages: [], entryIds: [], thinkingLevel: "off", model: null },
+      });
+    }
+    if (url.startsWith("/api/models")) {
+      return Response.json({ models: {}, defaultModel: null, modelList: [] });
+    }
+    if (url === "/api/agent/synthetic" && init.method === "POST") {
+      const command = JSON.parse(String(init.body));
+      if (command.type === "side") {
+        await sideResponse;
+        return Response.json({ success: true, data: { created: true, newSessionId: "side-child" } });
+      }
+      if (command.type === "navigate_tree") {
+        return Response.json({ success: true, data: { cancelled: false } });
+      }
+      if (command.type === "get_commands") return Response.json({ success: true, data: { commands: [] } });
+      if (command.type === "get_tools") return Response.json({ success: true, data: { tools: [] } });
+      throw new Error(`unexpected command ${command.type}`);
+    }
+    if (url === "/api/agent/synthetic") {
+      return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    }
+    throw new Error(`unexpected ${url}`);
+  }, {
+    onSessionSided: (id) => sided.push(id),
+  });
+  try {
+    let side;
+    await React.act(async () => {
+      side = mounted.latest().handleBuiltinSlashCommand("/side");
+      await Promise.resolve();
+    });
+    await React.act(async () => {
+      await mounted.latest().handleNavigate("newer-leaf");
+    });
+    resolveSide();
+    let result;
+    await React.act(async () => { result = await side; });
+    assert.deepEqual(result, { handled: true, message: "Side conversation created" });
+    assert.deepEqual(sided, []);
+    assert.equal(mounted.latest().activeLeafId, "newer-leaf");
+  } finally {
+    await mounted.cleanup();
+  }
+});
+
+test("a delayed side root response cannot publish metadata after the originating hook unmounts", async () => {
+  const previous = {
+    window: globalThis.window,
+    document: globalThis.document,
+    act: globalThis.IS_REACT_ACT_ENVIRONMENT,
+  };
+  const published = [];
+  let resolveRoot;
+  const rootResponse = new Promise((resolve) => { resolveRoot = resolve; });
+  const mounted = await mountExistingSessionHook(async (input, init = {}) => {
+    const url = String(input);
+    if (url.startsWith("/api/sessions/synthetic/state")) {
+      return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    }
+    if (url.startsWith("/api/sessions/synthetic?")) return rootResponse;
+    if (url.startsWith("/api/models")) return Response.json({ models: {}, defaultModel: null, modelList: [] });
+    if (url === "/api/agent/synthetic" && init.method === "POST") {
+      const command = JSON.parse(String(init.body));
+      if (command.type === "get_commands") return Response.json({ success: true, data: { commands: [] } });
+      if (command.type === "get_tools") return Response.json({ success: true, data: { tools: [] } });
+    }
+    if (url === "/api/agent/synthetic") {
+      return Response.json({ running: false, state: { isStreaming: false, isPromptRunning: false, isCompacting: false } });
+    }
+    throw new Error(`unexpected ${url}`);
+  }, {
+    onSideSessionChange: (value, sessionId) => published.push([value, sessionId]),
+  });
+  await mounted.cleanup();
+  globalThis.window = mounted.dom.window;
+  globalThis.document = mounted.dom.document;
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  try {
+    resolveRoot(Response.json({
+      sessionId: "synthetic", filePath: "", tree: [], leafId: "post-boundary",
+      sideSession: { markerEntryId: "boundary", parentSessionId: "parent" },
+      context: { messages: [], entryIds: [], thinkingLevel: "off", model: null },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(published, [[null, "synthetic"]]);
+  } finally {
+    globalThis.window = previous.window;
+    globalThis.document = previous.document;
+    globalThis.IS_REACT_ACT_ENVIRONMENT = previous.act;
+  }
+});
 
 test("mounted mobile ChatInput keeps the non-interactive Fast badge anchored while model selection is disabled", async () => {
   const previous = { window: globalThis.window, document: globalThis.document, act: globalThis.IS_REACT_ACT_ENVIRONMENT };

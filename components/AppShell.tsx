@@ -57,7 +57,7 @@ import {
   RIGHT_PANEL_DAG_TAB_ID,
   activeRightPanelTabAfterFileClose,
 } from "@/lib/right-panel-tabs";
-import type { SessionInfo, SessionTreeNode } from "@/lib/types";
+import type { SessionInfo, SessionTreeNode, SideSessionViewInfo } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import { useSessionViewTransport } from "./SessionRegistryProvider";
@@ -87,7 +87,12 @@ export function AppShell() {
   const isNarrowFileViewerViewport = useIsNarrowFileViewerViewport();
   const sessionViews = useSessionViewTransport();
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
+  const selectedSessionIdRef = useRef<string | null>(null);
+  selectedSessionIdRef.current = selectedSession?.id ?? null;
   const [selectedSessionBinding, setSelectedSessionBinding] = useState<SessionViewBinding | null>(null);
+  const [selectedSideSession, setSelectedSideSession] = useState<SideSessionViewInfo | null>(null);
+  const [returningToParent, setReturningToParent] = useState(false);
+  const [returnParentError, setReturnParentError] = useState<string | null>(null);
   const newScreenGenerationRef = useRef(1);
   // When user clicks +, we only store the cwd — no fake session id
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
@@ -458,6 +463,9 @@ export function AppShell() {
     newScreenGenerationRef.current += 1;
     setSelectedSessionBinding(binding);
     setNewSessionCwd(null);
+    setSelectedSideSession(null);
+    setReturningToParent(false);
+    setReturnParentError(null);
     setSelectedSession(session);
     setSessionKey((k) => k + 1);
     setSystemPrompt(null);
@@ -480,6 +488,9 @@ export function AppShell() {
     sessionViews.select(null);
     newScreenGenerationRef.current += 1;
     setSelectedSessionBinding(null);
+    setSelectedSideSession(null);
+    setReturningToParent(false);
+    setReturnParentError(null);
     setSelectedSession(null);
     setNewSessionCwd(cwd);
     setSessionKey((k) => k + 1);
@@ -507,7 +518,7 @@ export function AppShell() {
       .then((d) => {
         const full = d?.sessions.find((s) => s.id === sessionId);
         if (!full) return;
-        setSelectedSession((prev) => (prev && prev.id === sessionId && !prev.projectRoot ? full : prev));
+        setSelectedSession((prev) => (prev?.id === sessionId ? full : prev));
       })
       .catch(() => {});
   }, []);
@@ -538,6 +549,9 @@ export function AppShell() {
     const binding = sessionViews.prepareSelection(newSessionId);
     newScreenGenerationRef.current += 1;
     setSelectedSessionBinding(binding);
+    setSelectedSideSession(null);
+    setReturningToParent(false);
+    setReturnParentError(null);
     setRefreshKey((k) => k + 1);
     setSessionKey((k) => k + 1);
     setNewSessionCwd(null);
@@ -552,6 +566,43 @@ export function AppShell() {
   const handleSessionCloned = useCallback(() => {
     setRefreshKey((k) => k + 1);
   }, []);
+
+  const handleSessionSided = useCallback((newSessionId: string) => {
+    handleSessionForked(newSessionId);
+  }, [handleSessionForked]);
+
+  const handleSideSessionChange = useCallback((sideSession: SideSessionViewInfo | null, sessionId: string | null) => {
+    if (selectedSessionIdRef.current !== sessionId) return;
+    setSelectedSideSession(sideSession);
+    if (sideSession) setReturnParentError(null);
+  }, []);
+
+  const handleReturnToParent = useCallback(async () => {
+    if (!selectedSession || !selectedSideSession?.parentSessionId || returningToParent || returnParentError) return;
+    const sourceSessionId = selectedSession.id;
+    const parentSessionId = selectedSideSession.parentSessionId;
+    const generation = newScreenGenerationRef.current;
+    setReturningToParent(true);
+    setReturnParentError(null);
+    try {
+      const response = await fetch("/api/sessions");
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const listing = await response.json() as { sessions: SessionInfo[] };
+      if (generation !== newScreenGenerationRef.current || selectedSession.id !== sourceSessionId) return;
+      const parent = listing.sessions.find((candidate) => candidate.id === parentSessionId);
+      if (!parent) {
+        setReturnParentError("Parent session is unavailable");
+        return;
+      }
+      handleSelectSession(parent);
+    } catch {
+      if (generation === newScreenGenerationRef.current && selectedSession.id === sourceSessionId) {
+        setReturnParentError("Parent session is unavailable");
+      }
+    } finally {
+      if (generation === newScreenGenerationRef.current) setReturningToParent(false);
+    }
+  }, [handleSelectSession, returnParentError, returningToParent, selectedSession, selectedSideSession]);
 
   const handleInitialRestoreDone = useCallback(() => {
     setInitialSessionRestored(true);
@@ -928,6 +979,40 @@ export function AppShell() {
           </button>
           {showChat && (
             <div style={{ display: "flex", alignItems: "stretch", height: "100%" }}>
+              {selectedSideSession && (
+                <button
+                  onClick={handleReturnToParent}
+                  disabled={!selectedSideSession.parentSessionId || returningToParent || returnParentError !== null}
+                  title={returnParentError ?? (selectedSideSession.parentSessionId
+                    ? "Return to the parent session without changing this side conversation"
+                    : "Parent session is unavailable")}
+                  aria-label={returnParentError ?? (selectedSideSession.parentSessionId
+                    ? "Return to parent session"
+                    : "Parent session is unavailable")}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    height: "100%",
+                    padding: "0 12px",
+                    background: "none",
+                    border: "none",
+                    borderTop: "2px solid transparent",
+                    borderRight: "1px solid var(--border)",
+                    color: selectedSideSession.parentSessionId && !returnParentError ? "var(--accent)" : "var(--text-dim)",
+                    cursor: selectedSideSession.parentSessionId && !returningToParent && !returnParentError ? "pointer" : "not-allowed",
+                    opacity: selectedSideSession.parentSessionId && !returnParentError ? 1 : 0.55,
+                    flexShrink: 0,
+                    fontSize: scaledMenuFontSize(11),
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M19 12H5" /><path d="m12 19-7-7 7-7" />
+                  </svg>
+                  {!isMobile && <span>{returnParentError ?? (returningToParent ? "Returning…" : "Return to parent")}</span>}
+                </button>
+              )}
               <button
                 onClick={handleViewFullHistory}
                 disabled={!selectedSession}
@@ -1371,6 +1456,8 @@ export function AppShell() {
               onSessionCreated={handleSessionCreated}
               onSessionForked={handleSessionForked}
               onSessionCloned={handleSessionCloned}
+              onSessionSided={handleSessionSided}
+              onSideSessionChange={handleSideSessionChange}
               modelsRefreshKey={modelsRefreshKey}
               chatInputRef={chatInputRef}
               onBranchDataChange={handleBranchDataChange}

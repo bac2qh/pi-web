@@ -9,7 +9,7 @@ const jiti = createJiti(import.meta.url, {
   jsx: { runtime: "automatic" },
   tsconfigPaths: true,
 });
-const { isExactCloneCommand } = await jiti.import("../hooks/useAgentSession.ts");
+const { isExactCloneCommand, isExactSideCommand } = await jiti.import("../hooks/useAgentSession.ts");
 const {
   ChatInput,
   canSubmitStreamingComposer,
@@ -22,33 +22,39 @@ const {
   splitOpenAiFastModeStatus,
 } = await jiti.import("../lib/openai-fast-mode-status.ts");
 
-test("recognizes only the exact trimmed clone command", () => {
+test("recognizes only exact trimmed host derivation commands", () => {
   assert.equal(isExactCloneCommand("/clone"), true);
   assert.equal(isExactCloneCommand("  /clone  "), true);
   assert.equal(isExactCloneCommand("/clone later"), false);
   assert.equal(isExactCloneCommand("/clone-now"), false);
   assert.equal(isExactCloneCommand("/Clone"), false);
+  assert.equal(isExactSideCommand("/side"), true);
+  assert.equal(isExactSideCommand("  /side  "), true);
+  assert.equal(isExactSideCommand("/side question"), false);
+  assert.equal(isExactSideCommand("/side-now"), false);
+  assert.equal(isExactSideCommand("/Side"), false);
 });
 
-test("routes clone through the built-in host before image and delivery guards", async () => {
+test("routes clone and side through the built-in host before image and delivery guards", async () => {
   const source = await readFile(new URL("./ChatInput.tsx", import.meta.url), "utf8");
   assert.match(source, /name: "clone", description: "Duplicate the current active branch"/);
+  assert.match(source, /name: "side", description: "Open a durable side conversation from a safe live snapshot"/);
 
   const idleSource = source.slice(
     source.indexOf("const handleSend"),
     source.indexOf("const slashQuery"),
   );
-  const idleCloneIndex = idleSource.indexOf("isExactCloneCommand(msg)");
-  assert.ok(idleCloneIndex >= 0);
-  assert.ok(idleSource.indexOf("if (!attachedImages.length && msg.startsWith", idleCloneIndex) > idleCloneIndex);
-  assert.ok(idleSource.indexOf("onSend(msg", idleCloneIndex) > idleCloneIndex);
+  const idleDerivationIndex = idleSource.indexOf("isExactHostDerivationCommand(msg)");
+  assert.ok(idleDerivationIndex >= 0);
+  assert.ok(idleSource.indexOf("if (!attachedImages.length && msg.startsWith", idleDerivationIndex) > idleDerivationIndex);
+  assert.ok(idleSource.indexOf("onSend(msg", idleDerivationIndex) > idleDerivationIndex);
 
   const queuedSource = source.slice(
     source.indexOf("const sendQueued"),
     source.indexOf("const getNextSlashIndex"),
   );
-  const queuedCloneIndex = queuedSource.indexOf("isExactCloneCommand(msg)");
-  assert.ok(queuedCloneIndex >= 0);
+  const queuedDerivationIndex = queuedSource.indexOf("isExactHostDerivationCommand(msg)");
+  assert.ok(queuedDerivationIndex >= 0);
   for (const laterGuardOrDelivery of [
     "if (attachedImages.length) return",
     "onPromptWithStreamingBehavior(msg",
@@ -56,18 +62,20 @@ test("routes clone through the built-in host before image and delivery guards", 
     "onFollowUp(msg",
   ]) {
     assert.ok(
-      queuedSource.indexOf(laterGuardOrDelivery, queuedCloneIndex) > queuedCloneIndex,
-      `${laterGuardOrDelivery} must follow the clone host guard`,
+      queuedSource.indexOf(laterGuardOrDelivery, queuedDerivationIndex) > queuedDerivationIndex,
+      `${laterGuardOrDelivery} must follow the host derivation guard`,
     );
   }
   assert.match(queuedSource, /isSubmittedComposerStateUnchanged\(/);
 });
 
-test("allows exact clone through streaming controls even with attached images", () => {
+test("allows exact clone and side through streaming controls even with attached images", () => {
   assert.equal(canSubmitStreamingComposer("normal message", 0), true);
   assert.equal(canSubmitStreamingComposer("normal message", 1), false);
   assert.equal(canSubmitStreamingComposer("  /clone  ", 1), true);
+  assert.equal(canSubmitStreamingComposer("  /side  ", 1), true);
   assert.equal(canSubmitStreamingComposer("/clone later", 1), false);
+  assert.equal(canSubmitStreamingComposer("/side question", 1), false);
   assert.equal(canSubmitStreamingComposer("", 0), false);
 });
 
@@ -90,12 +98,23 @@ test("clone identity stays guarded while ordinary prompts detach before pending 
   assert.match(promptSubmission, /pending\.images\.forEach\(revokeImagePreview\)/);
 });
 
-test("maps clone results before new-session creation and coalesces local submissions", async () => {
+test("maps clone and side results before new-session creation and coalesces local submissions", async () => {
   const source = await readFile(new URL("../hooks/useAgentSession.ts", import.meta.url), "utf8");
   const builtinSource = source.slice(source.indexOf("const handleBuiltinSlashCommand"));
+  assert.ok(builtinSource.indexOf('if (commandName === "side")') < builtinSource.indexOf("await ensureNewSession()"));
   assert.ok(builtinSource.indexOf('if (commandName === "clone")') < builtinSource.indexOf("await ensureNewSession()"));
+  assert.match(builtinSource, /sideInFlightRef\.current/);
   assert.match(builtinSource, /cloneInFlightRef\.current/);
   for (const message of [
+    "Side conversation created",
+    "Nothing safe to copy into a side conversation yet",
+    "Session is no longer available",
+    "Could not create side conversation",
+  ]) {
+    assert.ok(builtinSource.includes(message), `missing side result message: ${message}`);
+  }
+  for (const message of [
+    "Side conversations cannot be cloned",
     "Wait for the current run to finish before cloning",
     "Nothing to clone yet",
     "Session is no longer available",
@@ -204,7 +223,7 @@ test("model selector keeps every Fast label visible, accessible, and anchored wh
   assert.match(source, /width: isMobile \? "100%" : undefined/);
 });
 
-test("threads clone success through refresh-only callback wiring", async () => {
+test("threads clone refresh and side selection through distinct callback wiring", async () => {
   const [hookSource, windowSource, shellSource] = await Promise.all([
     readFile(new URL("../hooks/useAgentSession.ts", import.meta.url), "utf8"),
     readFile(new URL("./ChatWindow.tsx", import.meta.url), "utf8"),
@@ -212,13 +231,19 @@ test("threads clone success through refresh-only callback wiring", async () => {
   ]);
 
   assert.match(hookSource, /onSessionCloned\?\.\(\)/);
-  assert.match(windowSource, /onSessionForked, onSessionCloned/);
+  assert.match(hookSource, /onSessionSided\?\.\(result\.newSessionId\)/);
+  assert.match(windowSource, /onSessionForked, onSessionCloned, onSessionSided/);
   assert.match(shellSource, /const handleSessionCloned = useCallback\(\(\) => \{\s*setRefreshKey/);
+  assert.match(shellSource, /const handleSessionSided = useCallback\(\(newSessionId: string\) => \{\s*handleSessionForked\(newSessionId\)/);
   assert.match(shellSource, /onSessionCloned=\{handleSessionCloned\}/);
+  assert.match(shellSource, /onSessionSided=\{handleSessionSided\}/);
+  assert.match(shellSource, /Return to parent/);
+  assert.match(shellSource, /selectedSessionIdRef\.current !== sessionId/);
+  assert.match(hookSource, /hookMountedRef\.current && sessionIdRef\.current === sid/);
 
   const cloneCallback = shellSource.slice(
     shellSource.indexOf("const handleSessionCloned"),
-    shellSource.indexOf("const handleInitialRestoreDone"),
+    shellSource.indexOf("const handleSessionSided"),
   );
   assert.doesNotMatch(cloneCallback, /setSelectedSession|setSessionKey|router\.replace|setSidebarOpen/);
 });

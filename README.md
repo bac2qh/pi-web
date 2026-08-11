@@ -41,7 +41,7 @@ PI_WEB_NO_OPEN=1 pi-web         # useful when running as a background service
 
 - **Pick work back up**: browse previous pi conversations by project without digging through terminal history or session paths.
 - **Keep important work close**: pin sessions across projects, use the rolling ten-day Recent list, or hide unwanted fork subtrees from the sidebar and reveal them temporarily with Show hidden.
-- **Try different directions safely**: edit from an earlier message, fork before a historical prompt, or run `/clone` to copy the complete active branch.
+- **Try different directions safely**: edit from an earlier message, fork before a historical prompt, run `/clone` to copy the complete active branch, or use `/side` to open a durable investigation while the source keeps running.
 - **Work across branches**: switch Git worktrees from the sidebar so new sessions and the Explorer follow the checkout you choose.
 - **Chat beside the project**: browse files on the left and preview source, docs, images, audio, and PDFs on the right while the agent works.
 - **See session state clearly**: context usage, cost, compaction state, and system prompt details are visible from the top bar.
@@ -55,8 +55,9 @@ PI_WEB_NO_OPEN=1 pi-web         # useful when running as a background service
 - **Model config**: the Models panel reads and writes `models.json` in the pi agent directory. Model lists and defaults come from pi's config.
 - **File access**: file browsing and preview are scoped to the selected project directory and working directories that appear in sessions.
 - **Git worktrees**: see [Worktrees in pi-web](./docs/worktrees.md) for when the switcher appears, how new worktrees are created, and what removal does.
-- **Branch operations**: "Edit from here" creates a branch inside the current session file. Fork creates a child `.jsonl` from before the selected historical prompt and opens it. `/clone` creates an ordinary child session containing the complete active branch through the current position; pi-web refreshes the sidebar but stays on the source session.
-- **Clone host boundary**: `/clone` uses Pi's native session-file extraction and ancestry format, but it does not replace the live web session or emit the TUI's fork/clone extension lifecycle events.
+- **Branch operations**: "Edit from here" creates a branch inside the current session file. Fork creates a child `.jsonl` from before the selected historical prompt and opens it. `/clone` creates an ordinary child session containing the complete active branch through the current position; pi-web refreshes the sidebar but stays on the source session. Exact `/side` snapshots the latest structurally complete persisted prefix, creates and selects a named durable child, and leaves the source turn unchanged.
+- **Side conversations**: inherited context remains available to the model but is hidden from the ordinary side transcript. Use **Return to parent** or the session tree to go back; the side child remains until you explicitly Hide it. Side sessions cannot be forked or cloned and cannot create another side session. Known subagent and Start/Orchestrate launch capabilities are removed, while ordinary inspection and workspace tools remain available. **Full history** intentionally shows the complete native session file, including inherited context.
+- **Clone host boundary**: `/clone` and `/side` use Pi's native session-file extraction and ancestry format, but neither replaces the live source web session nor emits the TUI's fork/clone extension lifecycle events.
 
 ## Development
 

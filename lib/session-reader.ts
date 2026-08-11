@@ -10,6 +10,7 @@ import type { AgentMessage, SessionEntry, SessionHeader, SessionInfo, SessionCon
 import type { SessionEntry as PiSessionEntry, SessionInfo as PiSessionInfo } from "@earendil-works/pi-coding-agent";
 import { normalizeToolCalls } from "./normalize";
 import { resolveProject, type ProjectInfo } from "./worktree";
+import { projectSideSessionContext, type SideSessionMetadata } from "./side-session";
 
 export { getAgentDir };
 
@@ -218,7 +219,11 @@ export function getSessionEntries(filePath: string): SessionEntry[] {
 export function buildSessionContext(
   entries: SessionEntry[],
   leafId?: string | null,
-  options: { deferThinking?: boolean; deferToolResultImages?: boolean } = {},
+  options: {
+    deferThinking?: boolean;
+    deferToolResultImages?: boolean;
+    sideSession?: SideSessionMetadata;
+  } = {},
 ): SessionContext {
   const byId = new Map<string, SessionEntry>();
   for (const e of entries) byId.set(e.id, e);
@@ -245,12 +250,15 @@ export function buildSessionContext(
     }
   }
 
-  return {
+  const context: SessionContext = {
     messages,
     entryIds,
     thinkingLevel: piCtx.thinkingLevel,
     model: piCtx.model,
   };
+  return options.sideSession
+    ? projectSideSessionContext(context, entries, options.sideSession)
+    : context;
 }
 
 function parseEntryTimestamp(timestamp: string): number | undefined {

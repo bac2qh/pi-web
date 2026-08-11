@@ -83,7 +83,8 @@ lib/
   pi-types.ts          local structural types for pi SDK objects
   rpc-manager.ts      AgentSessionWrapper + registry + startRpcSession
   hosted-implementation-session.ts  process-local Start/Orchestrate host capability
-  session-clone.ts    disposable native active-branch extraction for /clone
+  session-clone.ts    disposable native active-branch extraction for /clone and /side
+  side-session.ts     strict side cutoff/marker/projection/capability policy
   session-reader.ts   SessionManager wrappers + path cache + buildSessionContext adapter
   session-dag.ts      strict dependency-graph model, reducer, history, and Mermaid compiler
   session-dag-store.ts locked atomic pi-web-session-dag.json persistence
@@ -127,7 +128,7 @@ components/
   TabBar.tsx          permanent DAG + closable file right-panel tabs
 
 hooks/
-  useAgentSession.ts  messages + projected WebSocket effects + HTTP reconciliation + fork/clone/navigate logic
+  useAgentSession.ts  messages + projected WebSocket effects + HTTP reconciliation + fork/clone/side/navigate logic
   useAudio.ts         completion sound + browser AudioContext unlock
   useDragDrop.ts      shared drag/drop state
   useIsMobile.ts      responsive breakpoint hook
@@ -170,15 +171,19 @@ hooks/
 - Hosted registration invalidates ordinary session discovery and advances a process-global `sessions_changed` generation over the page-global `running` WebSocket. Initial and reconnected sockets replay the generation; the sidebar consumes it only after the latest `/api/sessions` load succeeds, retries failed generations on replay, and ignores stale overlapping responses without changing selection or URL.
 - Capability absence is the detached-print compatibility boundary in the launcher repository. A present invalid or failing capability never falls back because acceptance may be ambiguous.
 
-### Fork and clone wrapper lifecycles
+### Fork, clone, and side wrapper lifecycles
 - Contextual **Fork** reopens the source on a disposable `SessionManager`, extracts the path before the selected user prompt, caches the new child, and then awaits shared source shutdown because the UI immediately transitions to the child. It does not mutate the live manager with `createBranchedSession()`.
 - `/clone` first requires the browser's displayed leaf to match the live manager leaf, then calls `createBranchedSession()` on a separately reopened disposable manager. It keeps the source wrapper alive and the UI on the source; only the ordinary session-list cache/refresh path changes.
-- Web clone deliberately does not emit Pi TUI replacement events (`session_before_fork`, `session_shutdown`, or clone `session_start`). File contents and `parentSession` ancestry remain native Pi behavior.
-- Each prompt claims its own running count before awaiting extension binding, so overlapping accepted prompts cannot be overtaken by clone. Compaction is claimed before its native async call for the same reason. Exact `/clone` is also intercepted before image or streaming steer/follow-up delivery.
+- Exact `/side` captures one live-manager branch snapshot during either active or idle work, removes an unresolved assistant tool-call batch with all partial results, and extracts the latest prefix containing an assistant message. It transactionally appends one targeted hidden boundary and `side-conversation-<UTC timestamp>` name before publication, selects the child, and leaves the source wrapper/run unchanged.
+- A valid targeted side boundary is model-visible but excluded with all inherited entries from ordinary root/context/tree presentation. Side compaction summaries render as a generic notice; **Full history** intentionally remains the complete native-file view. **Return to parent** performs ordinary selection and never hides or deletes the durable side child.
+- Side wrappers are terminal Pi-Web derivation nodes: direct `/side`, `/clone`, and Fork are refused; same-file navigation is limited to marker descendants. Before service creation, whole extensions registering `subagent` or Start/Open/Orchestrate implementation commands are filtered, known delegation tools are excluded defensively, and the mandatory side policy is appended across reloads and tools-off mode. Ordinary workspace tools remain available.
+- Web clone/side deliberately do not emit Pi TUI replacement events (`session_before_fork`, `session_shutdown`, or clone `session_start`). File contents and `parentSession` ancestry remain native Pi behavior.
+- Each prompt claims its own running count before awaiting extension binding, so overlapping accepted prompts cannot be overtaken by clone. Compaction is claimed before its native async call for the same reason. Exact `/clone` and `/side` are intercepted before image or streaming steer/follow-up delivery.
 
-### Three branching operations — don't confuse them
+### Four branching operations — don't confuse them
 - **Fork / New session** (button on a historical user message): creates a child `.jsonl` from before that prompt and selects it.
 - **Clone** (`/clone`): creates a child `.jsonl` containing the complete displayed active branch through its current leaf, refreshes the sidebar, and leaves the source selected.
+- **Side conversation** (`/side`): creates and selects a durable child from the latest structurally safe invocation-time prefix while the source continues; inherited context is hidden from ordinary side presentation.
 - **In-session branch / Edit from here** (historical user message / BranchNavigator): calls `navigate_tree` within the same file. Multiple entries share the same `parentId`. Switching between them calls `/api/sessions/[id]/context?leafId=`.
 
 ### Session parent metadata and removal

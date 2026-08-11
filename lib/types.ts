@@ -288,6 +288,11 @@ export interface SessionInfo {
   worktreeBranch?: string;
 }
 
+export interface SideSessionViewInfo {
+  markerEntryId: string;
+  parentSessionId: string | null;
+}
+
 export interface SessionContext {
   messages: AgentMessage[];
   entryIds: string[]; // parallel to messages — the session entry id for each message

@@ -3,7 +3,7 @@
 import { scaledMenuFontSize } from "@/lib/display-preferences";
 import { registerAbortHandler } from "@/hooks/useKeyboardShortcuts";
 import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import type { AgentMessage, AssistantContentBlock, AssistantMessage, ExtensionUiRequest, SessionInfo, SessionTreeNode, ToolResultMessage } from "@/lib/types";
+import type { AgentMessage, AssistantContentBlock, AssistantMessage, ExtensionUiRequest, SessionInfo, SessionTreeNode, SideSessionViewInfo, ToolResultMessage } from "@/lib/types";
 import { normalizeCustomPanelLines, parseAnsiLine } from "@/lib/ansi";
 import { countToolCallBlocks, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
 import type { FileOpenOptions } from "@/lib/file-links";
@@ -36,6 +36,8 @@ interface Props {
   onSessionCreated?: (session: SessionInfo, generation: number, binding: SessionViewBinding) => void;
   onSessionForked?: (newSessionId: string) => void;
   onSessionCloned?: () => void;
+  onSessionSided?: (newSessionId: string) => void;
+  onSideSessionChange?: (sideSession: SideSessionViewInfo | null, sessionId: string | null) => void;
   modelsRefreshKey?: number;
   chatInputRef?: React.RefObject<ChatInputHandle | null>;
   onBranchDataChange?: (tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void) => void;
@@ -150,7 +152,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messag
   );
 }
 
-export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, newScreenGeneration, isNewScreenCurrent, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, onSessionCloned, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile }: Props) {
+export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, newScreenGeneration, isNewScreenCurrent, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, onSessionCloned, onSessionSided, onSideSessionChange, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile }: Props) {
   const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio } = useAudio();
   const isMobile = useIsMobile();
 
@@ -176,7 +178,7 @@ export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, 
   const {
     loading, error, messages, entryIds, streamState,
     agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, toolPreset, thinkingLevel,
-    retryInfo, contextUsage, forkingEntryId,
+    retryInfo, contextUsage, forkingEntryId, sideSession,
     isCompacting, compactError, compactResult, displayModel: displayModelValue, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices, extensionDialog, extensionCustomUi, extensionStatuses, openAiFastModeState, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
@@ -193,6 +195,7 @@ export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, 
   } = useAgentSession({
     session, sessionViewBinding, sessionViewTransport, newScreenGeneration, isNewScreenCurrent,
     newSessionCwd, onAgentEnd: wrappedOnAgentEnd, onSessionCreated, onSessionForked, onSessionCloned,
+    onSessionSided, onSideSessionChange,
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen,
   });
 
@@ -316,6 +319,7 @@ export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, 
       onFollowUp={agentRunning ? handleFollowUp : undefined}
       onPromptWithStreamingBehavior={agentRunning ? handlePromptWithStreamingBehavior : undefined}
       isStreaming={agentRunning}
+      isSideSession={sideSession !== null}
       model={displayModelValue}
       isAutoModelSelection={isAutoModelSelection}
       openAiFastModeState={openAiFastModeState}
@@ -542,7 +546,7 @@ export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, 
                     cwd={messageCwd}
                     onOpenFile={onOpenFile}
                     entryId={entryIds[idx]}
-                    onFork={agentRunning || isNew || (idx === 0 && msg.role === "user") ? undefined : handleFork}
+                    onFork={sideSession || agentRunning || isNew || (idx === 0 && msg.role === "user") ? undefined : handleFork}
                     forking={forkingEntryId === entryIds[idx]}
                     onNavigate={agentRunning ? undefined : handleNavigate}
                     prevAssistantEntryId={agentRunning ? undefined : prevAssistantEntryId}

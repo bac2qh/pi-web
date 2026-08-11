@@ -7,6 +7,8 @@ import {
   buildSessionContext,
 } from "@/lib/session-reader";
 import { notifySessionListRefresh } from "@/lib/session-list-refresh";
+import { classifySideSession, projectSideSessionTree } from "@/lib/side-session";
+import type { SessionEntry, SessionTreeNode } from "@/lib/types";
 
 // BranchNavigator still traverses recursively, so keep the response tree shallow.
 const MAX_PROJECTED_TREE_DEPTH = 200;
@@ -120,13 +122,26 @@ export async function GET(
     }
 
     const sm = SessionManager.open(filePath);
-    const entries = sm.getEntries() as never;
+    const entries = sm.getEntries() as unknown as SessionEntry[];
     const leafId = sm.getLeafId();
-    const tree = projectTreeForResponse(sm.getTree());
+    const classification = classifySideSession(entries, id, leafId);
+    if (classification.kind === "invalid") {
+      return NextResponse.json({ error: `Side session unavailable: ${classification.reason}` }, { status: 409 });
+    }
+    const rawTree = sm.getTree() as unknown as SessionTreeNode[];
+    const tree = projectTreeForResponse(
+      classification.kind === "side"
+        ? projectSideSessionTree(rawTree, classification.metadata)
+        : rawTree,
+    );
     const searchParams = new URL(req.url).searchParams;
     const deferThinking = searchParams.has("deferThinking");
     const deferToolResultImages = searchParams.has("deferMedia");
-    const context = buildSessionContext(entries, leafId, { deferThinking, deferToolResultImages });
+    const context = buildSessionContext(entries, leafId, {
+      deferThinking,
+      deferToolResultImages,
+      ...(classification.kind === "side" ? { sideSession: classification.metadata } : {}),
+    });
 
     const header = sm.getHeader();
     let modified = header?.timestamp ?? new Date().toISOString();
@@ -159,6 +174,10 @@ export async function GET(
       leafId,
       tree,
       context,
+      sideSession: classification.kind === "side" ? {
+        markerEntryId: classification.metadata.markerEntryId,
+        parentSessionId: parentSessionId ?? null,
+      } : null,
     });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });

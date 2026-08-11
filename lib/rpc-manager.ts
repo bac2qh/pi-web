@@ -6,7 +6,19 @@ import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 import { invalidateModelsCache } from "./models-cache";
 import { cacheSessionPath, invalidateSessionListCache } from "./session-reader";
 import { notifySessionListRefresh } from "./session-list-refresh";
-import { cloneSessionBranch } from "./session-clone";
+import { cloneSessionBranch, createSideSessionBranch } from "./session-clone";
+import {
+  SIDE_SESSION_EXCLUDED_TOOL_NAMES,
+  SIDE_SESSION_FORBIDDEN_EXTENSION_COMMANDS,
+  SIDE_SESSION_SYSTEM_PROMPT,
+  appendSideSystemPrompt,
+  classifySideSession,
+  extensionMatchesSideSessionExclusion,
+  selectSideSessionCutoff,
+  sideConversationName,
+  sideNavigationAllowed,
+  type SideSessionMetadata,
+} from "./side-session";
 import {
   invalidateHostedImplementationCapability,
   registerHostedImplementationCapability,
@@ -132,7 +144,7 @@ export type RpcWrapperClock = Readonly<{
 }>;
 
 export const RPC_RECOGNIZED_COMMAND_TYPES = Object.freeze([
-  "prompt", "abort", "get_state", "set_model", "clone", "fork", "navigate_tree",
+  "prompt", "abort", "get_state", "set_model", "side", "clone", "fork", "navigate_tree",
   "set_thinking_level", "compact", "set_session_name", "get_session_stats",
   "get_last_assistant_text", "set_auto_compaction", "clear_queue", "steer", "follow_up",
   "get_tools", "get_commands", "set_tools", "reload", "abort_compaction",
@@ -371,16 +383,21 @@ class PlainTextTheme extends Theme {
 const PLAIN_TEXT_THEME = new PlainTextTheme();
 const CUSTOM_UI_KEYBINDINGS = new TuiKeybindingsManager(TUI_KEYBINDINGS);
 
-function withExtensionTools(session: AgentSessionLike, toolNames: string[]): string[] {
+function withExtensionTools(
+  session: AgentSessionLike,
+  toolNames: string[],
+  excludedNames: readonly string[] = [],
+): string[] {
   if (toolNames.length === 0) return [];
 
   const codingToolNames = new Set(CODING_TOOL_NAMES);
+  const excluded = new Set(excludedNames);
   const extensionToolNames = session
     .getAllTools()
     .map((t) => t.name)
-    .filter((name) => !codingToolNames.has(name));
+    .filter((name) => !codingToolNames.has(name) && !excluded.has(name));
 
-  return [...new Set([...toolNames, ...extensionToolNames])];
+  return [...new Set([...toolNames, ...extensionToolNames].filter((name) => !excluded.has(name)))];
 }
 
 // ============================================================================
@@ -447,6 +464,7 @@ export class AgentSessionWrapper {
     public readonly inner: AgentSessionLike,
     private readonly idleTimeoutMs = RPC_SESSION_IDLE_TIMEOUT_MS,
     clock: Partial<RpcWrapperClock> = {},
+    private readonly sideSession: SideSessionMetadata | null = null,
   ) {
     this.wrapperClock = {
       now: clock.now ?? Date.now,
@@ -474,6 +492,10 @@ export class AgentSessionWrapper {
 
   get sessionFile(): string {
     return this.inner.sessionFile ?? "";
+  }
+
+  getSideSessionMetadata(): SideSessionMetadata | null {
+    return this.sideSession;
   }
 
   isAlive(): boolean {
@@ -1215,8 +1237,16 @@ export class AgentSessionWrapper {
 
   private applyForcedEmptySystemPrompt(): void {
     if (this.forceEmptySystemPrompt && this.inner.agent.state) {
-      this.inner.agent.state.systemPrompt = "";
+      this.inner.agent.state.systemPrompt = this.sideSession ? SIDE_SESSION_SYSTEM_PROMPT : "";
     }
+  }
+
+  private sideTargetAllowed(targetId: string): boolean {
+    return this.sideSession === null || sideNavigationAllowed(
+      this.inner.sessionManager.getEntries() as never,
+      this.sideSession,
+      targetId,
+    );
   }
 
   private fanoutLegacyEvent(event: AgentEvent): void {
@@ -1496,7 +1526,39 @@ export class AgentSessionWrapper {
         });
       }
 
+      case "side": {
+        if (this.sideSession) return { created: false, reason: "side_session" };
+
+        const sessionManager = this.inner.sessionManager;
+        const liveLeafId = sessionManager.getLeafId();
+        if (!liveLeafId || !sessionManager.isPersisted()) {
+          return { created: false, reason: "nothing_to_clone" };
+        }
+        // The leaf and branch are captured exactly once. All cutoff analysis is
+        // pure over this immutable invocation-time snapshot.
+        const snapshotBranch = sessionManager.getBranch(liveLeafId) as never;
+        const cutoff = selectSideSessionCutoff(snapshotBranch);
+        if (cutoff.status === "unavailable") return { created: false, reason: "nothing_to_clone" };
+        if (cutoff.status === "refused") return { created: false, reason: "unsafe_snapshot" };
+
+        const sourceSessionFile = this.inner.sessionFile ?? sessionManager.getSessionFile();
+        if (!sourceSessionFile) return { created: false, reason: "missing_source" };
+        const result = createSideSessionBranch({
+          sourceSessionFile,
+          sourceSessionDir: sessionManager.getSessionDir(),
+          sourceSessionId: this.inner.sessionId,
+          cutoffId: cutoff.cutoffId,
+          name: sideConversationName(),
+        });
+        if (result.status !== "created") return { created: false, reason: result.status };
+
+        cacheSessionPath(result.newSessionId, result.newSessionFile);
+        notifySessionListRefresh();
+        return { created: true, newSessionId: result.newSessionId };
+      }
+
       case "clone": {
+        if (this.sideSession) return { created: false, reason: "side_session" };
         if (this.isRunning()) return { created: false, reason: "busy" };
 
         const activeLeafId = typeof command.activeLeafId === "string" ? command.activeLeafId : null;
@@ -1528,6 +1590,7 @@ export class AgentSessionWrapper {
       }
 
       case "fork": {
+        if (this.sideSession) return { cancelled: true, reason: "side_session" };
         const entryId = command.entryId as string;
         const sessionManager = this.inner.sessionManager;
         const currentSessionFile = this.inner.sessionFile;
@@ -1562,7 +1625,9 @@ export class AgentSessionWrapper {
       }
 
       case "navigate_tree": {
-        const result = await this.inner.navigateTree(command.targetId as string, {});
+        const targetId = command.targetId as string;
+        if (!this.sideTargetAllowed(targetId)) return { cancelled: true, reason: "side_boundary" };
+        const result = await this.inner.navigateTree(targetId, {});
         return { cancelled: result.cancelled };
       }
 
@@ -1634,7 +1699,8 @@ export class AgentSessionWrapper {
       }
 
       case "get_tools": {
-        const all: ToolInfo[] = this.inner.getAllTools();
+        const excluded = this.sideSession ? new Set<string>(SIDE_SESSION_EXCLUDED_TOOL_NAMES) : null;
+        const all: ToolInfo[] = this.inner.getAllTools().filter((tool) => !excluded?.has(tool.name));
         const active = new Set<string>(this.inner.getActiveToolNames());
         return all.map((t) => ({
           name: t.name,
@@ -1646,6 +1712,9 @@ export class AgentSessionWrapper {
       case "get_commands": {
         const commands: SlashCommandInfo[] = [];
         for (const registered of this.inner.extensionRunner.getRegisteredCommands?.() ?? []) {
+          if (this.sideSession && SIDE_SESSION_FORBIDDEN_EXTENSION_COMMANDS.includes(
+            registered.invocationName as (typeof SIDE_SESSION_FORBIDDEN_EXTENSION_COMMANDS)[number],
+          )) continue;
           commands.push({
             name: registered.invocationName,
             description: registered.description,
@@ -1675,7 +1744,11 @@ export class AgentSessionWrapper {
       case "set_tools": {
         const toolNames = command.toolNames as string[];
         this.setForceEmptySystemPrompt(toolNames.length === 0);
-        this.inner.setActiveToolsByName(withExtensionTools(this.inner, toolNames));
+        this.inner.setActiveToolsByName(withExtensionTools(
+          this.inner,
+          toolNames,
+          this.sideSession ? SIDE_SESSION_EXCLUDED_TOOL_NAMES : [],
+        ));
         this.applyForcedEmptySystemPrompt();
         return null;
       }
@@ -2151,7 +2224,7 @@ export class AgentSessionWrapper {
       newSession: async () => ({ cancelled: true }),
       fork: async () => ({ cancelled: true }),
       navigateTree: async (targetId, options) => {
-        if (!this.runtimeIsCurrent()) return { cancelled: true };
+        if (!this.runtimeIsCurrent() || !this.sideTargetAllowed(targetId)) return { cancelled: true };
         const result = await this.inner.navigateTree(targetId, { summarize: options?.summarize });
         return this.runtimeIsCurrent() ? { cancelled: result.cancelled } : { cancelled: true };
       },
@@ -2542,6 +2615,15 @@ export async function startRpcSession(
     const sessionManager = sessionFile
       ? SessionManager.open(sessionFile, undefined)
       : SessionManager.create(cwd, undefined);
+    const sideClassification = classifySideSession(
+      sessionManager.getEntries() as never,
+      sessionManager.getSessionId(),
+      sessionManager.getLeafId(),
+    );
+    if (sideClassification.kind === "invalid") {
+      throw new Error(`side_session_invalid:${sideClassification.reason}`);
+    }
+    const sideSession = sideClassification.kind === "side" ? sideClassification.metadata : null;
 
     // Determine which tools to pass based on requested toolNames.
     // Since v0.68.0, session creation expects string[] tool names instead of Tool[] instances.
@@ -2559,21 +2641,47 @@ export async function startRpcSession(
 
     // Build services first so extension-registered providers are available
     // before the SDK restores the saved model from the session file.
-    const services = await createAgentSessionServices({ cwd, agentDir });
+    const services = await createAgentSessionServices({
+      cwd,
+      agentDir,
+      ...(sideSession ? {
+        resourceLoaderOptions: {
+          extensionsOverride: (base) => {
+            const extensions = base.extensions.filter((extension) => !extensionMatchesSideSessionExclusion(extension));
+            const removedExtensions = base.extensions.length - extensions.length;
+            if (removedExtensions > 0) {
+              console.log("[pi-web] side_capability_filter", { removedExtensions });
+            }
+            return { ...base, extensions };
+          },
+          appendSystemPromptOverride: appendSideSystemPrompt,
+        },
+      } : {}),
+    });
     const { session: inner } = await createAgentSessionFromServices({
       services,
       sessionManager,
       ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
+      ...(sideSession ? { excludeTools: [...SIDE_SESSION_EXCLUDED_TOOL_NAMES] } : {}),
     });
 
     // If specific tool names were requested (non-empty), set the active tools to the
     // requested builtin coding tools PLUS all extension/package tools, so installed
     // extensions stay usable in pi-web just like in the `pi` CLI.
     if (toolNames && toolNames.length > 0) {
-      inner.setActiveToolsByName(withExtensionTools(inner, toolNames));
+      inner.setActiveToolsByName(withExtensionTools(
+        inner,
+        toolNames,
+        sideSession ? SIDE_SESSION_EXCLUDED_TOOL_NAMES : [],
+      ));
     }
 
-    const wrapper = new AgentSessionWrapper(inner);
+    const wrapper = new AgentSessionWrapper(
+      inner,
+      RPC_SESSION_IDLE_TIMEOUT_MS,
+      {},
+      sideSession,
+    );
     if (sessionFile) {
       try {
         assertExistingRpcSessionIdentity(wrapper, inner.sessionId as string, {

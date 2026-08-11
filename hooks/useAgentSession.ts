@@ -8,6 +8,7 @@ import type {
   ExtensionWidgetItem,
   SessionInfo,
   SessionTreeNode,
+  SideSessionViewInfo,
 } from "@/lib/types";
 import { sendAgentCommand } from "@/lib/agent-client";
 import {
@@ -34,6 +35,7 @@ import type {
   SessionViewTransportController,
 } from "@/lib/session-view-transport";
 import type { SessionEffectDelivery } from "@/lib/session-transport-client";
+import { SIDE_SESSION_COMPACTION_NOTICE } from "@/lib/side-session";
 
 export interface SessionData {
   sessionId: string;
@@ -46,6 +48,7 @@ export interface SessionData {
     thinkingLevel: string;
     model: { provider: string; modelId: string } | null;
   };
+  sideSession: SideSessionViewInfo | null;
 }
 
 interface StreamingState {
@@ -173,11 +176,22 @@ export function isExactCloneCommand(text: string): boolean {
   return text.trim() === "/clone";
 }
 
+export function isExactSideCommand(text: string): boolean {
+  return text.trim() === "/side";
+}
+
+type SideCommandResult =
+  | { created: true; newSessionId: string }
+  | {
+      created: false;
+      reason: "side_session" | "nothing_to_clone" | "missing_source" | "stale_cutoff" | "unsafe_snapshot" | "side_failed";
+    };
+
 type CloneCommandResult =
   | { created: true; newSessionId: string }
   | {
       created: false;
-      reason: "busy" | "nothing_to_clone" | "missing_source" | "stale_leaf" | "clone_failed";
+      reason: "side_session" | "busy" | "nothing_to_clone" | "missing_source" | "stale_leaf" | "clone_failed";
     };
 
 export interface UseAgentSessionOptions {
@@ -191,6 +205,8 @@ export interface UseAgentSessionOptions {
   onSessionCreated?: (session: SessionInfo, generation: number, binding: SessionViewBinding) => void;
   onSessionForked?: (newSessionId: string) => void;
   onSessionCloned?: () => void;
+  onSessionSided?: (newSessionId: string) => void;
+  onSideSessionChange?: (sideSession: SideSessionViewInfo | null, sessionId: string | null) => void;
   modelsRefreshKey?: number;
   chatInputRef?: React.RefObject<ChatInputHandle | null>;
   onBranchDataChange?: (tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void) => void;
@@ -446,6 +462,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const {
     session, sessionViewBinding, sessionViewTransport, newScreenGeneration, isNewScreenCurrent,
     newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, onSessionCloned,
+    onSessionSided, onSideSessionChange,
     modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen,
   } = opts;
 
@@ -533,6 +550,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const ensuringNewSessionRef = useRef<Promise<string | null> | null>(null);
   const cloneInFlightRef = useRef<Promise<BuiltinSlashCommandResult> | null>(null);
+  const sideInFlightRef = useRef<Promise<BuiltinSlashCommandResult> | null>(null);
   const newSessionPromotedRef = useRef(false);
   const promptRunIdRef = useRef(0);
   const modelChangeGenerationRef = useRef(0);
@@ -554,6 +572,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const applyProjectedEffectRef = useRef<((delivery: SessionEffectDelivery) => void) | null>(null);
 
   const setToolPresetState = opts.setToolPreset ?? setToolPreset;
+
+  useEffect(() => {
+    const mountedSessionId = session?.id ?? null;
+    return () => { onSideSessionChange?.(null, mountedSessionId); };
+  }, [onSideSessionChange, session?.id]);
 
   const applyExtensionStatusItems = useCallback((statuses: readonly ExtensionStatusItem[]) => {
     const split = splitOpenAiFastModeStatus(statuses);
@@ -729,6 +752,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         const current = currentHttpObservation(sid);
         if (current && httpReconciliationRef.current.decide(transcriptToken, current) === "accepted" && showLoading) {
           setData(null);
+          if (hookMountedRef.current && sessionIdRef.current === sid) {
+            onSideSessionChange?.(null, sid);
+          }
           setActiveLeafId(null);
           setMessages([]);
           setEntryIds([]);
@@ -758,6 +784,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       if (guardsCurrentPrompt) promptFloor.covered = true;
       setData(d);
+      if (hookMountedRef.current && sessionIdRef.current === sid) {
+        onSideSessionChange?.(d.sideSession ?? null, sid);
+      }
       setActiveLeafId(d.leafId);
       setMessages(d.context.messages);
       setEntryIds(d.context.entryIds ?? []);
@@ -859,7 +888,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (showLoading && !messagesLoaded) setLoading(false);
     }
   }, [applyAuthoritativeRuntimeFastModeState, applyExtensionStatusItems, currentHttpObservation,
-    retryFailedHttpRepair, scheduleHttpRepair]);
+    retryFailedHttpRepair, scheduleHttpRepair, onSideSessionChange]);
   loadSessionRef.current = loadSession;
 
   const loadContext = useCallback(async (sid: string, leafId: string) => {
@@ -1149,8 +1178,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       return;
     }
 
+    if (session && !data) {
+      scheduleHttpRepair("transcript");
+      return;
+    }
     promptUiGenerationRef.current += 1;
-    const completed = effect.message;
+    const completed = data?.sideSession && effect.message.role === "custom"
+      && effect.message.customType === "compaction"
+      ? { ...effect.message, content: SIDE_SESSION_COMPACTION_NOTICE }
+      : effect.message;
     if (completed.role === "user") {
       const deliveredKey = userMessageKey(completed);
       const optimisticKey = optimisticUserMessageKeyRef.current;
@@ -1166,7 +1202,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setMessages((prev) => [...prev, completed]);
     }
     dispatch({ type: "reset" });
-  }, [addNotice, opts.chatInputRef]);
+  }, [addNotice, data, opts.chatInputRef, scheduleHttpRepair, session]);
   applyProjectedEffectRef.current = applyProjectedEffect;
 
   const handlePagePromptCompletion = useCallback(() => {
@@ -1757,6 +1793,59 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       return result;
     };
 
+    if (commandName === "side") {
+      if (!isExactSideCommand(normalizedText)) return { handled: false };
+      if (sideInFlightRef.current) return sideInFlightRef.current;
+
+      const invocation = (async (): Promise<BuiltinSlashCommandResult> => {
+        const sid = sessionIdRef.current;
+        if (!sid) return complete({ handled: true, error: "Nothing safe to copy into a side conversation yet" });
+        const sourceLeafGeneration = leafGenerationRef.current;
+        try {
+          const result = await sendAgentCommand<SideCommandResult>(sid, { type: "side" });
+          if (result.created) {
+            const completed = complete({ handled: true, message: "Side conversation created" });
+            // A slow successful creation must not steal selection after the
+            // originating chat has been unmounted, replaced, or moved to a
+            // newer same-session branch/prompt intent.
+            if (hookMountedRef.current
+              && sessionIdRef.current === sid
+              && leafGenerationRef.current === sourceLeafGeneration) {
+              onSessionSided?.(result.newSessionId);
+            }
+            return completed;
+          }
+          switch (result.reason) {
+            case "side_session":
+              return complete({ handled: true, error: "Side conversations cannot create another session" });
+            case "nothing_to_clone":
+              return complete({ handled: true, error: "Nothing safe to copy into a side conversation yet" });
+            case "missing_source":
+              return complete({ handled: true, error: "Session is no longer available" });
+            case "stale_cutoff":
+              return complete({ handled: true, error: "The source snapshot changed; try again" });
+            case "unsafe_snapshot":
+              return complete({ handled: true, error: "The source snapshot is not structurally safe to copy" });
+            case "side_failed":
+            default:
+              return complete({ handled: true, error: "Could not create side conversation" });
+          }
+        } catch (error) {
+          const message = error instanceof Error && error.message === "Session not found"
+            ? "Session is no longer available"
+            : "Could not create side conversation";
+          return complete({ handled: true, error: message });
+        }
+      })();
+
+      sideInFlightRef.current = invocation;
+      try {
+        return await invocation;
+      } finally {
+        if (sideInFlightRef.current === invocation) sideInFlightRef.current = null;
+      }
+    }
+
     if (commandName === "clone") {
       if (!isExactCloneCommand(normalizedText)) return { handled: false };
       if (cloneInFlightRef.current) return cloneInFlightRef.current;
@@ -1783,6 +1872,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           }
 
           switch (result.reason) {
+            case "side_session":
+              return complete({ handled: true, error: "Side conversations cannot be cloned" });
             case "busy":
               return complete({ handled: true, error: "Wait for the current run to finish before cloning" });
             case "nothing_to_clone":
@@ -1876,7 +1967,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       if (commandName === "compact") setIsCompacting(false);
     }
-  }, [activeLeafId, addNotice, ensureNewSession, isCompacting, loadModels, loadSession, loadSlashCommands, loadTools, onSessionCloned, promoteNewSession, onSessionStatsPanelOpen]);
+  }, [activeLeafId, addNotice, ensureNewSession, isCompacting, loadModels, loadSession, loadSlashCommands, loadTools, onSessionCloned, onSessionSided, promoteNewSession, onSessionStatsPanelOpen]);
 
   // Queued (undelivered) messages live in the queue panel only; the chat gets
   // the real user message when pi delivers it (user message_end event). An
@@ -2149,7 +2240,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // State
     data, loading, error, activeLeafId, messages, entryIds, streamState,
     agentRunning, modelNames, modelList, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel,
-    retryInfo, contextUsage, systemPrompt, forkingEntryId,
+    retryInfo, contextUsage, systemPrompt, forkingEntryId, sideSession: data?.sideSession ?? null,
     isCompacting, compactError, compactResult, currentModel, displayModel, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, openAiFastModeState: displayedOpenAiFastModeState, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,

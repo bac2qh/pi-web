@@ -53,4 +53,4 @@
 
 ## 2026-08-11
 
-- Updated clone-session memory with the approved, not-yet-implemented Pi-Web-only `/side` contract: safe invocation snapshot, source isolation, durable hidden-boundary child, investigative capability restrictions, terminal derivation, Return, and explicit Full history exception.
+- Updated clone-session memory after implementing Pi-Web-only `/side`: immutable safe live snapshots, transactional durable children, source isolation, targeted hidden boundaries, filtered investigative runtimes, terminal derivation, guarded Return/selection, generic side compaction presentation, and the explicit complete Full history exception.
