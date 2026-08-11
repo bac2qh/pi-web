@@ -103,3 +103,15 @@ Plan: `.agents/plans/2026-08-11-active-session-side-conversations.md`
 **Departures from approved obligations:** None.
 
 **Implementation commit:** Pending.
+
+## Implementation Summary
+
+**Plan section:** Final validation and completed plan outcome.
+
+**Work and outcome:** Completed all five approved surfaces in implementation commit `13dec7c689c3cc595414a39fa10f2694691b0ba9`: strict snapshot cutoff and marker projection, transactional native side extraction, side runtime/capability enforcement, canonical route/live convergence, and durable client selection/Return/documentation. Independent review defects were corrected, including native label regeneration, unresolved tool batches with later conversation, direct boundary context access, real loader persistence coverage, stale metadata and same-session selection races, Return failure presentation, and child hydration/palette outcomes. The source remains non-replacing, side children are durable terminal derivation nodes, and Full history remains intentionally complete.
+
+**Validation / evidence:** Focused side/runtime/client command passed 250/250. Full repository Node command `NODE_ENV=development node --test $(find app components hooks lib -name '*.test.mjs' -print)` passed 856/856. `node_modules/.bin/tsc --noEmit`, `npm run lint`, and `git diff --check` passed. Real `startRpcSession()` tests covered startup/reload/tools-off/reopen filtering. A temporary Chrome/CDP smoke verified side creation/selection, hidden inherited presentation, Return, durable listing, ancestry, and generated naming; its temporary artifacts were removed. Follow-up server review `0598cc5f` found no blocker or fix-worthy issue; the final client race from `5f6408dd` was corrected and covered by a mounted regression. Per the approved validation strategy and repository instruction, no `next build` was run.
+
+**Departures from approved obligations:** None. The approved limitation that unrestricted `bash` is not a hostile-shell sandbox remains part of the delivered contract, not a departure.
+
+**Implementation commit:** `13dec7c689c3cc595414a39fa10f2694691b0ba9`.
