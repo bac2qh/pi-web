@@ -4,7 +4,7 @@
 
 - [Browser-local display preferences](display-preferences.md) — independent content controls and side-panel width preferences, preferred/effective constraint ownership, proportional file typography, opaque-renderer boundaries, and responsive handoff.
 - [Agent response file links](agent-response-file-links.md) — assistant-only path actions, exact-workspace containment, text-preview safety, and narrow confirmation/expansion provenance.
-- [Clone session host boundary](clone-session.md) — durable `/clone` semantics, source-stable lifecycle, concurrency guards, and native Pi extraction boundary.
+- [Clone and side-session host boundaries](clone-session.md) — durable `/clone` semantics plus the approved, not-yet-implemented `/side` snapshot, source isolation, hidden-boundary, permanence, and terminal-derivation contract.
 - [Hosted implementation sessions](hosted-implementation-sessions.md) — same-process Start/Orchestrate ownership transfer, capability/fallback boundary, cleanup, discovery, and source isolation.
 - [Running session status projection](running-session-status.md) — stable fanout publication, receipt-aware finality, delayed release, and same-ID publisher authority ordering.
 - [Dependency security and local production runtime](dependency-security.md) — durable npm exceptions, override boundaries, and rebuild requirements.

@@ -50,3 +50,7 @@
 ## 2026-08-10
 
 - Updated session-dependency-graph memory after adding the exact selected-chat marker to graphical Preview as trusted local DOM presentation state, separate from Mermaid rendering, graph state, requests, focus, scrolling, Raw, and completion controls.
+
+## 2026-08-11
+
+- Updated clone-session memory with the approved, not-yet-implemented Pi-Web-only `/side` contract: safe invocation snapshot, source isolation, durable hidden-boundary child, investigative capability restrictions, terminal derivation, Return, and explicit Full history exception.

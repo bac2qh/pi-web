@@ -12,3 +12,12 @@
 - Keep the three operations distinct: **Fork / New session** copies history before a selected historical prompt and opens the child; `/clone` copies the complete displayed active branch and stays on the source; **Edit from here** branches inside the same JSONL file.
 
 Reference: `.agents/plans/2026-07-21-clone-session.md`.
+
+## 2026-08-11
+
+- Approved a distinct Pi-Web-only `/side` contract; implementation has not started. `/side` will snapshot one invocation-time live branch, cut before any incomplete assistant tool-call batch, create a durable named native child, select it, and leave the source run unchanged.
+- The side model keeps the safe inherited prefix as reference, while ordinary chat and branch presentation begin after a targeted hidden boundary. Full history remains the explicit complete-native-file exception.
+- Side sessions are permanent ordinary tree nodes with manual Hide/Restore and a non-destructive Return-to-parent control. They are terminal for derived sessions: nested `/side`, `/clone`, and Fork are blocked, while same-file Edit from here remains allowed inside the boundary subtree.
+- Side runtimes are investigative: ordinary inspection/workspace tools remain, but known subagent and Start/Orchestrate launching extensions are removed as capabilities. Workspace mutation remains available only under the post-boundary instruction policy, not a hard filesystem sandbox.
+
+Reference: `.agents/plans/2026-08-11-active-session-side-conversations.md`.
