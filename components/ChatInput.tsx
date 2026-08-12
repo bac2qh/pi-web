@@ -1283,7 +1283,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 borderRadius: 8,
                 boxShadow: "0 -6px 20px rgba(0,0,0,0.12)",
                 overflow: "hidden",
-                maxHeight: "min(56vh, 460px)",
+                maxHeight: "min(56vh, 460px, max(72px, calc(100dvh - 216px)))",
               }}
             >
               <div
@@ -1301,7 +1301,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 <span>{slashCommandsLoading ? "Loading commands..." : `Slash commands · ${slashCommandCountLabel}`}</span>
                 <span style={{ fontFamily: "var(--font-mono)" }}>Tab / Enter</span>
               </div>
-              <div style={{ maxHeight: "calc(min(56vh, 460px) - 34px)", overflowY: "auto", padding: 10 }}>
+              <div style={{ maxHeight: "calc(min(56vh, 460px, max(72px, calc(100dvh - 216px))) - 34px)", overflowY: "auto", padding: 10 }}>
                 {!slashCommandsLoading && filteredSlashCommands.length === 0 ? (
                   <div style={{ padding: "2px 2px 4px", fontSize: scaledMenuFontSize(12), color: "var(--text-dim)" }}>
                     No extension, prompt, or skill commands found
@@ -1420,7 +1420,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   borderRadius: 8,
                   boxShadow: "0 -6px 20px rgba(0,0,0,0.12)",
                   overflow: "hidden",
-                  maxHeight: "min(48vh, 400px)",
+                  maxHeight: "min(48vh, 400px, max(72px, calc(100dvh - 216px)))",
                 }}
               >
                 <div
@@ -1442,7 +1442,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   </span>
                   <span style={{ fontFamily: "var(--font-mono)" }}>Tab / Enter</span>
                 </div>
-                <div style={{ maxHeight: "calc(min(48vh, 400px) - 34px)", overflowY: "auto", padding: 4 }}>
+                <div style={{ maxHeight: "calc(min(48vh, 400px, max(72px, calc(100dvh - 216px))) - 34px)", overflowY: "auto", padding: 4 }}>
                   {!indexLoading && atMatches.length === 0 ? (
                     <div style={{ padding: "6px 8px", fontSize: scaledMenuFontSize(12), color: "var(--text-dim)" }}>
                       {needsServerSearch && !serverResultInUse ? "Searching…" : "No matching files"}
@@ -1934,7 +1934,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     position: "absolute", bottom: "calc(100% + 6px)", right: 0,
                     zIndex: 100, background: "var(--bg)", border: "1px solid var(--border)",
                     borderRadius: 8, boxShadow: "0 -4px 16px rgba(0,0,0,0.10)",
-                    overflow: "hidden", minWidth: 180,
+                    overflowY: "auto", minWidth: 180,
+                    maxHeight: "min(56vh, 460px, max(72px, calc(100dvh - 216px)))",
                   }}>
                     {THINKING_LEVELS.filter((lvl) => {
                       if (!availableThinkingLevels) return true;

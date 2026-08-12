@@ -11,6 +11,7 @@ import type { MermaidView } from "@/lib/mermaid-display";
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
+import { EditorAdjacentExtensionWidgets, ExtensionWidgets, partitionExtensionWidgets } from "./ExtensionWidgets";
 import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAgentSession";
 import { useAudio } from "@/hooks/useAudio";
 import { useDragDrop } from "@/hooks/useDragDrop";
@@ -352,8 +353,37 @@ export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, 
     />
   );
 
-  const aboveEditorWidgets = extensionWidgets.filter((widget) => widget.placement !== "belowEditor");
-  const belowEditorWidgets = extensionWidgets.filter((widget) => widget.placement === "belowEditor");
+  const { aboveEditor: aboveEditorWidgets, belowEditor: belowEditorWidgets } = partitionExtensionWidgets(extensionWidgets);
+  const renderExtensionWidgetSlot = (
+    widgets: typeof aboveEditorWidgets,
+    placement: "aboveEditor" | "belowEditor",
+  ) => widgets.length === 0 ? null : (
+    <div
+      role="region"
+      aria-label={`Extension widgets ${placement === "aboveEditor" ? "above" : "below"} editor`}
+      tabIndex={0}
+      style={{
+        flex: "0 1 auto",
+        minHeight: 0,
+        maxHeight: "min(32dvh, 360px, max(48px, calc(100dvh - 336px)))",
+        overflowY: "auto",
+        overscrollBehavior: "contain",
+        padding: `0 ${CHAT_COLUMN_PADDING}px`,
+        paddingRight: isMobile ? CHAT_COLUMN_PADDING : CHAT_INPUT_RIGHT_PADDING,
+      }}
+    >
+      <div className="chat-column">
+        <ExtensionWidgets widgets={widgets} />
+      </div>
+    </div>
+  );
+  const editorWithExtensionWidgets = (
+    <EditorAdjacentExtensionWidgets
+      aboveEditor={renderExtensionWidgetSlot(aboveEditorWidgets, "aboveEditor")}
+      editor={chatInputElement}
+      belowEditor={renderExtensionWidgetSlot(belowEditorWidgets, "belowEditor")}
+    />
+  );
 
   if (loading) {
     return (
@@ -426,8 +456,8 @@ export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, 
       )}
 
       {isEmptyNew ? (
-        <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto py-8">
-          <div className="w-full">
+        <div className="flex flex-1 flex-col items-center overflow-y-auto py-8">
+          <div className="my-auto w-full">
             <div
               style={{
                 padding: `0 ${CHAT_COLUMN_PADDING}px`,
@@ -461,7 +491,7 @@ export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, 
                 <NoticeShelf notices={notices} align="right" />
               </div>
             </div>
-            {chatInputElement}
+            {editorWithExtensionWidgets}
           </div>
         </div>
       ) : (
@@ -486,7 +516,6 @@ export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, 
           <div style={{ padding: `0 ${CHAT_COLUMN_PADDING}px` }}>
             <div className="chat-column">
               <ExtensionStatusBar statuses={extensionStatuses} />
-              <ExtensionWidgets widgets={aboveEditorWidgets} />
 
             {(() => {
               const toolResultsMap = new Map<string, ToolResultMessage>();
@@ -705,19 +734,7 @@ export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, 
         )}
       </div>
 
-      <div className="relative">
-        <div
-          style={{
-            padding: `0 ${CHAT_COLUMN_PADDING}px`,
-            paddingRight: isMobile ? CHAT_COLUMN_PADDING : CHAT_INPUT_RIGHT_PADDING,
-          }}
-        >
-          <div className="chat-column">
-            <ExtensionWidgets widgets={belowEditorWidgets} />
-          </div>
-        </div>
-        {chatInputElement}
-      </div>
+      {editorWithExtensionWidgets}
       </>
       )}
     </div>
@@ -746,32 +763,6 @@ function ExtensionStatusBar({ statuses }: { statuses: Array<{ key: string; text:
         >
           <span style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", fontSize: scaledMenuFontSize(11) }}>{status.key}</span>
           <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{status.text}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ExtensionWidgets({ widgets }: { widgets: Array<{ key: string; lines: string[] }> }) {
-  if (widgets.length === 0) return null;
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
-      {widgets.map((widget) => (
-        <div
-          key={widget.key}
-          style={{
-            border: "1px solid var(--border)",
-            borderRadius: 7,
-            background: "var(--bg-panel)",
-            overflow: "hidden",
-          }}
-        >
-          <div style={{ padding: "5px 9px", borderBottom: "1px solid var(--border)", color: "var(--text-dim)", fontSize: scaledMenuFontSize(11), fontFamily: "var(--font-mono)" }}>
-            {widget.key}
-          </div>
-          <pre style={{ margin: 0, padding: "8px 9px", color: "var(--text-muted)", fontSize: "var(--pi-transcript-font-size, 16px)", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "var(--font-mono)" }}>
-            {widget.lines.join("\n")}
-          </pre>
         </div>
       ))}
     </div>

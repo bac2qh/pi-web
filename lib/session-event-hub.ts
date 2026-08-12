@@ -77,9 +77,16 @@ export type ProjectedInputCommitReceipt = Readonly<{
   whenResolved(callback: (outcome: ProjectedInputCommitOutcome) => void): void;
 }>;
 
+type PreparedInputCommitControls = Readonly<{
+  isCurrent?: () => boolean;
+  beforeCommit?: () => void;
+  afterCommit?: () => void;
+}>;
+
 type AcceptedInputQueueEntry = {
   input: SessionProjectionInput | { type: string; [key: string]: unknown };
   resolve: (outcome: ProjectedInputCommitOutcome) => void;
+  controls?: PreparedInputCommitControls;
 };
 
 export type ProjectedSessionHubReader = {
@@ -199,6 +206,7 @@ export class ProjectedSessionEventHub {
   private listeners = new Set<HubListener>();
   private acceptedInputs: AcceptedInputQueueEntry[] = [];
   private acceptedInputHead = 0;
+  private afterDrainCallbacks = new Set<() => void>();
   private readonly preparedInputs = new WeakMap<object, SessionProjectionInput | { type: string; [key: string]: unknown }>();
   private processing = false;
   private closeRequested = false;
@@ -237,6 +245,13 @@ export class ProjectedSessionEventHub {
   get floor(): number { return this.replayFloor; }
   isClosed(): boolean { return this.closed; }
   getState(): ProjectedSessionState { return this.state; }
+  afterAcceptedInputDrain(callback: () => void): void {
+    if (!this.processing) {
+      try { callback(); } catch { /* internal drain observers are isolated */ }
+      return;
+    }
+    this.afterDrainCallbacks.add(callback);
+  }
   getReplayOccupancy(): { bytes: number; units: number; groups: number; floor: number; cursor: number } {
     return Object.freeze({ bytes: this.replayBytes, units: this.replayUnits, groups: this.replayGroups.length - this.replayHead, floor: this.replayFloor, cursor: this.sequence });
   }
@@ -388,6 +403,14 @@ export class ProjectedSessionEventHub {
   private processAcceptedInputs(): void {
     while (this.acceptedInputHead < this.acceptedInputs.length && !this.closed) {
       const entry = this.acceptedInputs[this.acceptedInputHead++];
+      const controlsCurrent = (): boolean => {
+        try { return entry.controls?.isCurrent?.() !== false; }
+        catch { return false; }
+      };
+      if (!controlsCurrent()) {
+        entry.resolve("rejected");
+        continue;
+      }
       let planned: PlannedInput;
       try { planned = this.planInput(entry.input); }
       catch {
@@ -402,7 +425,21 @@ export class ProjectedSessionEventHub {
         this.finishClose();
         break;
       }
-      if (planned.outcome === "committed") this.publishPlanned(planned.groups);
+      if (planned.outcome === "committed" && !controlsCurrent()) {
+        entry.resolve("rejected");
+        continue;
+      }
+      if (planned.outcome === "committed") {
+        try { entry.controls?.beforeCommit?.(); }
+        catch {
+          this.report({ kind: "input", outcome: "malformed", inputClass: "unknown" });
+          entry.resolve("rejected");
+          continue;
+        }
+        this.publishPlanned(planned.groups);
+        try { entry.controls?.afterCommit?.(); }
+        catch { /* committed host observers cannot roll back canonical publication */ }
+      }
       // Once publication begins, every group of this logical input is emitted
       // before honoring a listener/frame-diagnostic close request.
       entry.resolve(planned.outcome);
@@ -416,14 +453,20 @@ export class ProjectedSessionEventHub {
       this.acceptedInputHead = 0;
     }
   }
+  private finishAcceptedInputDrain(): void {
+    this.compactAcceptedInputs();
+    this.processing = false;
+    const callbacks = [...this.afterDrainCallbacks];
+    this.afterDrainCallbacks.clear();
+    for (const callback of callbacks) {
+      try { callback(); } catch { /* internal drain observers are isolated */ }
+    }
+  }
   private drainAcceptedInputs(): void {
     if (this.processing || this.closed) return;
     this.processing = true;
     try { this.processAcceptedInputs(); }
-    finally {
-      this.compactAcceptedInputs();
-      this.processing = false;
-    }
+    finally { this.finishAcceptedInputDrain(); }
   }
 
   /** Capture hostile native input once, before lifecycle and projection use it. */
@@ -471,13 +514,19 @@ export class ProjectedSessionEventHub {
   }
 
   /** Enqueue exactly one wrapper-prepared canonical input and expose only its commit outcome. */
-  acceptPreparedNativeInput(input: PreparedSessionProjectionInput): ProjectedInputCommitReceipt | null {
+  acceptPreparedNativeInput(
+    input: PreparedSessionProjectionInput,
+    controls?: PreparedInputCommitControls,
+  ): ProjectedInputCommitReceipt | null {
     if (this.closed || this.closeRequested || !input || typeof input !== "object") return null;
+    if (controls && ((controls.isCurrent !== undefined && typeof controls.isCurrent !== "function")
+      || (controls.beforeCommit !== undefined && typeof controls.beforeCommit !== "function")
+      || (controls.afterCommit !== undefined && typeof controls.afterCommit !== "function"))) return null;
     const captured = this.preparedInputs.get(input as object);
     if (!captured) return null;
     this.preparedInputs.delete(input as object);
     const pending = this.createCommitReceipt();
-    this.acceptedInputs.push({ input: captured, resolve: pending.resolve });
+    this.acceptedInputs.push({ input: captured, resolve: pending.resolve, ...(controls ? { controls } : {}) });
     this.drainAcceptedInputs();
     return pending.receipt;
   }
@@ -525,10 +574,7 @@ export class ProjectedSessionEventHub {
       if (!alreadyProcessing) this.processAcceptedInputs();
       return selected;
     } finally {
-      if (!alreadyProcessing) {
-        this.compactAcceptedInputs();
-        this.processing = false;
-      }
+      if (!alreadyProcessing) this.finishAcceptedInputDrain();
     }
   }
 
@@ -545,10 +591,7 @@ export class ProjectedSessionEventHub {
       this.reportReplay(selected.outcome);
       if (!alreadyProcessing) this.processAcceptedInputs();
     } finally {
-      if (!alreadyProcessing) {
-        this.compactAcceptedInputs();
-        this.processing = false;
-      }
+      if (!alreadyProcessing) this.finishAcceptedInputDrain();
     }
     this.listeners.delete(bufferListener);
     if (!this.closed) this.listeners.add(listener);

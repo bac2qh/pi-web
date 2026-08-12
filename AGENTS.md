@@ -248,6 +248,11 @@ Newer Pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - Skill toggling edits only the `disable-model-invocation` frontmatter key on the target `SKILL.md`; keep that surgical so user formatting survives.
 - `/api/skills/install` shells through `npx skills add ... --agent pi`; project installs run with the selected cwd.
 
+### Extension widgets and custom UI
+- `setWidget()` accepts existing `string[]` content and synchronous component factories. Pi Web renders factories server-side with the plain-text theme and a frozen 92×40 façade exposing only terminal dimensions, `kittyProtocolActive: false`, and `requestRender(force?)`; browser transport remains the existing `{ key, lines, placement }` projection.
+- Widget component ownership is wrapper-local and generation-guarded across replacement, refresh, clear, reload, and shutdown. Browser presentation caps both array- and factory-origin content at ten logical lines plus a truncation marker without truncating server/projected state.
+- Persistent widgets are render-only in Pi Web: `onTerminalInput()` remains unsupported, so a fleet widget's arrow/enter hint is not interactive. `/subagents-fleet` remains the interactive inspector through the separate custom-panel input path.
+
 ### OpenAI Fast indicator compatibility adapter
 - Pi Web recognizes only the package-origin `@benvargas/pi-openai-fast@1.1.0` command after bounded nearest-manifest authentication. It invokes that command's `status` handler with a fresh command context, captures the single known notification locally, and fails closed: package absence has no badge; unsupported, ambiguous, stale, or failed contracts show `Fast unknown`.
 - The wrapper refreshes only after extension binding, the authenticated Fast command settles, model selection or settled model drift, and reload. Refreshes coalesce by wrapper/runner/model generation; ordinary prompts, reconnects, and unchanged `get_state` calls do not probe.
