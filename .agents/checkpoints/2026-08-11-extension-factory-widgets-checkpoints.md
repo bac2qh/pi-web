@@ -42,7 +42,7 @@ Real pi-subagents browser validation used an owned dev server and Google Chrome 
 
 **Departures from approved obligations:** The real extension did not naturally produce more than ten logical lines, so the truncation marker was not observed in that browser run. This is an evidence limitation, not an implementation divergence: exact 10/11 presentation behavior and untruncated array/factory authority are covered by focused tests. Persistent widget keyboard input remains intentionally unsupported as approved; `/subagents-fleet` custom-panel input passed. None otherwise.
 
-**Implementation commit:** `PENDING_IMPLEMENTATION_COMMIT`.
+**Implementation commit:** `e7eee1b5fd7c9f6b8f93298657425adf94227066`.
 
 ## Handoff
 
