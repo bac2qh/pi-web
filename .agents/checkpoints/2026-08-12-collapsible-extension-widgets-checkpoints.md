@@ -43,3 +43,15 @@ Plan: `.agents/plans/2026-08-12-collapsible-extension-widgets.md`
 **Uncertainty / gaps:** None identified within the approved scope. The review is source/report based and relies on the parent's recoverable owned-browser run for observed UI evidence.
 
 **Recommended use:** Accept the implementation after the parent reruns the final scoped commands, inspects status/diff, records the implementation commit, and completes guarded local-main integration.
+
+## Implementation Summary
+
+**Plan section:** Objective; Design / Implementation Strategy; Proposed browser-only behavior; Test Strategy; Validation Contract VC-001 through VC-006.
+
+**Work and outcome:** Every array- and factory-origin widget card in either editor-adjacent slot now renders as an independent native disclosure with a generated body ID, state-specific accessible label, `aria-expanded`, `aria-controls`, a visible focus treatment, and a 44px mobile/coarse-pointer target. `ChatWindow` owns explicit per-key mounted-chat choices before partitioning: untouched widgets follow the `≤640px` responsive default, explicit choices survive line replacement, reordering, and placement movement, and removal or chat remount resets them. Collapsed bodies remain mounted with `hidden`, continue receiving current capped presentation lines, and do not alter extension/projected authority. Existing slot bounds, editor composition, factory rendering, custom panels, and `/subagents-fleet` remain unchanged. Maintained architecture and display-preference documentation plus durable browser evidence were updated.
+
+**Validation / evidence:** Final validation passed: `node --test components/ExtensionWidgets.test.mjs lib/rpc-manager-widgets.test.mjs lib/custom-ui-terminal.test.mjs` (50/50 under the inherited `NODE_ENV=production`); `../../../node_modules/.bin/tsc --noEmit`; `npm run lint`; JSON parsing of `.agents/reports/2026-08-12-collapsible-extension-widgets/browser-validation.json`; and `git diff --check`. The owned Google Chrome 151 run at 1280×800 and 390×780 verified independent mouse and touch controls, native Enter/Space, `:focus-visible` with a 2px outline, generated ID associations, mobile defaults, explicit override stability, live replacement while hidden with 11 authoritative lines and the existing browser cap, placement/removal lifetime, 44px targets, non-overlapping editor geometry, no horizontal overflow, and zero browser runtime errors. The owned dev server shut down gracefully and all owned disposable browser, extension, session, and `.next` artifacts were removed. Fresh review workflow `6036f385-3831-4919-b5d8-cab5396de249` produced the production-test fix and browser-evidence requirement; final fresh workflow `532cf78a-4815-4f2b-9d9d-d5e14b2c9a90` returned clean.
+
+**Departures from approved obligations:** None. The typecheck used the documented retained-main dependency installation because nested task worktrees intentionally have no local `node_modules`; no Next build was run.
+
+**Implementation commit:** `81deffde79ed33ff935c8cf20478778c04c902f2`.
