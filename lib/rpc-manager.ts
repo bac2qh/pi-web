@@ -1,6 +1,7 @@
 import { createAgentSessionFromServices, createAgentSessionServices, getAgentDir, initTheme, SessionManager, Theme } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { lstat, open } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 import { invalidateModelsCache } from "./models-cache";
@@ -18,9 +19,11 @@ import type {
   AgentSessionLike,
   ExtensionRunnerLike,
   ExtensionUiContextLike,
+  ExtensionWidgetFactoryLike,
   ResolvedExtensionCommandLike,
   ToolInfo,
 } from "./pi-types";
+import { createHeadlessCustomUiTui, DEFAULT_CUSTOM_UI_COLUMNS } from "./custom-ui-terminal";
 import type { ExtensionUiRequest, ExtensionUiResponse, ExtensionWidgetItem } from "./types";
 import {
   PI_WEB_OPENAI_FAST_MODE_ESCAPED_EXTENSION_STATUS_KEY,
@@ -64,6 +67,43 @@ type CustomUiComponent = {
   dispose?: () => void;
   invalidate?: () => void;
 };
+
+type ExtensionWidgetFailurePhase =
+  | "factory"
+  | "component_validation"
+  | "initial_render"
+  | "refresh_render"
+  | "dispose"
+  | "cleanup"
+  | "error_formatting";
+
+type OwnedExtensionWidgetComponent = {
+  value: object;
+  render: ((this: object, width: number) => unknown) | null;
+  disposed: boolean;
+};
+
+type ActiveExtensionWidget = {
+  key: string;
+  generation: number;
+  token: object;
+  placement: "aboveEditor" | "belowEditor";
+  owner: OwnedExtensionWidgetComponent;
+  rendering: boolean;
+};
+
+type ExtensionWidgetDisposalResult =
+  | Readonly<{ failed: false }>
+  | Readonly<{ failed: true; error: unknown }>;
+
+type ExtensionReloadExecutionScope = {
+  active: boolean;
+  retirementInitiated: boolean;
+};
+
+type ExtensionReloadDestroyNotice = Readonly<{
+  initiator: ExtensionReloadExecutionScope | null;
+}>;
 
 type ActiveCustomUi = {
   component: CustomUiComponent;
@@ -149,6 +189,67 @@ function rpcPublicErrorClass(error: unknown): string {
     const name = (error as { name?: unknown } | null)?.name;
     return typeof name === "string" && RPC_PUBLIC_ERROR_CLASSES.has(name) ? name : "Error";
   } catch { return "Error"; }
+}
+
+const EXTENSION_WIDGET_ERROR_MAX_BYTES = 4_096;
+const EXTENSION_WIDGET_ERROR_KEY_MAX_CHARS = 192;
+
+function sanitizeExtensionWidgetKey(key: unknown): string {
+  if (typeof key !== "string") return "invalid";
+  let sanitized = "";
+  const limit = Math.min(key.length, EXTENSION_WIDGET_ERROR_KEY_MAX_CHARS);
+  for (let index = 0; index < limit; index += 1) {
+    const code = key.charCodeAt(index);
+    const allowed = (code >= 48 && code <= 57)
+      || (code >= 65 && code <= 90)
+      || (code >= 97 && code <= 122)
+      || code === 45 || code === 46 || code === 47 || code === 58 || code === 64 || code === 95;
+    sanitized += allowed ? key[index] : "_";
+  }
+  return sanitized || "unnamed";
+}
+
+function truncateUtf8(value: string, maximumBytes: number): string {
+  if (Buffer.byteLength(value, "utf8") <= maximumBytes) return value;
+  let low = 0;
+  let high = Math.min(value.length, maximumBytes);
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (Buffer.byteLength(value.slice(0, middle), "utf8") <= maximumBytes) low = middle;
+    else high = middle - 1;
+  }
+  if (low > 0) {
+    const finalCode = value.charCodeAt(low - 1);
+    if (finalCode >= 0xD800 && finalCode <= 0xDBFF) low -= 1;
+  }
+  return value.slice(0, low);
+}
+
+function extensionWidgetFailureEvent(
+  key: unknown,
+  phase: ExtensionWidgetFailurePhase,
+  error: unknown,
+): AgentEvent {
+  try {
+    const safeKey = sanitizeExtensionWidgetKey(key);
+    const errorClass = rpcPublicErrorClass(error);
+    return {
+      type: "extension_error",
+      extensionPath: `extension-widget:${safeKey}`,
+      event: `widget_${phase}`,
+      error: truncateUtf8(
+        `Extension widget ${safeKey} failed during ${phase} (${errorClass}).`,
+        EXTENSION_WIDGET_ERROR_MAX_BYTES,
+      ),
+    };
+  } catch {
+    return {
+      type: "extension_error",
+      extensionPath: "extension-widget:unknown",
+      event: "widget_error_formatting",
+      error: "Extension widget failed during error_formatting (Error).",
+    };
+  }
 }
 
 const OPENAI_FAST_PACKAGE_NAME = "@benvargas/pi-openai-fast";
@@ -396,6 +497,18 @@ export class AgentSessionWrapper {
   private pendingCustomUiSetups = new Map<string, PendingCustomUiSetup>();
   private extensionStatuses = new Map<string, string>();
   private extensionWidgets = new Map<string, ExtensionWidgetItem>();
+  private activeExtensionWidgets = new Map<string, ActiveExtensionWidget>();
+  private extensionWidgetGenerations = new Map<string, number>();
+  private extensionWidgetUiGeneration = 0;
+  private disposedExtensionWidgetComponents = new WeakSet<object>();
+  private extensionWidgetsCleaningUp = false;
+  private extensionWidgetCleanupCallbacks = new Set<(outcome: ProjectedInputCommitOutcome) => void>();
+  private extensionWidgetCallDepth = 0;
+  private finalizeDestroyAfterWidgetCall = false;
+  private extensionReloadQueueTail: Promise<void> = Promise.resolve();
+  private readonly extensionReloadExecution = new AsyncLocalStorage<ExtensionReloadExecutionScope>();
+  private readonly destroyStartedPromise: Promise<ExtensionReloadDestroyNotice>;
+  private resolveDestroyStarted: (notice: ExtensionReloadDestroyNotice) => void = () => {};
   private fastModeState: OpenAiFastModeState | null = null;
   private fastModePackageIdentified = false;
   private fastModeRunner: ExtensionRunnerLike | null = null;
@@ -439,6 +552,8 @@ export class AgentSessionWrapper {
   private destroying = false;
   private closing = false;
   private shutdownPromise: Promise<void> | null = null;
+  private destroyCompletionPromise: Promise<void> | null = null;
+  private resolveDestroyCompletion: (() => void) | null = null;
   private _alive = true;
   private ensuredSessionTransportTarget: EnsuredSessionTransportTarget | null = null;
   private readonly projectedHub: ProjectedSessionEventHub;
@@ -448,6 +563,9 @@ export class AgentSessionWrapper {
     private readonly idleTimeoutMs = RPC_SESSION_IDLE_TIMEOUT_MS,
     clock: Partial<RpcWrapperClock> = {},
   ) {
+    this.destroyStartedPromise = new Promise((resolve) => {
+      this.resolveDestroyStarted = resolve;
+    });
     this.wrapperClock = {
       now: clock.now ?? Date.now,
       schedule: clock.schedule ?? setTimeout,
@@ -477,7 +595,7 @@ export class AgentSessionWrapper {
   }
 
   isAlive(): boolean {
-    return !this.closing && this._alive && this.runtimeGenerationGuard();
+    return !this.destroying && !this.closing && this._alive && this.runtimeGenerationGuard();
   }
 
   bindRuntimeGeneration(guard: () => boolean): void {
@@ -1029,6 +1147,12 @@ export class AgentSessionWrapper {
     return prepared ? this.projectedHub.acceptPreparedNativeInput(prepared) : null;
   }
 
+  private acceptProjectedCleanupInput(event: AgentEvent): ProjectedInputCommitReceipt | null {
+    if (!this._alive || this.projectedHub.isClosed()) return null;
+    const prepared = this.projectedHub.prepareNativeInput(event);
+    return prepared ? this.projectedHub.acceptPreparedNativeInput(prepared) : null;
+  }
+
   private claimPromptRun(): void {
     const authority = this.captureRunningPublisherAuthority();
     this.promptRunningCount += 1;
@@ -1243,6 +1367,26 @@ export class AgentSessionWrapper {
     }
   }
 
+  private emitCleanupAgentEvent(event: AgentEvent): void {
+    if (!this._alive || this.projectedHub.isClosed()) return;
+    const fanout = (): void => {
+      this.beginEventFanout();
+      try { this.fanoutLegacyEvent(event); }
+      finally { this.endEventFanout(); }
+    };
+    const prepared = this.projectedHub.prepareNativeInput(event);
+    const receipt = prepared
+      ? this.projectedHub.acceptPreparedNativeInput(prepared, { afterCommit: fanout })
+      : null;
+    if (!receipt) {
+      fanout();
+      return;
+    }
+    receipt.whenResolved((outcome) => {
+      if (outcome === "rejected") fanout();
+    });
+  }
+
   private touchSemanticIdle(category: RpcSemanticIdleCategory): void {
     if (this.destroying || !this.runtimeIsCurrent()) return;
     this.reportIdle(category);
@@ -1395,7 +1539,7 @@ export class AgentSessionWrapper {
   async send(command: Record<string, unknown>): Promise<unknown> {
     const type = command.type as string;
     if (!RECOGNIZED_RPC_COMMANDS.has(type)) throw new Error(`Unsupported command: ${type}`);
-    if (!this.runtimeIsCurrent()) throw new Error("rpc_runtime_generation_closed");
+    if (this.destroying || !this.runtimeIsCurrent()) throw new Error("rpc_runtime_generation_closed");
     this.touchSemanticIdle("command");
     if (type === "prompt") {
       // Claim each accepted prompt before extension binding can await. Clone is
@@ -1411,7 +1555,7 @@ export class AgentSessionWrapper {
     } else if (this.shouldWaitForExtensions(type)) {
       await this.waitForExtensionsBound();
     }
-    if (!this.runtimeIsCurrent()) {
+    if (this.destroying || !this.runtimeIsCurrent()) {
       if (type === "prompt") this.releasePromptRun(false);
       throw new Error("rpc_runtime_generation_closed");
     }
@@ -1683,19 +1827,10 @@ export class AgentSessionWrapper {
       case "reload": {
         await this.waitForExtensionsBound();
         if (!this.runtimeIsCurrent()) throw new Error("rpc_runtime_generation_closed");
-        this.beginFastModeRunnerReplacement();
-        this.clearProjectedExtensionState();
-        this.extensionStatuses.clear();
-        this.extensionWidgets.clear();
-        await this.inner.reload();
-        if (!this.runtimeIsCurrent()) throw new Error("rpc_runtime_generation_closed");
-        if (typeof this.inner.bindExtensions !== "function") {
-          this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
-        }
-        this.applyForcedEmptySystemPrompt();
-        this.attachFastModeRunner(this.inner.extensionRunner);
-        await this.requestFastModeRefresh();
-        return { success: true };
+        const outcome = await this.enqueueExtensionReload();
+        return outcome === "committed"
+          ? { success: true }
+          : { success: false, error: "extension_widget_cleanup_rejected" };
       }
 
       case "abort_compaction": {
@@ -1725,6 +1860,7 @@ export class AgentSessionWrapper {
 
   shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
+    if (this.destroying) return this.destroyCompletionPromise ?? Promise.resolve();
     if (!this._alive) return Promise.resolve();
 
     // Close every public admission guard before any asynchronous teardown work.
@@ -1751,6 +1887,7 @@ export class AgentSessionWrapper {
         if (failures.length > 1) throw new AggregateError(failures, "rpc_session_shutdown_failed");
       } finally {
         this.destroy();
+        await this.destroyCompletionPromise;
       }
     });
     void this.shutdownPromise.catch((error) => {
@@ -1767,6 +1904,17 @@ export class AgentSessionWrapper {
 
   destroy(): void {
     if (!this._alive || this.destroying) return;
+    const reloadScope = this.extensionReloadExecution.getStore();
+    this.resolveDestroyStarted({
+      initiator: reloadScope?.retirementInitiated ? reloadScope : null,
+    });
+    this.resolveDestroyStarted = () => {};
+    this.destroyCompletionPromise = new Promise((resolve) => {
+      this.resolveDestroyCompletion = resolve;
+    });
+    // Close every ordinary admission guard before cleanup can synchronously
+    // reenter through projection listeners or extension component disposal.
+    this.closing = true;
     this.destroying = true;
     this.fastModeRunnerGeneration += 1;
     this.fastModeRunner = null;
@@ -1794,18 +1942,46 @@ export class AgentSessionWrapper {
     for (const id of Array.from(this.activeCustomUis.keys())) this.closeCustomUi(id, undefined);
     this.pendingUiResponses.clear();
     this.pendingUiRequests.clear();
-    this.listeners = [];
-    this._alive = false;
-    this.projectedHub.close();
-    if (!this.nativeDisposed) {
-      this.nativeDisposed = true;
-      try { this.inner.dispose(); } catch { /* disposal is best effort and idempotent here */ }
+    this.cleanupExtensionWidgets(() => {
+      this.requestFinalizeDestroy();
+    });
+  }
+
+  private requestFinalizeDestroy(): void {
+    this.projectedHub.afterAcceptedInputDrain(() => {
+      if (this.extensionWidgetCallDepth > 0) {
+        this.finalizeDestroyAfterWidgetCall = true;
+        return;
+      }
+      this.finalizeDestroy();
+    });
+  }
+
+  private finalizeDestroy(): void {
+    if (!this._alive) {
+      this.resolveDestroyCompletion?.();
+      this.resolveDestroyCompletion = null;
+      return;
     }
-    for (const callback of this.onDestroyCallbacks) {
-      try { callback(); } catch { /* cleanup listeners are isolated */ }
+    try {
+      this.listeners = [];
+      this._alive = false;
+      this.projectedHub.close();
+      this.extensionWidgets.clear();
+      this.activeExtensionWidgets.clear();
+      if (!this.nativeDisposed) {
+        this.nativeDisposed = true;
+        try { this.inner.dispose(); } catch { /* disposal is best effort and idempotent here */ }
+      }
+      for (const callback of this.onDestroyCallbacks) {
+        try { callback(); } catch { /* cleanup listeners are isolated */ }
+      }
+      this.onDestroyCallbacks.clear();
+      publishRunningSessionState(this.sessionId, false, this.runningPublicationIdentity);
+    } finally {
+      this.resolveDestroyCompletion?.();
+      this.resolveDestroyCompletion = null;
     }
-    this.onDestroyCallbacks.clear();
-    publishRunningSessionState(this.sessionId, false, this.runningPublicationIdentity);
   }
 
   private resolveExtensionUiResponse(response: ExtensionUiResponse): void {
@@ -1814,12 +1990,111 @@ export class AgentSessionWrapper {
     pending.resolve(response);
   }
 
-  private clearProjectedExtensionState(): void {
-    for (const key of this.extensionStatuses.keys()) {
-      this.acceptProjectedWrapperInput({ type: "extension_status_cleared", key });
+  private clearProjectedExtensionState(): Promise<Readonly<{
+    widgetUiGeneration: number;
+    outcome: ProjectedInputCommitOutcome;
+  }>> {
+    this.extensionWidgetUiGeneration += 1;
+    const widgetUiGeneration = this.extensionWidgetUiGeneration;
+    const pendingOutcomes: Promise<ProjectedInputCommitOutcome>[] = [];
+    for (const [key, expectedText] of this.extensionStatuses) {
+      const event = { type: "extension_status_cleared", key } as AgentEvent;
+      const prepared = this.projectedHub.prepareNativeInput(event);
+      const receipt = prepared
+        ? this.projectedHub.acceptPreparedNativeInput(prepared, {
+          isCurrent: () => this.runtimeIsCurrent()
+            && this.extensionWidgetUiGeneration === widgetUiGeneration
+            && this.extensionStatuses.get(key) === expectedText,
+          beforeCommit: () => { this.extensionStatuses.delete(key); },
+        })
+        : null;
+      pendingOutcomes.push(new Promise((resolve) => {
+        if (!receipt) resolve("rejected");
+        else receipt.whenResolved(resolve);
+      }));
     }
-    for (const key of this.extensionWidgets.keys()) {
-      this.acceptProjectedWrapperInput({ type: "extension_widget_cleared", key });
+    pendingOutcomes.push(new Promise((resolve) => this.cleanupExtensionWidgets(resolve)));
+    return Promise.all(pendingOutcomes).then((outcomes) => ({
+      widgetUiGeneration,
+      outcome: outcomes.every((outcome) => outcome === "committed") ? "committed" : "rejected",
+    }));
+  }
+
+  private rebindExtensionUiForReload(widgetUiGeneration: number): boolean {
+    if (!this.runtimeIsCurrent() || this.extensionWidgetUiGeneration !== widgetUiGeneration) return false;
+    const setUIContext = this.inner.extensionRunner.setUIContext;
+    if (typeof setUIContext !== "function") return false;
+    Reflect.apply(setUIContext, this.inner.extensionRunner, [this.createExtensionUiContext(), "rpc"]);
+    return true;
+  }
+
+  private enqueueExtensionReload(): Promise<ProjectedInputCommitOutcome> {
+    let scope: ExtensionReloadExecutionScope | undefined;
+    const execute = (): Promise<ProjectedInputCommitOutcome> => {
+      scope = { active: true, retirementInitiated: false };
+      return this.extensionReloadExecution.run(scope, async () => {
+        try { return await this.performExtensionReload(); }
+        finally { scope!.active = false; }
+      });
+    };
+    const work = this.extensionReloadQueueTail.then(execute, execute);
+    const operation = Promise.race([
+      work,
+      this.destroyStartedPromise.then((notice) => {
+        if (scope && notice.initiator === scope) return work;
+        throw new Error("rpc_runtime_generation_closed");
+      }),
+    ]);
+    this.extensionReloadQueueTail = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private async performExtensionReload(): Promise<ProjectedInputCommitOutcome> {
+    if (!this.runtimeIsCurrent()) throw new Error("rpc_runtime_generation_closed");
+    this.beginFastModeRunnerReplacement();
+    const widgetCleanup = await this.clearProjectedExtensionState();
+    if (widgetCleanup.outcome === "rejected") {
+      // A live projected hub that cannot commit its required clears cannot
+      // safely survive reload with disposed component ownership. Retire this
+      // wrapper instead; reconnect can reopen the native session cleanly.
+      this.extensionWidgets.clear();
+      const scope = this.extensionReloadExecution.getStore();
+      if (scope) scope.retirementInitiated = true;
+      this.destroy();
+      await this.destroyCompletionPromise;
+      return "rejected";
+    }
+    this.extensionStatuses.clear();
+    if (!this.runtimeIsCurrent()) throw new Error("rpc_runtime_generation_closed");
+
+    let uiRebound = false;
+    try {
+      await this.inner.reload({
+        beforeSessionStart: () => {
+          uiRebound = this.rebindExtensionUiForReload(widgetCleanup.widgetUiGeneration) || uiRebound;
+        },
+      });
+      if (!this.runtimeIsCurrent()) throw new Error("rpc_runtime_generation_closed");
+      if (!uiRebound && !this.rebindExtensionUiForReload(widgetCleanup.widgetUiGeneration)) {
+        throw new Error("rpc_extension_ui_rebind_failed");
+      }
+      this.applyForcedEmptySystemPrompt();
+      this.attachFastModeRunner(this.inner.extensionRunner);
+      await this.requestFastModeRefresh();
+      return "committed";
+    } catch (error) {
+      // Native reload invalidates the old extension runner before rebuilding it.
+      // Revoke anything published by a rebound interim context, then retire the
+      // half-reloaded wrapper even when that best-effort cleanup is rejected.
+      const scope = this.extensionReloadExecution.getStore();
+      if (scope) scope.retirementInitiated = true;
+      if (this.runtimeIsCurrent()) {
+        try { await this.clearProjectedExtensionState(); }
+        catch { /* the original reload failure remains authoritative */ }
+      }
+      this.destroy();
+      await this.destroyCompletionPromise;
+      throw error;
     }
   }
 
@@ -1832,18 +2107,538 @@ export class AgentSessionWrapper {
   }
 
   private getExtensionWidgets(): ExtensionWidgetItem[] {
-    return Array.from(this.extensionWidgets.values());
+    return Array.from(this.extensionWidgets.values(), (widget) => ({
+      ...widget,
+      lines: [...widget.lines],
+    })).sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0);
+  }
+
+  private extensionWidgetAdmissionIsOpen(): boolean {
+    return !this.destroying && !this.extensionWidgetsCleaningUp && this.runtimeIsCurrent();
+  }
+
+  private runExtensionWidgetCall<T>(callback: () => T): T {
+    this.extensionWidgetCallDepth += 1;
+    try {
+      return callback();
+    } finally {
+      this.extensionWidgetCallDepth -= 1;
+      if (this.extensionWidgetCallDepth === 0 && this.finalizeDestroyAfterWidgetCall) {
+        this.finalizeDestroyAfterWidgetCall = false;
+        this.requestFinalizeDestroy();
+      }
+    }
+  }
+
+  private nextExtensionWidgetGeneration(key: string): number {
+    const generation = (this.extensionWidgetGenerations.get(key) ?? 0) + 1;
+    this.extensionWidgetGenerations.set(key, generation);
+    return generation;
+  }
+
+  private extensionWidgetOperationIsCurrent(key: string, generation: number): boolean {
+    return this.extensionWidgetAdmissionIsOpen()
+      && this.extensionWidgetGenerations.get(key) === generation;
+  }
+
+  private emitExtensionWidgetAgentEvent(event: AgentEvent, duringCleanup = false): void {
+    if (!duringCleanup) {
+      this.emit(event);
+      return;
+    }
+    // Shutdown closes normal admission before destroy(). Cleanup diagnostics
+    // still preserve projected-before-legacy order while the hub is authoritative.
+    this.emitCleanupAgentEvent(event);
+  }
+
+  private publishExtensionWidget(
+    key: string,
+    lines: string[] | undefined,
+    placement: "aboveEditor" | "belowEditor" | undefined,
+    options: Readonly<{
+      duringCleanup?: boolean;
+      isCurrent?: () => boolean;
+      onRejected?: () => void;
+      onSettled?: (outcome: ProjectedInputCommitOutcome) => void;
+    }> = {},
+  ): void {
+    const event = {
+      type: "extension_ui_request",
+      id: randomUUID(),
+      method: "setWidget",
+      widgetKey: key,
+      widgetLines: lines === undefined ? undefined : [...lines],
+      widgetPlacement: placement,
+    } as ExtensionUiRequest as AgentEvent;
+    const committedWidget = lines === undefined
+      ? null
+      : { key, lines: [...lines], placement: placement ?? "aboveEditor" as const };
+    let rejectionHandled = false;
+    let settlementHandled = false;
+    const reject = (): void => {
+      if (rejectionHandled) return;
+      rejectionHandled = true;
+      try {
+        if (options.onRejected) options.onRejected();
+        else this.reportExtensionWidgetFailure(
+          key,
+          options.duringCleanup ? "cleanup" : "component_validation",
+          new Error(),
+          options.duringCleanup,
+        );
+      } catch {
+        // Rejection handling must not escape projection or session control.
+      }
+    };
+    const settle = (outcome: ProjectedInputCommitOutcome): void => {
+      if (settlementHandled) return;
+      settlementHandled = true;
+      try { options.onSettled?.(outcome); }
+      catch { /* cleanup settlement observers are isolated */ }
+    };
+    const fanout = (): void => {
+      this.beginEventFanout();
+      try { this.fanoutLegacyEvent(event); }
+      finally { this.endEventFanout(); }
+    };
+
+    const prepared = this.projectedHub.prepareNativeInput(event);
+    if (!prepared) {
+      reject();
+      settle("rejected");
+      return;
+    }
+    if (!options.duringCleanup) this.touchSemanticIdle("wrapper_event");
+    const receipt = this.projectedHub.acceptPreparedNativeInput(prepared, {
+      ...(options.isCurrent ? { isCurrent: options.isCurrent } : {}),
+      beforeCommit: () => {
+        if (committedWidget === null) this.extensionWidgets.delete(key);
+        else this.extensionWidgets.set(key, committedWidget);
+      },
+      afterCommit: fanout,
+    });
+    if (!receipt) {
+      reject();
+      settle("rejected");
+      return;
+    }
+    receipt.whenResolved((outcome) => {
+      if (outcome === "rejected") reject();
+      settle(outcome);
+    });
+  }
+
+  private reportExtensionWidgetFailure(
+    key: unknown,
+    phase: ExtensionWidgetFailurePhase,
+    error: unknown,
+    duringCleanup = false,
+  ): void {
+    try {
+      this.emitExtensionWidgetAgentEvent(extensionWidgetFailureEvent(key, phase, error), duringCleanup);
+    } catch {
+      // Failure reporting is deliberately terminal for this notice. It must not
+      // recurse into widget publication or escape into extension/session control.
+    }
+  }
+
+  private disposeExtensionWidgetOwner(owner: OwnedExtensionWidgetComponent | null): ExtensionWidgetDisposalResult {
+    if (!owner || owner.disposed) return { failed: false };
+    owner.disposed = true;
+    if (this.disposedExtensionWidgetComponents.has(owner.value)) return { failed: false };
+    const hasNewerOwner = (): boolean => [...this.activeExtensionWidgets.values()].some(
+      (active) => active.owner !== owner && active.owner.value === owner.value,
+    );
+    // A newer generation may adopt the same component before disposal begins.
+    if (hasNewerOwner()) return { failed: false };
+
+    let dispose: unknown;
+    try {
+      dispose = Reflect.get(owner.value, "dispose");
+    } catch (error) {
+      // A hostile getter can itself register a newer owner. The interrupted
+      // owner is consumed, but the adopted component remains disposable later.
+      if (!hasNewerOwner()) this.disposedExtensionWidgetComponents.add(owner.value);
+      return { failed: true, error };
+    }
+    if (hasNewerOwner()) return { failed: false };
+
+    // Mark the component before invoking extension code so reentrant attempts
+    // cannot adopt an object whose disposer is already running.
+    this.disposedExtensionWidgetComponents.add(owner.value);
+    try {
+      if (typeof dispose === "function") Reflect.apply(dispose, owner.value, []);
+      return { failed: false };
+    } catch (error) {
+      return { failed: true, error };
+    }
+  }
+
+  private disposeStaleExtensionWidgetOwner(key: string, owner: OwnedExtensionWidgetComponent | null): void {
+    const result = this.disposeExtensionWidgetOwner(owner);
+    if (result.failed) {
+      this.reportExtensionWidgetFailure(key, "cleanup", result.error, this.closing || this.destroying);
+    }
+  }
+
+  private beginExtensionWidgetOperation(
+    key: string,
+    publishClear: boolean,
+    reportClearRejection = false,
+  ): Readonly<{ generation: number; clearPublished: boolean }> {
+    const generation = this.nextExtensionWidgetGeneration(key);
+    const previous = this.activeExtensionWidgets.get(key) ?? null;
+    this.activeExtensionWidgets.delete(key);
+
+    if (publishClear) {
+      this.publishExtensionWidget(key, undefined, undefined, {
+        isCurrent: () => this.extensionWidgetOperationIsCurrent(key, generation),
+        onRejected: () => {
+          if (!reportClearRejection || !this.extensionWidgetOperationIsCurrent(key, generation)) return;
+          this.reportExtensionWidgetFailure(key, "component_validation", new Error());
+          this.destroy();
+        },
+      });
+    }
+
+    const disposal = this.disposeExtensionWidgetOwner(previous?.owner ?? null);
+    if (disposal.failed) {
+      this.reportExtensionWidgetFailure(key, "dispose", disposal.error, this.closing || this.destroying);
+    }
+    return { generation, clearPublished: publishClear };
+  }
+
+  private copyExtensionWidgetLines(value: unknown):
+    | Readonly<{ ok: true; lines: string[] }>
+    | Readonly<{ ok: false; error: unknown }> {
+    try {
+      if (!Array.isArray(value)) return { ok: false, error: new TypeError() };
+      const lines: string[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        const line = value[index];
+        if (typeof line !== "string") return { ok: false, error: new TypeError() };
+        lines.push(line);
+      }
+      return { ok: true, lines };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+
+  private failExtensionWidget(
+    key: string,
+    generation: number,
+    owner: OwnedExtensionWidgetComponent | null,
+    phase: ExtensionWidgetFailurePhase,
+    error: unknown,
+    clearAlreadyPublished: boolean,
+  ): void {
+    const active = this.activeExtensionWidgets.get(key);
+    if (active?.generation === generation && active.owner === owner) {
+      this.activeExtensionWidgets.delete(key);
+    }
+    const current = this.extensionWidgetOperationIsCurrent(key, generation);
+    if (current && (this.extensionWidgets.has(key) || !clearAlreadyPublished)) {
+      this.publishExtensionWidget(key, undefined, undefined, {
+        isCurrent: () => this.extensionWidgetOperationIsCurrent(key, generation),
+        // The primary factory/render/validation notice below owns this failed
+        // operation; a rejected clear is not a second failure notice. Retire
+        // instead of leaving disposed ownership behind a stale projected widget.
+        onRejected: () => { this.destroy(); },
+      });
+    }
+    // A clear or its legacy observer may have installed a newer generation.
+    // Produced ownership is still consumed, but the newer state is untouched.
+    const disposal = this.disposeExtensionWidgetOwner(owner);
+    const duringCleanup = this.closing || this.destroying;
+    this.reportExtensionWidgetFailure(key, phase, error, duringCleanup);
+    if (disposal.failed) this.reportExtensionWidgetFailure(key, "dispose", disposal.error, duringCleanup);
+  }
+
+  private renderExtensionWidget(
+    active: ActiveExtensionWidget,
+    phase: "initial_render" | "refresh_render",
+    clearAlreadyPublished: boolean,
+  ): void {
+    if (active.rendering
+      || this.activeExtensionWidgets.get(active.key) !== active
+      || !this.extensionWidgetOperationIsCurrent(active.key, active.generation)) return;
+
+    active.rendering = true;
+    let rendered: ReturnType<AgentSessionWrapper["copyExtensionWidgetLines"]>;
+    try {
+      rendered = this.copyExtensionWidgetLines(
+        Reflect.apply(active.owner.render as (this: object, width: number) => unknown, active.owner.value, [DEFAULT_CUSTOM_UI_COLUMNS]),
+      );
+    } catch (error) {
+      rendered = { ok: false, error };
+    } finally {
+      active.rendering = false;
+    }
+
+    if (!rendered.ok) {
+      this.failExtensionWidget(
+        active.key,
+        active.generation,
+        active.owner,
+        phase,
+        rendered.error,
+        clearAlreadyPublished,
+      );
+      return;
+    }
+    if (this.activeExtensionWidgets.get(active.key) !== active
+      || !this.extensionWidgetOperationIsCurrent(active.key, active.generation)) return;
+
+    this.publishExtensionWidget(active.key, rendered.lines, active.placement, {
+      isCurrent: () => this.activeExtensionWidgets.get(active.key) === active
+        && this.extensionWidgetOperationIsCurrent(active.key, active.generation),
+      onRejected: () => {
+        if (this.activeExtensionWidgets.get(active.key) !== active
+          || !this.extensionWidgetOperationIsCurrent(active.key, active.generation)) return;
+        this.failExtensionWidget(
+          active.key,
+          active.generation,
+          active.owner,
+          phase,
+          new Error(),
+          clearAlreadyPublished,
+        );
+      },
+    });
+  }
+
+  private setExtensionWidgetFactory(
+    key: string,
+    factory: ExtensionWidgetFactoryLike,
+    placement: "aboveEditor" | "belowEditor",
+  ): void {
+    const hadPrevious = this.extensionWidgets.has(key) || this.activeExtensionWidgets.has(key);
+    const operation = this.beginExtensionWidgetOperation(key, hadPrevious);
+    if (!this.extensionWidgetOperationIsCurrent(key, operation.generation)) return;
+
+    const token = {};
+    const tui = createHeadlessCustomUiTui(() => {
+      this.runExtensionWidgetCall(() => {
+        const active = this.activeExtensionWidgets.get(key);
+        if (active?.token === token && active.generation === operation.generation) {
+          this.renderExtensionWidget(active, "refresh_render", false);
+        }
+      });
+    });
+
+    let component: unknown;
+    try {
+      component = factory(tui, PLAIN_TEXT_THEME);
+    } catch (error) {
+      this.failExtensionWidget(
+        key,
+        operation.generation,
+        null,
+        "factory",
+        error,
+        operation.clearPublished,
+      );
+      return;
+    }
+
+    const componentIsOwned = (typeof component === "object" && component !== null)
+      || typeof component === "function";
+    const owner: OwnedExtensionWidgetComponent | null = componentIsOwned
+      ? { value: component as object, render: null, disposed: false }
+      : null;
+    if (!this.extensionWidgetOperationIsCurrent(key, operation.generation)) {
+      this.disposeStaleExtensionWidgetOwner(key, owner);
+      return;
+    }
+    if (!owner) {
+      this.failExtensionWidget(
+        key,
+        operation.generation,
+        null,
+        "component_validation",
+        new TypeError(),
+        operation.clearPublished,
+      );
+      return;
+    }
+    if (this.disposedExtensionWidgetComponents.has(owner.value)) {
+      this.failExtensionWidget(
+        key,
+        operation.generation,
+        owner,
+        "component_validation",
+        new TypeError(),
+        operation.clearPublished,
+      );
+      return;
+    }
+
+    let render: unknown;
+    try {
+      render = Reflect.get(owner.value, "render");
+    } catch (error) {
+      this.failExtensionWidget(
+        key,
+        operation.generation,
+        owner,
+        "component_validation",
+        error,
+        operation.clearPublished,
+      );
+      return;
+    }
+    if (typeof render !== "function") {
+      this.failExtensionWidget(
+        key,
+        operation.generation,
+        owner,
+        "component_validation",
+        new TypeError(),
+        operation.clearPublished,
+      );
+      return;
+    }
+    owner.render = render as (this: object, width: number) => unknown;
+    if (!this.extensionWidgetOperationIsCurrent(key, operation.generation)) {
+      this.disposeStaleExtensionWidgetOwner(key, owner);
+      return;
+    }
+
+    const active: ActiveExtensionWidget = {
+      key,
+      generation: operation.generation,
+      token,
+      placement,
+      owner,
+      rendering: false,
+    };
+    this.activeExtensionWidgets.set(key, active);
+    this.renderExtensionWidget(active, "initial_render", operation.clearPublished);
+  }
+
+  private setExtensionWidgetLines(
+    key: string,
+    value: unknown,
+    placement: "aboveEditor" | "belowEditor",
+    eventPlacement: "aboveEditor" | "belowEditor" | undefined,
+  ): void {
+    const operation = this.beginExtensionWidgetOperation(
+      key,
+      this.activeExtensionWidgets.has(key),
+    );
+    if (!this.extensionWidgetOperationIsCurrent(key, operation.generation)) return;
+    const copied = this.copyExtensionWidgetLines(value);
+    if (!copied.ok) {
+      this.failExtensionWidget(
+        key,
+        operation.generation,
+        null,
+        "component_validation",
+        copied.error,
+        operation.clearPublished,
+      );
+      return;
+    }
+    this.publishExtensionWidget(
+      key,
+      copied.lines,
+      eventPlacement ?? (placement === "belowEditor" ? "belowEditor" : undefined),
+      {
+        isCurrent: () => this.extensionWidgetOperationIsCurrent(key, operation.generation),
+        onRejected: () => {
+          if (!this.extensionWidgetOperationIsCurrent(key, operation.generation)) return;
+          this.failExtensionWidget(
+            key,
+            operation.generation,
+            null,
+            "component_validation",
+            new Error(),
+            operation.clearPublished,
+          );
+        },
+      },
+    );
+  }
+
+  private clearExtensionWidget(key: string): void {
+    this.beginExtensionWidgetOperation(key, true, true);
+  }
+
+  private cleanupExtensionWidgets(
+    onSettled: (outcome: ProjectedInputCommitOutcome) => void,
+  ): void {
+    this.extensionWidgetCleanupCallbacks.add(onSettled);
+    if (this.extensionWidgetsCleaningUp) return;
+    this.extensionWidgetsCleaningUp = true;
+
+    const keys = new Set([
+      ...this.extensionWidgets.keys(),
+      ...this.activeExtensionWidgets.keys(),
+    ]);
+    const owners: Array<Readonly<{ key: string; owner: OwnedExtensionWidgetComponent }>> = [];
+    const generations = new Map<string, number>();
+    for (const key of keys) {
+      generations.set(key, this.nextExtensionWidgetGeneration(key));
+      const active = this.activeExtensionWidgets.get(key);
+      if (active) owners.push({ key, owner: active.owner });
+    }
+    this.activeExtensionWidgets.clear();
+
+    let scheduling = true;
+    let pendingPublications = 0;
+    let cleanupOutcome: ProjectedInputCommitOutcome = "committed";
+    let completed = false;
+    const finish = (): void => {
+      if (completed || scheduling || pendingPublications !== 0) return;
+      completed = true;
+      this.extensionWidgetsCleaningUp = false;
+      const callbacks = [...this.extensionWidgetCleanupCallbacks];
+      this.extensionWidgetCleanupCallbacks.clear();
+      for (const callback of callbacks) {
+        try { callback(cleanupOutcome); } catch { /* cleanup waiters are isolated */ }
+      }
+    };
+
+    for (const key of keys) {
+      pendingPublications += 1;
+      try {
+        const generation = generations.get(key);
+        this.publishExtensionWidget(key, undefined, undefined, {
+          duringCleanup: true,
+          isCurrent: () => generation !== undefined
+            && this.extensionWidgetGenerations.get(key) === generation
+            && this._alive
+            && !this.projectedHub.isClosed(),
+          onSettled: (outcome) => {
+            if (outcome === "rejected") cleanupOutcome = "rejected";
+            pendingPublications -= 1;
+            finish();
+          },
+        });
+      } catch (error) {
+        cleanupOutcome = "rejected";
+        pendingPublications -= 1;
+        this.reportExtensionWidgetFailure(key, "cleanup", error, true);
+      }
+    }
+    for (const { key, owner } of owners) {
+      const result = this.disposeExtensionWidgetOwner(owner);
+      if (result.failed) this.reportExtensionWidgetFailure(key, "cleanup", result.error, true);
+    }
+    scheduling = false;
+    finish();
   }
 
   private getCustomUiWidth(options: unknown): number {
-    if (!options || typeof options !== "object") return 92;
+    if (!options || typeof options !== "object") return DEFAULT_CUSTOM_UI_COLUMNS;
     const overlayOptions = (options as { overlayOptions?: unknown }).overlayOptions;
     const resolved = typeof overlayOptions === "function" ? overlayOptions() : overlayOptions;
-    if (!resolved || typeof resolved !== "object") return 92;
+    if (!resolved || typeof resolved !== "object") return DEFAULT_CUSTOM_UI_COLUMNS;
     const width = (resolved as { width?: unknown }).width;
     return typeof width === "number" && Number.isFinite(width)
       ? Math.max(40, Math.min(140, Math.round(width)))
-      : 92;
+      : DEFAULT_CUSTOM_UI_COLUMNS;
   }
 
   private emitCustomUiRender(id: string, custom: ActiveCustomUi): void {
@@ -1874,13 +2669,15 @@ export class AgentSessionWrapper {
     } catch {
       // Ignore dispose errors from extension UI components.
     }
-    this.emit({
+    const event = {
       type: "extension_ui_request",
       id,
       method: "custom",
       lines: [],
       closed: true,
-    } as ExtensionUiRequest as AgentEvent);
+    } as ExtensionUiRequest as AgentEvent;
+    if (this.closing || this.destroying) this.emitCleanupAgentEvent(event);
+    else this.emit(event);
     custom.resolve(value);
   }
 
@@ -1997,7 +2794,9 @@ export class AgentSessionWrapper {
         if (timeoutId) clearTimeout(timeoutId);
         signal?.removeEventListener("abort", onAbort);
         if (this.pendingUiRequests.delete(id)) {
-          this.acceptProjectedWrapperInput({ type: "extension_dialog_closed", id });
+          const event = { type: "extension_dialog_closed", id } as AgentEvent;
+          if (this.closing || this.destroying) this.acceptProjectedCleanupInput(event);
+          else this.acceptProjectedWrapperInput(event);
         }
         this.pendingUiResponses.delete(id);
       };
@@ -2022,6 +2821,7 @@ export class AgentSessionWrapper {
   }
 
   private createExtensionUiContext(): ExtensionUiContextLike {
+    const widgetUiGeneration = this.extensionWidgetUiGeneration;
     return {
       select: (title, options, opts) => this.requestExtensionUi(
         { method: "select", title, options, ...(opts?.timeout ? { timeout: opts.timeout } : {}) },
@@ -2062,7 +2862,8 @@ export class AgentSessionWrapper {
       },
       onTerminalInput: () => () => {},
       setStatus: (key, text) => {
-        if (!this.runtimeIsCurrent()) return;
+        if (widgetUiGeneration !== this.extensionWidgetUiGeneration
+          || !this.extensionWidgetAdmissionIsOpen()) return;
         const statusKey = key === PI_WEB_OPENAI_FAST_MODE_STATUS_KEY
           ? PI_WEB_OPENAI_FAST_MODE_ESCAPED_EXTENSION_STATUS_KEY
           : key;
@@ -2081,25 +2882,35 @@ export class AgentSessionWrapper {
       setWorkingIndicator: () => {},
       setHiddenThinkingLabel: () => {},
       setWidget: (key, content, options) => {
-        if (!this.runtimeIsCurrent()) return;
-        if (content !== undefined && !Array.isArray(content)) return;
-        if (content === undefined) {
-          this.extensionWidgets.delete(key);
-        } else {
-          this.extensionWidgets.set(key, {
-            key,
-            lines: content,
-            placement: options?.placement ?? "aboveEditor",
-          });
-        }
-        this.emit({
-          type: "extension_ui_request",
-          id: randomUUID(),
-          method: "setWidget",
-          widgetKey: key,
-          widgetLines: content,
-          widgetPlacement: options?.placement,
-        } as ExtensionUiRequest as AgentEvent);
+        if (widgetUiGeneration !== this.extensionWidgetUiGeneration
+          || !this.extensionWidgetAdmissionIsOpen() || typeof key !== "string") return;
+        this.runExtensionWidgetCall(() => {
+          try {
+            const requestedPlacement = options?.placement === "belowEditor"
+              ? "belowEditor"
+              : options?.placement === "aboveEditor"
+                ? "aboveEditor"
+                : undefined;
+            const placement = requestedPlacement ?? "aboveEditor";
+            if (typeof content === "function") {
+              this.setExtensionWidgetFactory(key, content, placement);
+              return;
+            }
+            if (content === undefined) {
+              this.clearExtensionWidget(key);
+              return;
+            }
+            if (!Array.isArray(content)) return;
+            this.setExtensionWidgetLines(key, content, placement, requestedPlacement);
+          } catch (error) {
+            this.reportExtensionWidgetFailure(
+              key,
+              "component_validation",
+              error,
+              this.closing || this.destroying,
+            );
+          }
+        });
       },
       setFooter: () => {},
       setHeader: () => {},
@@ -2158,19 +2969,10 @@ export class AgentSessionWrapper {
       switchSession: async () => ({ cancelled: true }),
       reload: async () => {
         if (!this.runtimeIsCurrent()) return;
-        this.beginFastModeRunnerReplacement();
-        this.clearProjectedExtensionState();
-        this.extensionStatuses.clear();
-        this.extensionWidgets.clear();
-        await this.inner.reload({
-          beforeSessionStart: () => {
-            if (this.runtimeIsCurrent()) this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
-          },
-        });
-        if (!this.runtimeIsCurrent()) return;
-        this.applyForcedEmptySystemPrompt();
-        this.attachFastModeRunner(this.inner.extensionRunner);
-        await this.requestFastModeRefresh();
+        if (this.extensionReloadExecution.getStore()?.active) {
+          throw new Error("rpc_extension_reload_reentrant");
+        }
+        await this.enqueueExtensionReload();
       },
     };
   }

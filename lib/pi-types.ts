@@ -5,6 +5,7 @@ import type {
   SlashCommandInfo,
   Theme,
 } from "@earendil-works/pi-coding-agent";
+import type { HeadlessCustomUiTui } from "./custom-ui-terminal";
 
 export interface ContextUsage {
   percent: number | null;
@@ -91,6 +92,16 @@ type WidgetOptionsLike = {
   placement?: "aboveEditor" | "belowEditor";
 };
 
+export interface ExtensionWidgetComponentLike {
+  render(width: number): string[];
+  dispose?(): void;
+}
+
+export type ExtensionWidgetFactoryLike = (
+  tui: HeadlessCustomUiTui,
+  theme: Theme,
+) => ExtensionWidgetComponentLike;
+
 export interface ExtensionUiContextLike {
   select(title: string, options: string[], opts?: DialogOptionsLike): Promise<string | undefined>;
   confirm(title: string, message: string, opts?: DialogOptionsLike): Promise<boolean>;
@@ -103,7 +114,7 @@ export interface ExtensionUiContextLike {
   setWorkingVisible(visible: boolean): void;
   setWorkingIndicator(options?: { frames?: string[]; intervalMs?: number }): void;
   setHiddenThinkingLabel(label?: string): void;
-  setWidget(key: string, content: string[] | ((...args: never[]) => unknown) | undefined, options?: WidgetOptionsLike): void;
+  setWidget(key: string, content: string[] | ExtensionWidgetFactoryLike | undefined, options?: WidgetOptionsLike): void;
   setFooter(factory: unknown): void;
   setHeader(factory: unknown): void;
   setTitle(title: string): void;
