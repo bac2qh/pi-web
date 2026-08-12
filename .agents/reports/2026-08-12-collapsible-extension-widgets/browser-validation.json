@@ -1,0 +1,72 @@
+{
+  "date": "2026-08-12",
+  "result": "pass",
+  "environment": {
+    "browser": "Google Chrome 151.0.7922.109 headless",
+    "server": "owned Pi Web development server from the task checkout",
+    "desktopViewport": "1280x800",
+    "mobileViewport": "390x780"
+  },
+  "fixture": {
+    "kind": "disposable project-local Pi extension",
+    "widgets": [
+      { "key": "smoke-above", "placement": "aboveEditor" },
+      { "key": "smoke-below", "placement": "belowEditor" }
+    ],
+    "authoritativeUpdateLines": 11
+  },
+  "checks": [
+    {
+      "name": "desktop responsive default and independent pointer toggle",
+      "result": "pass",
+      "evidence": "Both widgets initially exposed native button controls with aria-expanded=true and distinct generated body IDs. A trusted mouse click collapsed only smoke-above, changed its label to Expand widget, and applied hidden to its still-present body while smoke-below remained expanded."
+    },
+    {
+      "name": "native keyboard and visible focus",
+      "result": "pass",
+      "evidence": "The focused disclosure matched :focus-visible with a solid 2px outline. Trusted Enter expanded it and trusted Space collapsed it."
+    },
+    {
+      "name": "collapsed live update and line cap",
+      "result": "pass",
+      "evidence": "While smoke-above remained hidden, an extension replacement delivered 11 authoritative lines. The mounted browser body updated through latest-10 plus the truncation marker and omitted latest-11; the agent state still reported 11 lines."
+    },
+    {
+      "name": "placement, removal, and reappearance lifetime",
+      "result": "pass",
+      "evidence": "Moving smoke-above into the below-editor slot retained its explicit collapsed choice. Removing it and adding the same key again restored the untouched desktop default (expanded) in the above-editor slot."
+    },
+    {
+      "name": "mobile defaults, touch, and viewport override stability",
+      "result": "pass",
+      "evidence": "At 390px both untouched widgets collapsed and each disclosure measured 44px high. A trusted synthesized touch tap expanded smoke-above; it remained expanded through mobile-to-desktop-to-mobile changes while untouched smoke-below followed the breakpoint and returned collapsed on mobile."
+    },
+    {
+      "name": "mobile editor geometry",
+      "result": "pass",
+      "evidence": "The above widget region ended at y=620.5 before the textarea began at y=635.453125; the below region began at y=724 after the textarea ended at y=661.046875. The document had no horizontal overflow."
+    },
+    {
+      "name": "browser runtime",
+      "result": "pass",
+      "evidence": "No Runtime.exceptionThrown events or browser error log entries were observed during the final run."
+    }
+  ],
+  "observations": {
+    "desktopDisclosureHeight": 34,
+    "mobileDisclosureHeights": [44, 44],
+    "focusOutline": "2px solid",
+    "mobileLayout": {
+      "aboveRegionBottom": 620.5,
+      "textareaTop": 635.453125,
+      "textareaBottom": 661.046875,
+      "belowRegionTop": 724,
+      "horizontalOverflow": false
+    },
+    "finalMobileState": {
+      "smoke-above": "expanded explicit override",
+      "smoke-below": "collapsed responsive default"
+    },
+    "browserIssueCount": 0
+  }
+}

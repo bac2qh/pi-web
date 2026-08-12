@@ -663,6 +663,39 @@ span.linenumber {
   }
 }
 
+.extension-widget-disclosure {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 34px;
+  box-sizing: border-box;
+  padding: 5px 9px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  touch-action: manipulation;
+  transition: background 0.12s, color 0.12s;
+}
+
+.extension-widget-disclosure:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.extension-widget-disclosure:focus,
+.extension-widget-disclosure:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+@media (max-width: 640px), (hover: none), (pointer: coarse), (any-pointer: coarse) {
+  .extension-widget-disclosure {
+    min-height: 44px;
+  }
+}
+
 .display-controls-inline-wrap {
   display: flex;
   align-items: center;

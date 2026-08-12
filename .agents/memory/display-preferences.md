@@ -17,6 +17,12 @@
 - Focusable vertical separators exist only at `1000px` and wider for visible, non-expanded panels. Pointer movement updates only panel CSS variables and live ARIA during capture, then commits once; arrows, Shift+arrows, Home/End, Enter, and double-click provide keyboard adjustment and reset. Reset removes the storage key rather than persisting a default pixel value.
 - Sidebar/right-panel collapse, manual expansion, automatic full-width viewing below `1000px`, and the `640px` mobile layout remain authoritative. Each panel and its fixed-width direct children consume the same variable so resizing and restoration do not remount conversation, DAG, or file-viewer trees.
 
+## 2026-08-12 — Extension-widget disclosure choices are mounted-chat state
+
+- Every array- or factory-origin widget card above or below the editor has its own browser-native disclosure. Untouched widgets follow the responsive default—collapsed at `≤640px`, expanded above it—while an explicit choice remains authoritative across later viewport changes.
+- The explicit map is keyed only within the mounted chat. It survives line replacement, reordering, and placement movement while the key remains present, but key removal or a chat remount discards it. New-chat materialization keeps the existing mount; page reload and selected-chat changes do not persist or transfer choices.
+- Collapsing applies `hidden` only to the still-mounted browser body. The extension projection, current lines, ten-line display cap, editor-adjacent slot bounds, and custom-panel input behavior remain separate and unchanged.
+
 ## References
 
 - File Viewer typography plan: `.agents/plans/2026-08-06-file-viewer-font-size.md`
@@ -25,4 +31,6 @@
 - Resizable panels plan: `.agents/plans/2026-08-09-resizable-panels.md`
 - Resizable panels checkpoint: `.agents/checkpoints/2026-08-09-resizable-panels-checkpoints.md`
 - Resizable panels browser evidence: `.agents/reports/2026-08-09-resizable-panels/browser-validation.json`
+- Collapsible extension widgets plan: `.agents/plans/2026-08-12-collapsible-extension-widgets.md`
+- Collapsible extension widgets checkpoint: `.agents/checkpoints/2026-08-12-collapsible-extension-widgets-checkpoints.md`
 - Shared DAG/file right-panel integration evidence: `.agents/reports/2026-08-08-session-dag-browser-validation.md`

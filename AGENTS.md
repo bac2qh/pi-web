@@ -251,6 +251,7 @@ Newer Pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 ### Extension widgets and custom UI
 - `setWidget()` accepts existing `string[]` content and synchronous component factories. Pi Web renders factories server-side with the plain-text theme and a frozen 92×40 façade exposing only terminal dimensions, `kittyProtocolActive: false`, and `requestRender(force?)`; browser transport remains the existing `{ key, lines, placement }` projection.
 - Widget component ownership is wrapper-local and generation-guarded across replacement, refresh, clear, reload, and shutdown. Browser presentation caps both array- and factory-origin content at ten logical lines plus a truncation marker without truncating server/projected state.
+- Each browser widget card is an independent native disclosure. Untouched cards default collapsed at `≤640px` and expanded above it; a user toggle becomes a mounted-chat per-key override that survives line updates, reordering, and placement changes, then resets when the key disappears or the chat remounts. Collapsing hides only the mounted browser body and never changes extension or projected authority.
 - Persistent widgets are render-only in Pi Web: `onTerminalInput()` remains unsupported, so a fleet widget's arrow/enter hint is not interactive. `/subagents-fleet` remains the interactive inspector through the separate custom-panel input path.
 
 ### OpenAI Fast indicator compatibility adapter

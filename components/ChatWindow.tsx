@@ -11,7 +11,7 @@ import type { MermaidView } from "@/lib/mermaid-display";
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
-import { EditorAdjacentExtensionWidgets, ExtensionWidgets, partitionExtensionWidgets } from "./ExtensionWidgets";
+import { EditorAdjacentExtensionWidgets, ExtensionWidgets, partitionExtensionWidgets, useExtensionWidgetDisclosureState } from "./ExtensionWidgets";
 import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAgentSession";
 import { useAudio } from "@/hooks/useAudio";
 import { useDragDrop } from "@/hooks/useDragDrop";
@@ -199,6 +199,10 @@ export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, 
     onSessionSided, onSideSessionChange,
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen,
   });
+  const {
+    isExpanded: isExtensionWidgetExpanded,
+    toggleWidget: toggleExtensionWidget,
+  } = useExtensionWidgetDisclosureState(extensionWidgets, !isMobile);
 
   // Register the abort handler for the global Esc shortcut
   useEffect(() => {
@@ -373,7 +377,11 @@ export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, 
       }}
     >
       <div className="chat-column">
-        <ExtensionWidgets widgets={widgets} />
+        <ExtensionWidgets
+          widgets={widgets}
+          isExpanded={isExtensionWidgetExpanded}
+          onToggle={toggleExtensionWidget}
+        />
       </div>
     </div>
   );
