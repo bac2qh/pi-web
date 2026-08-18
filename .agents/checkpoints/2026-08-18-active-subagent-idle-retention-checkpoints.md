@@ -13,3 +13,15 @@ Plan: `.agents/plans/2026-08-18-active-subagent-idle-retention.md`
 **Departures from approved obligations:** None. The disposable agent-directory isolation removes external user-extension process lifetime from the broad repository check without changing the code or test command under validation.
 
 **Implementation commit:** Pending.
+
+## Implementation Summary
+
+**Plan section:** Final implementation and Validation Contract closeout — Objective; Design / Implementation Strategy items 1–6; VC-001 through VC-004.
+
+**Work and outcome:** Completed the approved fixed-window correction: every normal Pi Web wrapper now receives the exact 12-hour semantic-idle default, while constructor injection, deterministic fake-clock behavior, semantic touches, passive-activity exclusions, active-work deferral, explicit/server shutdown, and exact-once native disposal remain unchanged. The exact assertion and maintained lifecycle documentation agree with the implementation. No configuration, runtime control, transport, dependency, polling, keepalive, or Pi Subagents coupling was added.
+
+**Validation / evidence:** The focused RPC suite passed 156/156 and the complete repository Node suite passed 908/908 under a disposable empty agent directory after isolating an inherited user-extension watcher. TypeScript, ESLint, and whitespace checks passed. The implementation and validation record are committed as `4b98517c868efd4274af0eba9950447aa95817ef` (`fix: retain idle agent sessions for 12 hours`). Test-created dependency links and development artifacts were removed, and no production build ran.
+
+**Departures from approved obligations:** None. VC-001 through VC-004 are complete. The accepted 12-hour upper bound, longer idle resource retention, and absence of persistence across explicit shutdown or process failure remain the plan's disclosed limitations, not departures.
+
+**Implementation commit:** `4b98517c868efd4274af0eba9950447aa95817ef`.
