@@ -160,7 +160,7 @@ hooks/
 ### AgentSession lifecycle (`lib/rpc-manager.ts`)
 - One `AgentSessionWrapper` per session id, keyed in `globalThis.__piSessions`
 - `globalThis` survives Next.js hot-reload; plain module-level Map does not
-- Semantic idle timeout: 30 minutes. Accepted commands and native/projected activity touch it; heartbeat traffic does not, and prompt/compaction/streaming/binding/hosted-kickoff work cannot expire. Concurrent `startRpcSession()` calls share one generation-safe start Promise (`globalThis.__piStartLocks`).
+- Semantic idle timeout: 12 hours. Accepted commands and native/projected activity touch it; heartbeat traffic does not, and prompt/compaction/streaming/binding/hosted-kickoff work cannot expire. Concurrent `startRpcSession()` calls share one generation-safe start Promise (`globalThis.__piStartLocks`).
 - Published-wrapper release is one memoized strict operation: it synchronously closes admission, cancels an undispatched hosted kickoff, joins started extension binding, aborts compaction and agent work, awaits exactly one `session_shutdown { reason: "quit" }`, and only then disposes the native session once. Idle expiry, contextual Fork, failed published ensure, generation retirement, and server shutdown share it. A prepared owner that fails before publication uses bare disposal and emits no invented lifecycle.
 
 ### Pi Web-hosted implementation sessions

@@ -173,7 +173,7 @@ export type EnsuredSessionTransportTarget = Readonly<{
 }>;
 
 const CODING_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"];
-export const RPC_SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+export const RPC_SESSION_IDLE_TIMEOUT_MS = 12 * 60 * 60 * 1000;
 
 export type RpcSemanticIdleCategory = "startup" | "command" | "native_event" | "wrapper_event" | "settlement";
 export type RpcWrapperClock = Readonly<{

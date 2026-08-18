@@ -54,3 +54,7 @@
 ## 2026-08-11
 
 - Updated clone-session memory after implementing Pi-Web-only `/side`: immutable safe live snapshots, transactional durable children, source isolation, targeted hidden boundaries, filtered investigative runtimes, terminal derivation, guarded Return/selection, generic side compaction presentation, and the explicit complete Full history exception.
+
+## 2026-08-18
+
+- Updated custom-server lifecycle memory after extending the fixed semantic wrapper idle window from 30 minutes to 12 hours while preserving semantic touch rules, active-work deferral, passive-activity exclusions, and authoritative shutdown.

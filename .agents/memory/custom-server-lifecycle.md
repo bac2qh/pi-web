@@ -22,3 +22,7 @@
 ## 2026-08-08
 
 - Server shutdown now starts published `AgentSession` semantic cleanup at the existing gateway runtime-owner boundary and observes its shared promise. The original absolute ten-second socket/connection deadline remains independent: natural drain and residual Pi-owned force complete on that clock before server close strictly awaits extension `session_shutdown` handlers, final gateway cleanup, and public Next cleanup. A nonsettling handler may therefore keep semantic close pending after network resources settle, but it cannot delay or reset network force.
+
+## 2026-08-18
+
+- The fixed semantic wrapper idle window is now 12 hours, superseding the earlier 30-minute default. Existing semantic touches, passive-activity exclusions, active-work deferral, and authoritative explicit/server shutdown remain unchanged; this longer window reduces but does not eliminate interruption risk for async subagent work.
