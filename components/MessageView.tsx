@@ -1,14 +1,27 @@
 "use client";
 
 import { scaledMenuFontSize, scaledTranscriptFontSize } from "@/lib/display-preferences";
-import { memo, useState, useRef, useEffect, useMemo } from "react";
+import { memo, useState, useRef, useEffect, useId, useMemo, type ReactNode } from "react";
+import { Prism as SyntaxHighlighter, createElement as createSyntaxElement } from "react-syntax-highlighter";
+import { vs } from "react-syntax-highlighter/dist/cjs/styles/prism";
+import { vscDarkPlus } from "react-syntax-highlighter/dist/cjs/styles/prism";
 import { MarkdownBody } from "./MarkdownBody";
 import { copyText } from "@/lib/clipboard";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
-import { buildAssistantBlockKey, isEmptyThinkingBlock } from "@/lib/message-display";
+import { buildAssistantBlockKey, isEditToolName, isEmptyThinkingBlock } from "@/lib/message-display";
 import type { FileOpenOptions } from "@/lib/file-links";
 import type { MermaidView } from "@/lib/mermaid-display";
-import { parseUnifiedPatch, type SplitDiffCell } from "@/lib/patch";
+import { getFileLanguage } from "@/lib/file-types";
+import {
+  getUnifiedDiffFileDisplayPath,
+  parseUnifiedPatch,
+  type DiffTextRange,
+  type UnifiedDiffCodeRow,
+  type UnifiedDiffFile,
+  type UnifiedDiffHunk,
+  type UnifiedDiffRow,
+} from "@/lib/patch";
+import { useTheme } from "@/hooks/useTheme";
 import type {
   AgentMessage,
   UserMessage,
@@ -793,94 +806,91 @@ function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex }: {
 
 
 function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; result?: ToolResultMessage; duration?: number }) {
-  const [expanded, setExpanded] = useState(false);
-  const inputStr = JSON.stringify(block.input, null, 2);
   const isEditTool = isEditToolName(block.toolName);
+  const [expanded, setExpanded] = useState(() => isEditTool);
+  const bodyId = useId();
+  const inputStr = JSON.stringify(block.input, null, 2);
   const resultDiff = result && !result.isError ? getResultDiff(result) : null;
+  const resultDiffText = resultDiff?.text ?? null;
+  const shouldParseDiff = resultDiffText !== null && (isEditTool || expanded);
+  const parsedFiles = useMemo(
+    () => shouldParseDiff && resultDiffText ? parseUnifiedPatch(resultDiffText) : null,
+    [resultDiffText, shouldParseDiff],
+  );
+  const renderableFiles = parsedFiles && canRenderStructuredPatch(parsedFiles) ? parsedFiles : null;
 
-  // Result display
   const resultText = result
     ? result.content.filter((b): b is { type: "text"; text: string } => b.type === "text").map((b) => b.text).join("\n")
     : null;
   const resultIsEmpty = resultText === null ? false : (resultText.trim() === "(no output)" || resultText.trim() === "");
   const isError = result?.isError ?? false;
+  const structuredEdit = isEditTool && renderableFiles !== null;
+  const additions = renderableFiles?.reduce((total, file) => total + file.additions, 0) ?? 0;
+  const deletions = renderableFiles?.reduce((total, file) => total + file.deletions, 0) ?? 0;
+  const preview = structuredEdit
+    ? (renderableFiles.length === 1 ? getUnifiedDiffFileDisplayPath(renderableFiles[0]) : `${renderableFiles.length} changed files`)
+    : getToolPreview(block);
+  const accessibleDetails = [
+    preview || null,
+    structuredEdit
+      ? `${additions} ${additions === 1 ? "addition" : "additions"} and ${deletions} ${deletions === 1 ? "deletion" : "deletions"}`
+      : null,
+    duration === undefined ? null : `${duration} seconds`,
+  ].filter((value): value is string => value !== null).join(", ");
+  const cardClassName = [
+    "tool-call-card",
+    isError ? "is-error" : "is-success",
+    isEditTool ? "is-edit" : "",
+    structuredEdit ? "has-structured-edit" : "",
+  ].filter(Boolean).join(" ");
 
   return (
-    <div
-      style={{
-        borderRadius: 7,
-        overflow: "hidden",
-        fontSize: scaledMenuFontSize(12),
-        border: isError ? "1px solid rgba(248,113,113,0.45)" : "1px solid rgba(34,197,94,0.25)",
-        background: isError ? "rgba(248,113,113,0.05)" : "rgba(34,197,94,0.04)",
-      }}
-    >
-      {/* ── Tool call header ── */}
+    <div className={cardClassName} style={{ fontSize: scaledMenuFontSize(12) }}>
       <button
-        onClick={() => setExpanded((v) => !v)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 7,
-          width: "100%",
-          padding: "6px 10px",
-          background: "none",
-          border: "none",
-          color: "var(--text-muted)",
-          cursor: "pointer",
-          fontSize: scaledMenuFontSize(12),
-          textAlign: "left",
-          minWidth: 0,
-        }}
+        type="button"
+        className="tool-call-disclosure"
+        aria-label={`${expanded ? "Collapse" : "Expand"} ${block.toolName} tool details${accessibleDetails ? `: ${accessibleDetails}` : ""}`}
+        aria-expanded={expanded}
+        aria-controls={bodyId}
+        onClick={() => setExpanded((value) => !value)}
+        style={{ fontSize: scaledMenuFontSize(12) }}
       >
-        <span style={{ color: isError ? "#f87171" : "#16a34a", fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: scaledMenuFontSize(11), flexShrink: 0 }}>
+        <span className="tool-call-name" style={{ fontSize: scaledMenuFontSize(11) }}>
           {block.toolName}
         </span>
-        <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: scaledMenuFontSize(11), overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
-          {getToolPreview(block)}
+        <span className="tool-call-preview" title={preview} style={{ fontSize: scaledMenuFontSize(11) }}>
+          {preview}
         </span>
+        {structuredEdit && <DiffStats additions={additions} deletions={deletions} compact />}
         {duration !== undefined && (
-          <span style={{ fontSize: scaledMenuFontSize(11), color: "var(--text-dim)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{duration}s</span>
+          <span className="tool-call-duration" style={{ fontSize: scaledMenuFontSize(11) }}>{duration}s</span>
         )}
-        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--text-dim)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
+        <svg className="tool-call-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ transform: expanded ? "rotate(180deg)" : "none" }}>
           <polyline points="2 3.5 5 6.5 8 3.5" />
         </svg>
       </button>
 
-      {/* ── Expanded: input args ── */}
-      {expanded && !isEditTool && (
-        <pre
-          style={{
-            margin: 0,
-            padding: "8px 10px",
-            color: "var(--text-muted)",
-            fontSize: "var(--pi-transcript-font-size, 16px)",
-            lineHeight: 1.5,
-            overflow: "auto",
-            background: "var(--bg-subtle)",
-            borderTop: isError ? "1px solid rgba(248,113,113,0.25)" : "1px solid rgba(34,197,94,0.2)",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-all",
-          }}
-        >
-          {inputStr}
-        </pre>
-      )}
-
-      {/* ── Paired result — only shown when expanded ── */}
-      {expanded && result && (
-        resultDiff ? (
-          <PairedDiffResult
-            diff={resultDiff}
-          />
-        ) : (
-          <PairedResult
-            text={resultText ?? ""}
-            isEmpty={resultIsEmpty}
-            isError={isError}
-          />
-        )
-      )}
+      <div id={bodyId} className="tool-call-body" hidden={!expanded}>
+        {expanded && (
+          <>
+            {!isEditTool && (
+              <pre className="tool-call-input">{inputStr}</pre>
+            )}
+            {result && (
+              resultDiff ? (
+                <PairedDiffResult diff={resultDiff} files={renderableFiles} />
+              ) : (
+                <PairedResult
+                  text={resultText ?? ""}
+                  isEmpty={resultIsEmpty}
+                  isError={isError}
+                  naturalHeight={isEditTool}
+                />
+              )
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -889,218 +899,526 @@ interface ResultDiff {
   text: string;
 }
 
-function PairedDiffResult({ diff }: {
+const PATCH_SYNTAX_LANGUAGES = new Set([
+  "typescript", "javascript", "python", "ruby", "go", "rust", "java", "kotlin", "swift",
+  "c", "cpp", "csharp", "html", "css", "json", "yaml", "toml", "xml", "markdown",
+  "bash", "sql", "graphql", "dockerfile", "hcl", "makefile",
+]);
+const MAX_STRUCTURED_PATCH_FILES = 100;
+const MAX_STRUCTURED_PATCH_HUNKS = 200;
+const MAX_STRUCTURED_PATCH_ROWS = 4_000;
+const MAX_STRUCTURED_PATCH_CHARS = 500_000;
+const MAX_HIGHLIGHTED_HUNKS = 80;
+const MAX_HIGHLIGHTED_PATCH_LINES = 1_200;
+const MAX_HIGHLIGHTED_PATCH_CHARS = 120_000;
+const MAX_HIGHLIGHTED_PROJECTED_CHARS = 300_000;
+const MAX_HIGHLIGHTED_CHANGE_GROUPS = 80;
+const MAX_HIGHLIGHTED_HUNK_LINES = 600;
+const MAX_HIGHLIGHTED_HUNK_CHARS = 60_000;
+const MAX_HIGHLIGHTED_LINE_CHARS = 4_000;
+
+interface SyntaxTreeNode {
+  type: "element" | "text";
+  value?: string | number;
+  tagName?: string;
+  properties?: { className?: unknown[]; [key: string]: unknown };
+  children?: SyntaxTreeNode[];
+}
+
+interface HunkSyntaxWork {
+  codeChars: number;
+  codeLines: number;
+  changeGroups: Array<{
+    rows: UnifiedDiffCodeRow[];
+    side: "old" | "new";
+    projectedChars: number;
+    projection: SyntaxProjection;
+  }>;
+}
+
+interface SyntaxProjection {
+  rows: UnifiedDiffCodeRow[];
+  targetIndices: number[];
+  code: string;
+}
+
+function canRenderStructuredPatch(files: UnifiedDiffFile[]): boolean {
+  let hunkCount = 0;
+  let rowCount = 0;
+  let characterCount = 0;
+  if (files.length > MAX_STRUCTURED_PATCH_FILES) return false;
+
+  for (const file of files) {
+    characterCount += (file.oldPath?.length ?? 0) + (file.newPath?.length ?? 0);
+    for (const hunk of file.hunks) {
+      hunkCount += 1;
+      rowCount += hunk.rows.length;
+      characterCount += hunk.header.length;
+      for (const row of hunk.rows) {
+        characterCount += row.type === "omission" ? 0 : row.text.length;
+      }
+      if (
+        hunkCount > MAX_STRUCTURED_PATCH_HUNKS
+        || rowCount > MAX_STRUCTURED_PATCH_ROWS
+        || characterCount > MAX_STRUCTURED_PATCH_CHARS
+      ) return false;
+    }
+  }
+  return true;
+}
+
+function PairedDiffResult({ diff, files }: {
   diff: ResultDiff;
+  files: UnifiedDiffFile[] | null;
 }) {
   return (
-    <div
-      style={{
-        borderTop: "1px solid rgba(34,197,94,0.15)",
-        background: "var(--bg)",
-      }}
-    >
-      <SplitPatchView text={diff.text} />
+    <div className="edit-patch-result">
+      {files ? <UnifiedPatchView files={files} /> : <PatchTextView text={diff.text} />}
     </div>
   );
 }
 
-function SplitPatchView({ text }: { text: string }) {
-  const files = useMemo(() => parseUnifiedPatch(text), [text]);
-  if (!files) return <PatchTextView text={text} />;
+function UnifiedPatchView({ files }: { files: UnifiedDiffFile[] }) {
+  const { isDark } = useTheme();
   const showFileHeaders = files.length > 1;
+  const syntaxWorkByHunk = useMemo(() => selectHighlightedHunks(files), [files]);
+  const syntaxStyle = isDark ? vscDarkPlus : vs;
 
   return (
-    <div style={{ maxHeight: 560, overflowY: "auto", overflowX: "hidden", background: "var(--bg)" }}>
+    <div className="edit-patch" data-layout="unified">
       {files.map((file, fileIndex) => (
-        <div
-          key={fileIndex}
-          style={{
-            minWidth: 0,
-            borderTop: fileIndex === 0 ? "none" : "1px solid var(--border)",
-            fontFamily: "var(--font-mono)",
-            fontSize: "var(--pi-transcript-font-size, 16px)",
-            lineHeight: 1.55,
-          }}
-        >
-          {showFileHeaders && (
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-                position: "sticky",
-                top: 0,
-                zIndex: 1,
-                background: "var(--bg-panel)",
-                borderBottom: "1px solid var(--border)",
-              }}
-            >
-              <SplitDiffHeader title={file.oldPath || "Before"} side="left" />
-              <SplitDiffHeader title={file.newPath || "After"} side="right" />
-            </div>
-          )}
-
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)" }}>
-            {file.rows.map((row, rowIndex) => {
-              if (row.type === "hunk") {
-                return null;
-              }
-
-              return (
-                <div key={rowIndex} style={{ display: "contents" }}>
-                  <SplitDiffCellView cell={row.left} side="left" />
-                  <SplitDiffCellView cell={row.right} side="right" />
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <UnifiedDiffFileView
+          key={`${file.oldPath ?? "old"}:${file.newPath ?? "new"}:${fileIndex}`}
+          file={file}
+          showHeader={showFileHeaders}
+          syntaxWorkByHunk={syntaxWorkByHunk}
+          syntaxStyle={syntaxStyle}
+        />
       ))}
     </div>
   );
 }
 
-function SplitDiffHeader({ title, side }: { title: string; side: "left" | "right" }) {
+function UnifiedDiffFileView({ file, showHeader, syntaxWorkByHunk, syntaxStyle }: {
+  file: UnifiedDiffFile;
+  showHeader: boolean;
+  syntaxWorkByHunk: ReadonlyMap<UnifiedDiffHunk, HunkSyntaxWork>;
+  syntaxStyle: Record<string, React.CSSProperties>;
+}) {
+  const path = getUnifiedDiffFileDisplayPath(file);
+  const language = getFileLanguage(getPatchLanguagePath(file));
+
   return (
-    <div
-      title={title}
-      style={{
-        padding: "5px 10px",
-        color: "var(--text-dim)",
-        borderRight: side === "left" ? "1px solid var(--border)" : "none",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
+    <section className="edit-diff-file" data-file-path={path} data-language={language}>
+      {showHeader && (
+        <header className="edit-diff-file-header">
+          <span className="edit-diff-file-path" title={path}>{path}</span>
+          <DiffStats additions={file.additions} deletions={file.deletions} />
+        </header>
+      )}
+      <div className="edit-diff-hunks">
+        {file.hunks.map((hunk, hunkIndex) => (
+          <UnifiedDiffHunkView
+            key={`${hunk.header}:${hunkIndex}`}
+            hunk={hunk}
+            language={language}
+            syntaxWork={syntaxWorkByHunk.get(hunk) ?? null}
+            syntaxStyle={syntaxStyle}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function UnifiedDiffHunkView({ hunk, language, syntaxWork, syntaxStyle }: {
+  hunk: UnifiedDiffHunk;
+  language: string;
+  syntaxWork: HunkSyntaxWork | null;
+  syntaxStyle: Record<string, React.CSSProperties>;
+}) {
+  return (
+    <section className="edit-diff-hunk" data-renderer={syntaxWork ? "syntax" : "plaintext"}>
+      <header className="edit-diff-hunk-header" title={hunk.header}>
+        <span className="edit-diff-hunk-location">{hunk.header}</span>
+      </header>
+      <div className="edit-diff-code-block">
+        <UnifiedDiffRowsView
+          hunk={hunk}
+          language={language}
+          syntaxWork={syntaxWork}
+          syntaxStyle={syntaxStyle}
+        />
+      </div>
+    </section>
+  );
+}
+
+function selectHighlightedHunks(files: UnifiedDiffFile[]): ReadonlyMap<UnifiedDiffHunk, HunkSyntaxWork> {
+  const selected = new Map<UnifiedDiffHunk, HunkSyntaxWork>();
+  let highlightedHunks = 0;
+  let highlightedLines = 0;
+  let highlightedChars = 0;
+  let highlightedGroups = 0;
+  let projectedChars = 0;
+
+  for (const file of files) {
+    const language = getFileLanguage(getPatchLanguagePath(file));
+    if (!PATCH_SYNTAX_LANGUAGES.has(language)) continue;
+
+    for (const hunk of file.hunks) {
+      const codeRows = hunk.fullRows.filter((row): row is UnifiedDiffCodeRow => isUnifiedCodeRow(row));
+      const codeChars = codeRows.reduce((total, row, index) => total + row.text.length + (index === 0 ? 0 : 1), 0);
+      if (!canHighlightHunk(codeRows, codeChars, language)) continue;
+      const work = getHunkSyntaxWork(hunk, codeRows, codeChars);
+      const projectedWork = work.changeGroups.reduce((total, group) => total + group.projectedChars, 0);
+      if (
+        work.changeGroups.length === 0
+        || highlightedHunks + 1 > MAX_HIGHLIGHTED_HUNKS
+        || highlightedLines + work.codeLines > MAX_HIGHLIGHTED_PATCH_LINES
+        || highlightedChars + work.codeChars > MAX_HIGHLIGHTED_PATCH_CHARS
+        || highlightedGroups + work.changeGroups.length > MAX_HIGHLIGHTED_CHANGE_GROUPS
+        || projectedChars + projectedWork > MAX_HIGHLIGHTED_PROJECTED_CHARS
+      ) continue;
+
+      selected.set(hunk, work);
+      highlightedHunks += 1;
+      highlightedLines += work.codeLines;
+      highlightedChars += work.codeChars;
+      highlightedGroups += work.changeGroups.length;
+      projectedChars += projectedWork;
+    }
+  }
+  return selected;
+}
+
+function getHunkSyntaxWork(
+  hunk: UnifiedDiffHunk,
+  codeRows = hunk.fullRows.filter((row): row is UnifiedDiffCodeRow => isUnifiedCodeRow(row)),
+  codeChars = codeRows.reduce((total, row, index) => total + row.text.length + (index === 0 ? 0 : 1), 0),
+): HunkSyntaxWork {
+  const changeGroups: HunkSyntaxWork["changeGroups"] = [];
+  let projectedChars = 0;
+
+  for (let index = 0; index < hunk.rows.length;) {
+    const row = hunk.rows[index];
+    if (row.type !== "removed" && row.type !== "added") {
+      index += 1;
+      continue;
+    }
+
+    const type = row.type;
+    const rows: UnifiedDiffCodeRow[] = [];
+    while (index < hunk.rows.length && hunk.rows[index].type === type) {
+      rows.push(hunk.rows[index] as UnifiedDiffCodeRow);
+      index += 1;
+    }
+    const side = type === "removed" ? "old" : "new";
+    const projection = buildSyntaxProjection(hunk, rows, side);
+    if (projection) {
+      projectedChars += projection.code.length;
+      if (
+        changeGroups.length + 1 > MAX_HIGHLIGHTED_CHANGE_GROUPS
+        || projectedChars > MAX_HIGHLIGHTED_PROJECTED_CHARS
+      ) return { codeChars, codeLines: codeRows.length, changeGroups: [] };
+      changeGroups.push({ rows, side, projectedChars: projection.code.length, projection });
+    }
+  }
+
+  return { codeChars, codeLines: codeRows.length, changeGroups };
+}
+
+function buildSyntaxProjection(
+  hunk: UnifiedDiffHunk,
+  targetRows: UnifiedDiffCodeRow[],
+  side: "old" | "new",
+): SyntaxProjection | null {
+  const targetSet = new Set<UnifiedDiffCodeRow>(targetRows);
+  const sourceIndices = targetRows.map((row) => hunk.fullRows.indexOf(row));
+  if (sourceIndices.some((index) => index < 0)) return null;
+  const lastSourceIndex = Math.max(...sourceIndices);
+  const rows: UnifiedDiffCodeRow[] = [];
+  const targetIndices: number[] = [];
+
+  for (let index = 0; index <= lastSourceIndex; index++) {
+    const row = hunk.fullRows[index];
+    if (!isUnifiedCodeRow(row)) continue;
+    if (row.type !== "context" && row.type !== (side === "old" ? "removed" : "added")) continue;
+    if (targetSet.has(row)) targetIndices.push(rows.length);
+    rows.push(row);
+  }
+  if (targetIndices.length !== targetRows.length) return null;
+  return { rows, targetIndices, code: rows.map((row) => row.text).join("\n") };
+}
+
+function UnifiedDiffRowsView({ hunk, language, syntaxWork, syntaxStyle }: {
+  hunk: UnifiedDiffHunk;
+  language: string;
+  syntaxWork: HunkSyntaxWork | null;
+  syntaxStyle: Record<string, React.CSSProperties>;
+}) {
+  const syntaxGroupByFirstRow = new Map(
+    syntaxWork?.changeGroups.map((group) => [group.rows[0], group] as const) ?? [],
+  );
+  const rendered: ReactNode[] = [];
+
+  for (let rowIndex = 0; rowIndex < hunk.rows.length;) {
+    const row = hunk.rows[rowIndex];
+    const syntaxGroup = isUnifiedCodeRow(row) ? syntaxGroupByFirstRow.get(row) : undefined;
+    if (syntaxGroup) {
+      rendered.push(
+        <ProjectedSyntaxRows
+          key={`syntax:${row.type}:${row.oldLineNo ?? ""}:${row.newLineNo ?? ""}:${rowIndex}`}
+          group={syntaxGroup}
+          language={language}
+          syntaxStyle={syntaxStyle}
+        />,
+      );
+      rowIndex += syntaxGroup.rows.length;
+      continue;
+    }
+
+    if (isUnifiedCodeRow(row)) {
+      rendered.push(
+        <UnifiedDiffCodeRowView
+          key={`${row.type}:${row.oldLineNo ?? ""}:${row.newLineNo ?? ""}:${rowIndex}`}
+          row={row}
+          useInlineStyles
+        />,
+      );
+    } else if (row.type === "omission") {
+      rendered.push(
+        <div className="edit-diff-row is-omission" data-row-type="omission" key={`omission:${rowIndex}`}>
+          <span className="edit-diff-line-number" aria-hidden="true">{row.oldLineNo}</span>
+          <span className="edit-diff-line-number" aria-hidden="true">{row.newLineNo}</span>
+          <span className="edit-diff-marker" aria-hidden="true">⋯</span>
+          <span className="edit-diff-omission-text">{row.count} unchanged {row.count === 1 ? "line" : "lines"} omitted</span>
+        </div>,
+      );
+    } else {
+      rendered.push(
+        <div className="edit-diff-row is-no-newline" data-row-type="no-newline" key={`no-newline:${rowIndex}`}>
+          <span className="edit-diff-line-number" aria-hidden="true" />
+          <span className="edit-diff-line-number" aria-hidden="true" />
+          <span className="edit-diff-marker" aria-hidden="true" />
+          <span className="edit-diff-code">{row.text}</span>
+        </div>,
+      );
+    }
+    rowIndex += 1;
+  }
+  return <>{rendered}</>;
+}
+
+function ProjectedSyntaxRows({ group, language, syntaxStyle }: {
+  group: HunkSyntaxWork["changeGroups"][number];
+  language: string;
+  syntaxStyle: Record<string, React.CSSProperties>;
+}) {
+  return (
+    <SyntaxHighlighter
+      language={language}
+      style={syntaxStyle}
+      PreTag={SyntaxPassthrough}
+      CodeTag={SyntaxPassthrough}
+      renderer={({ rows, stylesheet, useInlineStyles }) => {
+        const normalizedRows = (rows as SyntaxTreeNode[]).map(stripSyntaxRowTerminator);
+        const syntaxIsExact = normalizedRows.length === group.projection.rows.length
+          && normalizedRows.every((node, index) => getSyntaxNodeText(node) === group.projection.rows[index].text);
+
+        return group.rows.map((row, index) => {
+          const syntaxNode = syntaxIsExact ? normalizedRows[group.projection.targetIndices[index]] : undefined;
+          return (
+            <UnifiedDiffCodeRowView
+              key={`${row.type}:${row.oldLineNo ?? ""}:${row.newLineNo ?? ""}:${index}`}
+              row={row}
+              syntaxNode={syntaxNode}
+              stylesheet={stylesheet}
+              useInlineStyles={useInlineStyles}
+              syntaxProjection={syntaxNode ? group.side : undefined}
+            />
+          );
+        });
       }}
     >
-      {title}
+      {group.projection.code}
+    </SyntaxHighlighter>
+  );
+}
+
+function SyntaxPassthrough({ children }: { children?: ReactNode }) {
+  return <>{children}</>;
+}
+
+function UnifiedDiffCodeRowView({ row, syntaxNode, stylesheet, useInlineStyles, syntaxProjection }: {
+  row: UnifiedDiffCodeRow;
+  syntaxNode?: SyntaxTreeNode;
+  stylesheet?: Record<string, React.CSSProperties>;
+  useInlineStyles: boolean;
+  syntaxProjection?: "old" | "new";
+}) {
+  const marker = row.type === "removed" ? "−" : row.type === "added" ? "+" : "";
+  const code = syntaxNode && stylesheet
+    ? renderSyntaxNode(syntaxNode, row.emphasis, stylesheet, useInlineStyles)
+    : renderTextWithEmphasis(row.text, row.emphasis);
+
+  return (
+    <div
+      className={`edit-diff-row is-${row.type}`}
+      data-row-type={row.type}
+      data-syntax-projection={syntaxProjection}
+    >
+      <span className="edit-diff-line-number" aria-hidden="true">{row.oldLineNo ?? ""}</span>
+      <span className="edit-diff-line-number" aria-hidden="true">{row.newLineNo ?? ""}</span>
+      <span className="edit-diff-marker">{marker}</span>
+      <span className="edit-diff-code">{code}</span>
     </div>
   );
 }
 
-function SplitDiffCellView({ cell, side }: { cell: SplitDiffCell; side: "left" | "right" }) {
-  const bg =
-    cell.type === "added"
-      ? "rgba(34,197,94,0.12)"
-      : cell.type === "removed"
-      ? "rgba(248,113,113,0.13)"
-      : cell.type === "empty"
-      ? "var(--bg-subtle)"
-      : "transparent";
-  const marker =
-    cell.type === "added" ? "+" : cell.type === "removed" ? "-" : " ";
-  const markerColor =
-    cell.type === "added" ? "#22c55e" : cell.type === "removed" ? "#f87171" : "var(--text-dim)";
-
+function DiffStats({ additions, deletions, compact = false }: {
+  additions: number;
+  deletions: number;
+  compact?: boolean;
+}) {
   return (
-    <div
-      style={{
-        display: "flex",
-        minWidth: 0,
-        background: bg,
-        borderRight: side === "left" ? "1px solid var(--border)" : "none",
-      }}
+    <span
+      className={`edit-diff-stats${compact ? " is-compact" : ""}`}
+      aria-label={`${additions} ${additions === 1 ? "addition" : "additions"} and ${deletions} ${deletions === 1 ? "deletion" : "deletions"}`}
     >
-      <span
-        style={{
-          width: 42,
-          padding: "0 6px",
-          textAlign: "right",
-          color: "var(--text-dim)",
-          userSelect: "none",
-          background: "var(--bg-panel)",
-          borderRight: "1px solid var(--border)",
-          flexShrink: 0,
-        }}
-      >
-        {cell.lineNo ?? ""}
-      </span>
-      <span
-        style={{
-          width: 18,
-          padding: "0 5px",
-          color: markerColor,
-          userSelect: "none",
-          fontWeight: cell.type === "context" || cell.type === "empty" ? 400 : 700,
-          flexShrink: 0,
-        }}
-      >
-        {marker}
-      </span>
-      <span
-        style={{
-          flex: 1,
-          minWidth: 0,
-          padding: "0 10px 0 0",
-          color: cell.type === "empty" ? "var(--text-dim)" : "var(--text)",
-          whiteSpace: "pre-wrap",
-          overflowWrap: "anywhere",
-        }}
-      >
-        {cell.text || "\u00a0"}
-      </span>
-    </div>
+      <span className="edit-diff-stat is-addition">+{additions}</span>
+      <span className="edit-diff-stat is-deletion">−{deletions}</span>
+    </span>
   );
 }
 
 function PatchTextView({ text }: { text: string }) {
-  const lines = text.split(/\r?\n/);
-
   return (
-    <div style={{ maxHeight: 520, overflowY: "auto", overflowX: "hidden", fontFamily: "var(--font-mono)", fontSize: "var(--pi-transcript-font-size, 16px)", lineHeight: 1.55, minWidth: 0 }}>
-      {lines.map((line, i) => {
-        const kind =
-          line.startsWith("@@") ? "hunk" :
-          line.startsWith("+") && !line.startsWith("+++") ? "added" :
-          line.startsWith("-") && !line.startsWith("---") ? "removed" :
-          "context";
-        const bg =
-          kind === "added" ? "rgba(34,197,94,0.12)" :
-          kind === "removed" ? "rgba(248,113,113,0.13)" :
-          kind === "hunk" ? "rgba(96,165,250,0.12)" :
-          "transparent";
-        const color =
-          kind === "added" ? "#22c55e" :
-          kind === "removed" ? "#f87171" :
-          kind === "hunk" ? "var(--accent)" :
-          "var(--text)";
-
-        return (
-          <div
-            key={i}
-            style={{
-              display: "flex",
-              background: bg,
-              borderLeft: kind === "added"
-                ? "3px solid #22c55e"
-                : kind === "removed"
-                ? "3px solid #f87171"
-                : kind === "hunk"
-                ? "3px solid var(--accent)"
-                : "3px solid transparent",
-            }}
-          >
-            <span
-              style={{
-                width: 48,
-                padding: "0 8px",
-                color: "var(--text-dim)",
-                background: "var(--bg-panel)",
-                borderRight: "1px solid var(--border)",
-                textAlign: "right",
-                userSelect: "none",
-                flexShrink: 0,
-              }}
-            >
-              {i + 1}
-            </span>
-            <span style={{ padding: "0 10px", whiteSpace: "pre-wrap", overflowWrap: "anywhere", color }}>
-              {line || "\u00a0"}
-            </span>
-          </div>
-        );
-      })}
+    <div className="edit-patch-fallback" data-renderer="plaintext">
+      <div className="edit-patch-fallback-label">Patch shown as plain text</div>
+      <pre>{text}</pre>
     </div>
   );
+}
+
+function isUnifiedCodeRow(row: UnifiedDiffRow): row is UnifiedDiffCodeRow {
+  return row.type === "context" || row.type === "removed" || row.type === "added";
+}
+
+function getPatchLanguagePath(file: UnifiedDiffFile): string {
+  if (file.newPath && file.newPath !== "/dev/null") return file.newPath;
+  return file.oldPath ?? "";
+}
+
+function canHighlightHunk(rows: UnifiedDiffCodeRow[], codeChars: number, language: string): boolean {
+  return PATCH_SYNTAX_LANGUAGES.has(language)
+    && rows.length > 0
+    && rows.length <= MAX_HIGHLIGHTED_HUNK_LINES
+    && codeChars <= MAX_HIGHLIGHTED_HUNK_CHARS
+    && rows.every((row) => row.text.length <= MAX_HIGHLIGHTED_LINE_CHARS);
+}
+
+function renderTextWithEmphasis(text: string, emphasis?: DiffTextRange): ReactNode {
+  if (!emphasis || emphasis.start >= emphasis.end) return text;
+  return (
+    <>
+      {text.slice(0, emphasis.start)}
+      <mark className="edit-diff-intraline">{text.slice(emphasis.start, emphasis.end)}</mark>
+      {text.slice(emphasis.end)}
+    </>
+  );
+}
+
+function renderSyntaxNode(
+  node: SyntaxTreeNode,
+  emphasis: DiffTextRange | undefined,
+  stylesheet: Record<string, React.CSSProperties>,
+  useInlineStyles: boolean,
+): ReactNode {
+  const decoratedNode = emphasis ? addSyntaxEmphasis(node, emphasis) : node;
+  return createSyntaxElement({
+    node: decoratedNode as never,
+    stylesheet,
+    useInlineStyles,
+    key: "edit-diff-syntax-row",
+  });
+}
+
+function addSyntaxEmphasis(node: SyntaxTreeNode, emphasis: DiffTextRange): SyntaxTreeNode {
+  const offset = { value: 0 };
+  const nodes = addSyntaxEmphasisToChildren([node], emphasis, offset);
+  if (nodes.length === 1) return nodes[0];
+  return {
+    type: "element",
+    tagName: "span",
+    properties: { className: [] },
+    children: nodes,
+  };
+}
+
+function addSyntaxEmphasisToChildren(
+  nodes: SyntaxTreeNode[],
+  emphasis: DiffTextRange,
+  offset: { value: number },
+): SyntaxTreeNode[] {
+  return nodes.flatMap((node) => {
+    if (node.type === "element") {
+      return [{
+        ...node,
+        children: addSyntaxEmphasisToChildren(node.children ?? [], emphasis, offset),
+      }];
+    }
+
+    const text = String(node.value ?? "");
+    const start = offset.value;
+    const end = start + text.length;
+    offset.value = end;
+    const markedStart = Math.max(start, emphasis.start);
+    const markedEnd = Math.min(end, emphasis.end);
+    if (markedStart >= markedEnd) return [node];
+
+    const before = text.slice(0, markedStart - start);
+    const marked = text.slice(markedStart - start, markedEnd - start);
+    const after = text.slice(markedEnd - start);
+    const result: SyntaxTreeNode[] = [];
+    if (before) result.push({ type: "text", value: before });
+    result.push({
+      type: "element",
+      tagName: "mark",
+      properties: { className: ["edit-diff-intraline"] },
+      children: [{ type: "text", value: marked }],
+    });
+    if (after) result.push({ type: "text", value: after });
+    return result;
+  });
+}
+
+function getSyntaxNodeText(node: SyntaxTreeNode): string {
+  if (node.type === "text") return String(node.value ?? "");
+  return (node.children ?? []).map(getSyntaxNodeText).join("");
+}
+
+function stripSyntaxRowTerminator(node: SyntaxTreeNode): SyntaxTreeNode {
+  if (!getSyntaxNodeText(node).endsWith("\n")) return node;
+  return stripLastSyntaxNewline(node).node;
+}
+
+function stripLastSyntaxNewline(node: SyntaxTreeNode): { node: SyntaxTreeNode; removed: boolean } {
+  if (node.type === "text") {
+    const value = String(node.value ?? "");
+    return value.endsWith("\n")
+      ? { node: { ...node, value: value.slice(0, -1) }, removed: true }
+      : { node, removed: false };
+  }
+
+  const children = [...(node.children ?? [])];
+  for (let index = children.length - 1; index >= 0; index--) {
+    const result = stripLastSyntaxNewline(children[index]);
+    if (!result.removed) continue;
+    children[index] = result.node;
+    return { node: { ...node, children }, removed: true };
+  }
+  return { node, removed: false };
 }
 
 function getResultDiff(result: ToolResultMessage): ResultDiff | null {
@@ -1116,50 +1434,26 @@ function getResultDiff(result: ToolResultMessage): ResultDiff | null {
   return null;
 }
 
-function isEditToolName(toolName: string): boolean {
-  const name = toolName.toLowerCase();
-  return name === "edit" ||
-    name.startsWith("edit_") ||
-    name.endsWith(".edit") ||
-    name.endsWith("_edit") ||
-    name.includes("str_replace") ||
-    name.includes("replace_editor");
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function PairedResult({ text, isEmpty, isError }: {
+function PairedResult({ text, isEmpty, isError, naturalHeight = false }: {
   text: string;
   isEmpty: boolean;
   isError: boolean;
+  naturalHeight?: boolean;
 }) {
+  const className = [
+    "tool-result-text",
+    isError ? "is-error" : "",
+    isEmpty ? "is-empty" : "",
+    naturalHeight ? "is-natural-height" : "",
+  ].filter(Boolean).join(" ");
+
   return (
-    <div
-      style={{
-        borderTop: `1px solid ${isError ? "rgba(248,113,113,0.3)" : "rgba(34,197,94,0.15)"}`,
-        background: isError ? "rgba(248,113,113,0.04)" : "var(--bg-subtle)",
-      }}
-    >
-      <pre
-        style={{
-          margin: 0,
-          padding: "8px 10px",
-          color: isError ? "#f87171" : (isEmpty ? "var(--text-dim)" : "var(--text-muted)"),
-          fontSize: "var(--pi-transcript-font-size, 16px)",
-          lineHeight: 1.5,
-          overflow: "auto",
-          maxHeight: 400,
-          background: "var(--bg)",
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-all",
-          fontStyle: isEmpty ? "italic" : "normal",
-          opacity: isEmpty ? 0.6 : 1,
-        }}
-      >
-        {isEmpty ? "(no output)" : text}
-      </pre>
+    <div className={className}>
+      <pre>{isEmpty ? "(no output)" : text}</pre>
     </div>
   );
 }

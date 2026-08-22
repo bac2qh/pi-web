@@ -77,6 +77,7 @@ lib/
   file-types.ts        shared preview limits, languages, and automatic text eligibility
   file-viewer-layout.ts pure responsive expansion/confirmation policy transitions
   panel-layout.ts      pure preferred/effective side-panel width constraints
+  patch.ts             strict unified edit-patch parsing, context trimming, and intra-line ranges
   text-preview-file.ts bounded server-side text file reader
   markdown.ts          shared markdown helpers
   npx.ts               npx runner used by skill install
@@ -199,6 +200,11 @@ hooks/
 - Raw structured forms are canonical; Mermaid is generated one-way from the global active graph. Preview uses strict serialized Mermaid with SVG-only labels, then XML-parses and validates one current-render graph root, accessibility metadata, inert node aliases, active-content safety, and geometry. Eligible namespaced controls live in a trusted sibling SVG layer inside the same ShadowRoot so validated Mermaid CSS cannot select them. Preview failure never removes Raw.
 - While graphical Preview is visible, the exact chat session selected by `AppShell` marks at most one rendered node through the compiled alias and validated node maps. The trusted attribute marker is local presentation state outside Mermaid rendering, DAG/session-list requests, revision state, focus, and scrolling; inactive, missing, completed, replaced, or failed renders clear it.
 - `sessions_changed` refreshes only current labels/list metadata. Graph authority refreshes on activation/reopen, explicit Refresh, browser focus, and `online`; there is no DAG polling or DAG-specific WebSocket.
+
+### Edit results in the transcript
+- `isEditToolName()` in `lib/message-display.ts` is the single recognition policy. Recognized edit cards start expanded, and a settled turn containing one starts its existing **Process details** group expanded; both disclosures remain independent mounted browser state and non-edit tools retain their collapsed default.
+- Successful `details.patch`/`details.diff` is parsed without mutating source data into factual files, hunks, old/new line numbers, and exactly three adjacent context lines. Distant context becomes counted omission rows; malformed, unsupported, unsafe-coordinate, or over-budget patches fall back intact to plaintext.
+- Structured patches are unified top-to-bottom review cards with removed rows before added rows, natural transcript height, soft wrapping, and no nested scroll. Syntax decoration uses bounded, separate full-hunk old/new projections so omitted context and replacement state are not guessed; only structurally one-to-one replacements receive intra-line emphasis.
 
 ### ToolCall field normalization
 Pi stores toolCall blocks as `{type:"toolCall", id, name, arguments}` but `ToolCallContent` uses `{toolCallId, toolName, input}`. `normalizeToolCalls()` in `lib/normalize.ts` handles this — called from `session-reader.ts` for file loads and `session-view-projection.ts` for projected live effects.

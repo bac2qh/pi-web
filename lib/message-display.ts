@@ -86,3 +86,17 @@ export function splitFinalAssistantBlocks(
 export function countToolCallBlocks(blocks: AssistantContentBlock[]): number {
   return blocks.filter((block): block is ToolCallContent => block.type === "toolCall").length;
 }
+
+export function isEditToolName(toolName: string): boolean {
+  const name = toolName.toLowerCase();
+  return name === "edit"
+    || name.startsWith("edit_")
+    || name.endsWith(".edit")
+    || name.endsWith("_edit")
+    || name.includes("str_replace")
+    || name.includes("replace_editor");
+}
+
+export function containsEditToolCall(blocks: readonly AssistantContentBlock[]): boolean {
+  return blocks.some((block) => block.type === "toolCall" && isEditToolName(block.toolName));
+}

@@ -2,10 +2,10 @@
 
 import { scaledMenuFontSize } from "@/lib/display-preferences";
 import { registerAbortHandler } from "@/hooks/useKeyboardShortcuts";
-import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { AgentMessage, AssistantContentBlock, AssistantMessage, ExtensionUiRequest, SessionInfo, SessionTreeNode, SideSessionViewInfo, ToolResultMessage } from "@/lib/types";
 import { normalizeCustomPanelLines, parseAnsiLine } from "@/lib/ansi";
-import { countToolCallBlocks, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
+import { containsEditToolCall, countToolCallBlocks, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
 import type { FileOpenOptions } from "@/lib/file-links";
 import type { MermaidView } from "@/lib/mermaid-display";
 import { MessageView } from "./MessageView";
@@ -93,6 +93,18 @@ function countToolCalls(messages: AgentMessage[], indices: number[]): number {
   return count;
 }
 
+export function processGroupContainsEdit(
+  messages: readonly AgentMessage[],
+  processIndices: readonly number[],
+  finalProcessBlocks: readonly AssistantContentBlock[],
+): boolean {
+  return processIndices.some((processIdx) => {
+    const processMessage = messages[processIdx];
+    return processMessage?.role === "assistant"
+      && containsEditToolCall(getDisplayableAssistantBlocks(processMessage as AssistantMessage));
+  }) || containsEditToolCall(finalProcessBlocks);
+}
+
 function hasDisplayableProcessMessage(message: AgentMessage): boolean {
   if (message.role === "assistant") {
     return getDisplayableAssistantBlocks(message as AssistantMessage).length > 0;
@@ -110,8 +122,14 @@ function withAssistantBlocks(
   return next;
 }
 
-function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messageCount: number; toolCallCount: number; children: ReactNode }) {
-  const [expanded, setExpanded] = useState(false);
+export function ProcessDetailsGroup({ messageCount, toolCallCount, defaultExpanded = false, children }: {
+  messageCount: number;
+  toolCallCount: number;
+  defaultExpanded?: boolean;
+  children: ReactNode;
+}) {
+  const [expanded, setExpanded] = useState(() => defaultExpanded);
+  const bodyId = useId();
   const parts = ["Process details", `${messageCount} ${messageCount === 1 ? "message" : "messages"}`];
   if (toolCallCount > 0) parts.push(`${toolCallCount} ${toolCallCount === 1 ? "tool call" : "tool calls"}`);
 
@@ -119,22 +137,12 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messag
     <div style={{ marginBottom: 14 }}>
       <button
         type="button"
+        className="process-details-disclosure"
+        aria-label={`${expanded ? "Collapse" : "Expand"} ${parts.join(", ")}`}
         aria-expanded={expanded}
+        aria-controls={bodyId}
         onClick={() => setExpanded((v) => !v)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          width: "auto",
-          minHeight: 24,
-          padding: "2px 0",
-          border: "none",
-          background: "transparent",
-          color: "var(--text-muted)",
-          cursor: "pointer",
-          fontSize: scaledMenuFontSize(12),
-          textAlign: "left",
-        }}
+        style={{ fontSize: scaledMenuFontSize(12) }}
         title={expanded ? "Collapse process details" : "Expand process details"}
       >
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: expanded ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>
@@ -144,11 +152,9 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messag
           {parts.join(" · ")}
         </span>
       </button>
-      {expanded && (
-        <div style={{ marginTop: 8 }}>
-          {children}
-        </div>
-      )}
+      <div id={bodyId} hidden={!expanded} style={{ marginTop: 8 }}>
+        {expanded ? children : null}
+      </div>
     </div>
   );
 }
@@ -658,10 +664,16 @@ export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, 
                     .map((processIdx) => visibleRefIndexByMessage.get(processIdx))
                     .find((value): value is number => typeof value === "number")
                     ?? (finalAnswerMessage ? undefined : visibleRefIndexByMessage.get(finalAssistantIdx));
+                  const processContainsEdit = processGroupContainsEdit(
+                    messages,
+                    visibleProcessIndices,
+                    finalSplit.processBlocks,
+                  );
                   const processGroup = (
                     <ProcessDetailsGroup
                       messageCount={processCount}
                       toolCallCount={countToolCalls(messages, visibleProcessIndices) + countToolCallBlocks(finalSplit.processBlocks)}
+                      defaultExpanded={processContainsEdit}
                     >
                       {visibleProcessIndices.map((processIdx) => renderMessage(processIdx, { attachRef: false, keyPrefix: "process" }))}
                       {finalProcessMessage && renderMessage(finalAssistantIdx, {

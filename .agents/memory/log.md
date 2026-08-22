@@ -58,3 +58,7 @@
 ## 2026-08-18
 
 - Updated custom-server lifecycle memory after extending the fixed semantic wrapper idle window from 30 minutes to 12 hours while preserving semantic touch rules, active-work deferral, passive-activity exclusions, and authoritative shutdown.
+
+## 2026-08-22
+
+- Updated browser-local display-preference memory after making recognized edit cards and their settled Process details groups open by default, while preserving independent mounted disclosure control and adding truthful bounded full-width unified review cards with plaintext fallback.

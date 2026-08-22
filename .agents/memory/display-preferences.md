@@ -23,8 +23,17 @@
 - The explicit map is keyed only within the mounted chat. It survives line replacement, reordering, and placement movement while the key remains present, but key removal or a chat remount discards it. New-chat materialization keeps the existing mount; page reload and selected-chat changes do not persist or transfer choices.
 - Collapsing applies `hidden` only to the still-mounted browser body. The extension projection, current lines, ten-line display cap, editor-adjacent slot bounds, and custom-panel input behavior remain separate and unchanged.
 
+## 2026-08-22 — Edit disclosures are change-focused mounted transcript state
+
+- Recognized edit cards and edit-containing settled **Process details** groups initialize expanded, while non-edit tools retain the collapsed default. Each disclosure remains independently user-controlled for its mounted lifetime; collapsing keeps the ARIA-controlled shell but releases expensive result children, and a remount restores the classification default rather than persisting a preference.
+- Successful structured edit details remain immutable input. The transcript derives strict factual unified hunks with exactly three adjacent context lines, counted omissions, old/new gutters, bounded separate old/new syntax projections, and one-to-one-only intra-line emphasis. Unsupported or over-budget structure falls back intact to naturally sized, soft-wrapped plaintext.
+- The review card is always full-width and top-to-bottom. Removed rows precede added rows, red/green meaning also has textual markers, long content wraps without horizontal or nested vertical scrolling, and light/dark treatment remains transcript presentation rather than editor/repository authority.
+
 ## References
 
+- Edit-result disclosure plan: `.agents/plans/2026-08-21-expand-edit-results-by-default.md`
+- Edit-result disclosure checkpoint: `.agents/checkpoints/2026-08-21-expand-edit-results-by-default-checkpoints.md`
+- Edit-result browser evidence: `.agents/reports/2026-08-21-expand-edit-results-by-default/browser-validation.json`
 - File Viewer typography plan: `.agents/plans/2026-08-06-file-viewer-font-size.md`
 - File Viewer typography checkpoint: `.agents/checkpoints/2026-08-06-file-viewer-font-size-checkpoints.md`
 - File Viewer typography browser evidence: `.agents/reports/2026-08-06-file-viewer-font-size/browser-validation.json`

@@ -33,6 +33,15 @@
   --assistant-bg: #ffffff;
   --tool-bg: #f9fafb;
   --bg-subtle: rgba(0,0,0,0.03);
+  --diff-add-bg: #edf9f0;
+  --diff-add-border: #75c991;
+  --diff-add-text: #08783e;
+  --diff-add-mark: rgba(22, 163, 74, 0.22);
+  --diff-remove-bg: #fff1f1;
+  --diff-remove-border: #e99a9a;
+  --diff-remove-text: #b4232f;
+  --diff-remove-mark: rgba(220, 38, 38, 0.18);
+  --diff-hunk-bg: #f1f6ff;
   --pi-chat-width-percent: 70;
   --pi-transcript-font-size: 16px;
   --pi-transcript-font-scale: 1.1428571429;
@@ -57,6 +66,15 @@ html.dark {
   --assistant-bg: #1a1a1a;
   --tool-bg: #1f2937;
   --bg-subtle: rgba(255,255,255,0.04);
+  --diff-add-bg: #172b20;
+  --diff-add-border: #367a50;
+  --diff-add-text: #72d997;
+  --diff-add-mark: rgba(74, 222, 128, 0.25);
+  --diff-remove-bg: #321d21;
+  --diff-remove-border: #8f4b57;
+  --diff-remove-text: #ff9ca6;
+  --diff-remove-mark: rgba(248, 113, 113, 0.25);
+  --diff-hunk-bg: #202b3d;
 }
 
 /* Theme toggle: circular wipe via View Transitions API.
@@ -449,6 +467,410 @@ pre, code {
 .markdown-code-action.is-active {
   background: var(--bg-selected);
   color: var(--text);
+}
+
+/* Transcript tool disclosures and change-focused edit review cards. */
+.process-details-disclosure {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: auto;
+  min-height: 24px;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-align: left;
+}
+.process-details-disclosure:hover {
+  color: var(--text);
+}
+.process-details-disclosure:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.tool-call-card {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: clip;
+  border: 1px solid color-mix(in srgb, #22c55e 30%, var(--border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg) 97%, #22c55e);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--border) 40%, transparent);
+}
+.tool-call-card.is-error {
+  border-color: color-mix(in srgb, #ef4444 48%, var(--border));
+  background: color-mix(in srgb, var(--bg) 96%, #ef4444);
+}
+.tool-call-card.is-edit {
+  border-color: color-mix(in srgb, var(--border) 88%, var(--text-dim));
+  background: var(--bg);
+  box-shadow:
+    0 1px 0 color-mix(in srgb, var(--border) 55%, transparent),
+    0 5px 18px color-mix(in srgb, var(--text) 4%, transparent);
+}
+.tool-call-card.is-edit.is-error {
+  border-color: color-mix(in srgb, #ef4444 52%, var(--border));
+  background: color-mix(in srgb, var(--bg) 97%, #ef4444);
+}
+.tool-call-disclosure {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-align: left;
+  touch-action: manipulation;
+  transition: background 0.12s ease;
+}
+.tool-call-disclosure:hover {
+  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
+}
+.tool-call-disclosure:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.tool-call-name {
+  flex: 0 0 auto;
+  color: #15803d;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+html.dark .tool-call-name {
+  color: #72d997;
+}
+.tool-call-card.is-edit .tool-call-name {
+  color: var(--text-muted);
+}
+.tool-call-card.is-error .tool-call-name {
+  color: var(--diff-remove-text);
+}
+.tool-call-preview {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-call-card.has-structured-edit .tool-call-preview {
+  color: color-mix(in srgb, var(--text) 78%, var(--text-muted));
+  font-weight: 600;
+}
+.tool-call-duration {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.tool-call-chevron {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  transition: transform 0.15s ease;
+}
+.tool-call-body {
+  min-width: 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  background: var(--bg);
+}
+.tool-call-body:empty {
+  border-top: 0;
+}
+.tool-call-input {
+  max-height: 400px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-size: var(--pi-transcript-font-size, 16px);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.tool-result-text {
+  background: var(--bg-subtle);
+}
+.tool-call-card:not(.is-edit) .tool-result-text {
+  border-top: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+}
+.tool-result-text.is-error {
+  background: color-mix(in srgb, var(--bg) 96%, #ef4444);
+}
+.tool-result-text pre {
+  max-height: 400px;
+  margin: 0;
+  padding: 9px 11px;
+  overflow: auto;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: var(--pi-transcript-font-size, 16px);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.tool-result-text.is-error pre {
+  color: var(--diff-remove-text);
+}
+.tool-result-text.is-empty pre {
+  color: var(--text-dim);
+  font-style: italic;
+  opacity: 0.72;
+}
+.tool-result-text.is-natural-height pre {
+  max-height: none;
+  overflow: visible;
+}
+
+.edit-diff-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--pi-menu-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+.edit-diff-stats.is-compact {
+  gap: 5px;
+}
+.edit-diff-stat.is-addition {
+  color: var(--diff-add-text);
+}
+.edit-diff-stat.is-deletion {
+  color: var(--diff-remove-text);
+}
+.edit-patch-result,
+.edit-patch,
+.edit-diff-file,
+.edit-diff-hunks,
+.edit-diff-hunk,
+.edit-diff-syntax,
+.edit-diff-code-block {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+.edit-patch-result {
+  background: var(--bg);
+}
+.edit-diff-file + .edit-diff-file {
+  border-top: 1px solid var(--border);
+}
+.edit-diff-file-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-panel) 88%, var(--bg));
+}
+.edit-diff-file-path {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--pi-menu-font-scale, 1));
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.edit-diff-hunk + .edit-diff-hunk {
+  border-top: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+}
+.edit-diff-hunk-header {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 5px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border));
+  background: var(--diff-hunk-bg);
+  color: color-mix(in srgb, var(--accent) 82%, var(--text-muted));
+  font-family: var(--font-mono);
+  font-size: calc(10.5px * var(--pi-transcript-font-scale, 1.1428571429));
+  line-height: 1.45;
+}
+.edit-diff-hunk-location {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.edit-diff-syntax {
+  margin: 0 !important;
+  overflow: visible !important;
+  border: 0 !important;
+  background: transparent !important;
+  font-family: var(--font-mono) !important;
+}
+.edit-diff-code-block {
+  display: block;
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: calc(13px * var(--pi-transcript-font-scale, 1.1428571429));
+  line-height: 1.58;
+}
+.edit-diff-row {
+  display: grid;
+  grid-template-columns: minmax(2.3rem, max-content) minmax(2.3rem, max-content) 1.35rem minmax(0, 1fr);
+  min-width: 0;
+  border-left: 3px solid transparent;
+}
+.edit-diff-row.is-context {
+  color: color-mix(in srgb, var(--text) 76%, var(--text-muted));
+}
+.edit-diff-row.is-context .edit-diff-code {
+  opacity: 0.76;
+}
+.edit-diff-row.is-removed {
+  border-left-color: var(--diff-remove-border);
+  background: var(--diff-remove-bg);
+}
+.edit-diff-row.is-added {
+  border-left-color: var(--diff-add-border);
+  background: var(--diff-add-bg);
+}
+.edit-diff-line-number {
+  min-width: 0;
+  padding: 2px 6px;
+  border-right: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--bg-panel) 72%, transparent);
+  color: var(--text-dim);
+  font-size: 0.78em;
+  font-variant-numeric: tabular-nums;
+  line-height: 2.02;
+  text-align: right;
+  user-select: none;
+}
+.edit-diff-marker {
+  padding: 2px 3px;
+  color: var(--text-dim);
+  font-weight: 800;
+  text-align: center;
+  user-select: none;
+}
+.edit-diff-row.is-removed .edit-diff-marker {
+  color: var(--diff-remove-text);
+}
+.edit-diff-row.is-added .edit-diff-marker {
+  color: var(--diff-add-text);
+}
+.edit-diff-code {
+  min-width: 0;
+  padding: 2px 12px 2px 7px;
+  color: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+.edit-diff-code > span {
+  white-space: inherit;
+}
+.edit-diff-intraline {
+  margin: 0;
+  padding: 0 1px;
+  border-radius: 2px;
+  background: var(--diff-add-mark);
+  color: inherit;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--diff-add-border) 34%, transparent);
+}
+.edit-diff-row.is-removed .edit-diff-intraline {
+  background: var(--diff-remove-mark);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--diff-remove-border) 34%, transparent);
+}
+.edit-diff-row.is-omission,
+.edit-diff-row.is-no-newline {
+  background: color-mix(in srgb, var(--bg-panel) 66%, var(--bg));
+  color: var(--text-dim);
+}
+.edit-diff-row.is-omission {
+  border-block: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+}
+.edit-diff-omission-text {
+  min-width: 0;
+  padding: 3px 12px 3px 7px;
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+.edit-diff-row.is-no-newline .edit-diff-code {
+  font-size: 0.84em;
+  font-style: italic;
+}
+.edit-patch-fallback {
+  min-width: 0;
+  background: var(--bg);
+}
+.edit-patch-fallback-label {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font-size: calc(10px * var(--pi-menu-font-scale, 1));
+  font-weight: 600;
+}
+.edit-patch-fallback pre {
+  max-width: 100%;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: visible;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: calc(13px * var(--pi-transcript-font-scale, 1.1428571429));
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+@media (max-width: 640px), (hover: none), (pointer: coarse), (any-pointer: coarse) {
+  .tool-call-disclosure {
+    min-height: 44px;
+    padding-block: 8px;
+  }
+}
+
+@media (max-width: 520px) {
+  .tool-call-disclosure {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+  .edit-diff-row {
+    grid-template-columns: minmax(1.75rem, max-content) minmax(1.75rem, max-content) 1.15rem minmax(0, 1fr);
+  }
+  .edit-diff-line-number {
+    padding-inline: 4px;
+    font-size: 0.72em;
+  }
+  .edit-diff-code {
+    padding-right: 8px;
+    padding-left: 5px;
+  }
+  .edit-diff-file-header,
+  .edit-diff-hunk-header {
+    padding-inline: 8px;
+  }
+  .edit-diff-stats {
+    gap: 5px;
+  }
 }
 
 .mermaid-block {
