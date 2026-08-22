@@ -97,3 +97,15 @@ Plan: `.agents/plans/2026-08-21-expand-edit-results-by-default.md`
 **Departures from approved obligations:** None. The plan-required focused/static/browser checks all passed, and no Next build was run. An exploratory default `node --test` invocation was not used as acceptance evidence because Node also discovered `app/api/models-config/test/route.ts` and the nested checkout lacks the local production-artifact layout required by `lib/pi-web-real-next.test.mjs`; the explicit 933-test run removed those environment-only/non-test inputs and passed.
 
 **Implementation commit:** Pending.
+
+## Implementation Summary
+
+**Plan section:** Final implementation outcome; Validation Contract VC-001 through VC-007.
+
+**Work and outcome:** The approved transcript-edit outcome is complete. Recognized edit results and edit-containing settled Process details groups now start open with independent accessible controls; non-edit tools retain their collapsed default. Structured edit details render as bounded, truthful, full-width unified review cards with strict metadata/hunk parsing, exactly three context lines, counted omissions, reliable one-to-one intra-line emphasis, separate old/new syntax state, natural soft-wrapped height, and intact plaintext fallback. Maintained documentation, durable memory, focused tests, and final browser artifacts reflect the shipped behavior.
+
+**Validation / evidence:** `NODE_ENV=test node --test components/MessageView.test.mjs lib/patch.test.mjs lib/message-display.test.mjs` passed 32/32; the explicit broad suite excluding the unrelated nested-worktree real-Next artifact harness passed 933/933; `../../../node_modules/.bin/tsc --noEmit`, `npm run lint`, and `git diff --check` passed. `.agents/reports/2026-08-21-expand-edit-results-by-default/browser-validation.json` records a final pass with zero runtime issues across light/dark desktop and mobile viewports, keyboard toggles, focus, default disclosure states, wrapping, context trimming, and overflow checks. Independent review `32761a49` accepted UX/validation, and resumed adversarial correctness review `7630dbb6` closed the final parser blocker with no remaining finding.
+
+**Departures from approved obligations:** None. Every approved obligation is complete. No Next build was run, as required. The exploratory default-discovery test command and its environment-only non-acceptance results are disclosed in the preceding implementation summary; the plan-required checks and explicit broad suite passed.
+
+**Implementation commit:** `c5b700dfa76b2fc91133b262fcd66bcedef4ada5` (`feat: expand edit results with unified review cards`).
