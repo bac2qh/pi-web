@@ -15,3 +15,7 @@
 ## 2026-08-08
 
 - Published hosted wrappers now share Pi Web's wrapper-owned strict shutdown: release closes admission, cancels an undispatched kickoff, joins started binding, aborts compaction and agent work, awaits one `session_shutdown { reason: "quit" }`, and then calls native `AgentSession.dispose()` exactly once. This closes the prior extension-cleanup gap without adopting `AgentSessionRuntime`; prepared owners that fail before publication still use bare disposal without an invented lifecycle.
+
+## 2026-08-22
+
+- Existing message-free targets now initialize from a valid final active-path native thinking declaration through the SDK factory option before wrapper publication. Active-branch presence distinguishes explicit `off` from absence; malformed final values are ignored, populated sessions retain native restoration, new sessions retain defaults, global thinking settings are not rewritten, and the SDK remains the sole owner of its standard message-free model/thinking append. Hosted-first and browser-first opens inherit this through the shared same-ID startup owner without widening the six-field capability request.

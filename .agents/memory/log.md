@@ -62,3 +62,4 @@
 ## 2026-08-22
 
 - Updated browser-local display-preference memory after making recognized edit cards and their settled Process details groups open by default, while preserving independent mounted disclosure control and adding truthful bounded full-width unified review cards with plaintext fallback.
+- Updated hosted-implementation-session memory after making valid active-path effort declarations authoritative for existing message-free startup before publication, while preserving shared ownership, native restoration/defaults, global settings, and the fixed hosted request.

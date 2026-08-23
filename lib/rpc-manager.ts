@@ -1,4 +1,12 @@
-import { createAgentSessionFromServices, createAgentSessionServices, getAgentDir, initTheme, SessionManager, Theme } from "@earendil-works/pi-coding-agent";
+import {
+  createAgentSessionFromServices,
+  createAgentSessionServices,
+  getAgentDir,
+  initTheme,
+  SessionManager,
+  Theme,
+  type CreateAgentSessionFromServicesOptions,
+} from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -3374,6 +3382,23 @@ export async function getOrCreateRpcSession(
   return starting;
 }
 
+type InitialThinkingLevel = NonNullable<CreateAgentSessionFromServicesOptions["thinkingLevel"]>;
+
+const INITIAL_THINKING_LEVELS: ReadonlySet<string> = new Set<InitialThinkingLevel>([
+  "off", "minimal", "low", "medium", "high", "xhigh", "max",
+]);
+
+export function resolveExistingMessageFreeThinkingLevel(
+  sessionManager: Pick<SessionManager, "buildSessionContext" | "getBranch">,
+): InitialThinkingLevel | undefined {
+  if (!sessionManager.getBranch().some((entry) => entry.type === "thinking_level_change")) return undefined;
+  const context = sessionManager.buildSessionContext();
+  if (context.messages.length !== 0) return undefined;
+  return INITIAL_THINKING_LEVELS.has(context.thinkingLevel)
+    ? context.thinkingLevel as InitialThinkingLevel
+    : undefined;
+}
+
 function normalizedExistingSessionPath(value: string): string | null {
   if (!value || value.includes("\0") || !isAbsolute(value)) return null;
   const normalized = resolvePath(value);
@@ -3426,6 +3451,9 @@ export async function startRpcSession(
       throw new Error(`side_session_invalid:${sideClassification.reason}`);
     }
     const sideSession = sideClassification.kind === "side" ? sideClassification.metadata : null;
+    const existingMessageFreeThinkingLevel = sessionFile
+      ? resolveExistingMessageFreeThinkingLevel(sessionManager)
+      : undefined;
 
     // Determine which tools to pass based on requested toolNames.
     // Since v0.68.0, session creation expects string[] tool names instead of Tool[] instances.
@@ -3463,6 +3491,9 @@ export async function startRpcSession(
     const { session: inner } = await createAgentSessionFromServices({
       services,
       sessionManager,
+      ...(existingMessageFreeThinkingLevel !== undefined
+        ? { thinkingLevel: existingMessageFreeThinkingLevel }
+        : {}),
       ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
       ...(sideSession ? { excludeTools: [...SIDE_SESSION_EXCLUDED_TOOL_NAMES] } : {}),
     });
