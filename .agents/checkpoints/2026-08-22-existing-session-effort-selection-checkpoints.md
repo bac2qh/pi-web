@@ -13,3 +13,15 @@ Plan: `.agents/plans/2026-08-22-existing-session-effort-selection.md`
 **Departures from approved obligations:** None. The typecheck used the repository-prescribed retained-main dependency installation because the nested task worktree intentionally has no local `node_modules`.
 
 **Implementation commit:** Pending.
+
+## Implementation Summary
+
+**Plan section:** Final implementation and Validation Contract closeout — Objective; Design / Implementation Strategy; VC-001 through VC-005.
+
+**Work and outcome:** Completed the approved existing-session startup adapter. A valid final active-path effort declaration on an existing message-free target is now authoritative during SDK construction and therefore effective before publication and hosted kickoff. Explicit `off`, active-branch last-value semantics, malformed-final rejection, same-ID hosted/browser ownership, SDK-owned initialization entries, native populated-session restoration, new-session defaults, model/tools/extensions, side policy, identity validation, global settings, and the six-field hosted request all retain their required boundaries. Maintained architecture and durable hosted-session history match the implemented behavior.
+
+**Validation / evidence:** The final disposable-agent-directory RPC run passed 160/160, including deterministic prepared/published `xhigh`, resolver matrix, negative/default/restoration fixtures, and both hosted/browser race orderings with one owner and one provider-free kickoff. TypeScript (`../../../node_modules/.bin/tsc --noEmit`), ESLint (`npm run lint`), and `git diff --check` passed. The implementation, tests, documentation, memory, and initial checkpoint record are committed as `74925168c387830572d72c293743ac2133431dfc` (`fix: restore saved effort for empty sessions`). No production build ran and no temporary fixture state remains.
+
+**Departures from approved obligations:** None. VC-001 through VC-005 are complete. The SDK's pre-existing standard model/thinking append for message-free construction remains intentionally unchanged, as required by the plan.
+
+**Implementation commit:** `74925168c387830572d72c293743ac2133431dfc`.
