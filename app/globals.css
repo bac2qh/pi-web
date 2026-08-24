@@ -469,7 +469,7 @@ pre, code {
   color: var(--text);
 }
 
-/* Transcript tool disclosures and change-focused edit review cards. */
+/* Transcript tool disclosures, whole-file writes, and change-focused edit review cards. */
 .process-details-disclosure {
   display: flex;
   align-items: center;
@@ -632,6 +632,101 @@ html.dark .tool-call-name {
 .tool-result-text.is-natural-height pre {
   max-height: none;
   overflow: visible;
+}
+
+.write-content,
+.write-code-block,
+.write-code-lines {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+.write-content {
+  background: var(--bg);
+}
+.write-content-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  background: color-mix(in srgb, var(--bg-panel) 88%, var(--bg));
+}
+.write-content-label {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: calc(10px * var(--pi-menu-font-scale, 1));
+  font-weight: 700;
+}
+.write-content-path {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--pi-menu-font-scale, 1));
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.write-content-empty-label {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: calc(10px * var(--pi-menu-font-scale, 1));
+  font-style: italic;
+}
+.write-code-block {
+  display: block;
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: calc(13px * var(--pi-transcript-font-scale, 1.1428571429));
+  line-height: 1.58;
+}
+.write-code-lines {
+  display: block;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+}
+.write-code-row {
+  display: grid;
+  grid-template-columns: minmax(2.6rem, max-content) minmax(0, 1fr);
+  min-width: 0;
+}
+.write-code-line-number {
+  min-width: 0;
+  padding: 2px 7px;
+  border-right: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--bg-panel) 72%, transparent);
+  color: var(--text-dim);
+  font-size: 0.78em;
+  font-variant-numeric: tabular-nums;
+  line-height: 2.02;
+  text-align: right;
+  user-select: none;
+}
+.write-code-text {
+  min-width: 0;
+  min-height: 1.58em;
+  padding: 2px 12px 2px 8px;
+  color: inherit;
+  tab-size: 4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+.write-code-text > span {
+  white-space: inherit;
+}
+.write-code-empty {
+  color: var(--text-dim);
+  font-style: italic;
+  opacity: 0.8;
+  user-select: none;
 }
 
 .edit-diff-stats {
@@ -853,6 +948,17 @@ html.dark .tool-call-name {
     gap: 6px;
     padding-inline: 8px;
   }
+  .write-code-row {
+    grid-template-columns: minmax(2rem, max-content) minmax(0, 1fr);
+  }
+  .write-code-line-number {
+    padding-inline: 5px;
+    font-size: 0.72em;
+  }
+  .write-code-text {
+    padding-right: 8px;
+    padding-left: 6px;
+  }
   .edit-diff-row {
     grid-template-columns: minmax(1.75rem, max-content) minmax(1.75rem, max-content) 1.15rem minmax(0, 1fr);
   }
@@ -864,6 +970,7 @@ html.dark .tool-call-name {
     padding-right: 8px;
     padding-left: 5px;
   }
+  .write-content-header,
   .edit-diff-file-header,
   .edit-diff-hunk-header {
     padding-inline: 8px;

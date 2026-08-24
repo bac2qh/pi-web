@@ -100,3 +100,18 @@ export function isEditToolName(toolName: string): boolean {
 export function containsEditToolCall(blocks: readonly AssistantContentBlock[]): boolean {
   return blocks.some((block) => block.type === "toolCall" && isEditToolName(block.toolName));
 }
+
+export function isWriteToolName(toolName: string): boolean {
+  return toolName === "write";
+}
+
+export function containsCompletedWriteToolCall(
+  blocks: readonly AssistantContentBlock[],
+  completedToolCallIds: ReadonlySet<string>,
+): boolean {
+  return blocks.some((block) => (
+    block.type === "toolCall"
+    && isWriteToolName(block.toolName)
+    && completedToolCallIds.has(block.toolCallId)
+  ));
+}

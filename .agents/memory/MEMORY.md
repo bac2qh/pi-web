@@ -2,7 +2,7 @@
 
 ## Topics
 
-- [Browser-local display preferences](display-preferences.md) — independent content controls and side-panel widths, extension-widget disclosure lifetime, preferred/effective constraint ownership, proportional file typography, opaque-renderer boundaries, and responsive handoff.
+- [Browser-local display preferences](display-preferences.md) — independent content controls and side-panel widths, mounted extension/edit/write disclosure lifetimes, preferred/effective constraint ownership, proportional file typography, opaque-renderer boundaries, and responsive handoff.
 - [Agent response file links](agent-response-file-links.md) — assistant-only path actions, exact-workspace containment, text-preview safety, and narrow confirmation/expansion provenance.
 - [Clone and side-session host boundaries](clone-session.md) — distinct durable `/clone` and `/side` semantics, safe live snapshots, source isolation, hidden side boundaries, investigative runtime restrictions, permanence, and terminal derivation.
 - [Hosted implementation sessions](hosted-implementation-sessions.md) — same-process Start/Orchestrate ownership transfer, capability/fallback boundary, cleanup, discovery, and source isolation.

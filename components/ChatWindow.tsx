@@ -5,7 +5,7 @@ import { registerAbortHandler } from "@/hooks/useKeyboardShortcuts";
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { AgentMessage, AssistantContentBlock, AssistantMessage, ExtensionUiRequest, SessionInfo, SessionTreeNode, SideSessionViewInfo, ToolResultMessage } from "@/lib/types";
 import { normalizeCustomPanelLines, parseAnsiLine } from "@/lib/ansi";
-import { containsEditToolCall, countToolCallBlocks, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
+import { containsCompletedWriteToolCall, containsEditToolCall, countToolCallBlocks, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
 import type { FileOpenOptions } from "@/lib/file-links";
 import type { MermaidView } from "@/lib/mermaid-display";
 import { MessageView } from "./MessageView";
@@ -103,6 +103,23 @@ export function processGroupContainsEdit(
     return processMessage?.role === "assistant"
       && containsEditToolCall(getDisplayableAssistantBlocks(processMessage as AssistantMessage));
   }) || containsEditToolCall(finalProcessBlocks);
+}
+
+export function processGroupShouldStartExpanded(
+  messages: readonly AgentMessage[],
+  processIndices: readonly number[],
+  finalProcessBlocks: readonly AssistantContentBlock[],
+  completedToolCallIds: ReadonlySet<string>,
+): boolean {
+  if (processGroupContainsEdit(messages, processIndices, finalProcessBlocks)) return true;
+  return processIndices.some((processIdx) => {
+    const processMessage = messages[processIdx];
+    return processMessage?.role === "assistant"
+      && containsCompletedWriteToolCall(
+        getDisplayableAssistantBlocks(processMessage as AssistantMessage),
+        completedToolCallIds,
+      );
+  }) || containsCompletedWriteToolCall(finalProcessBlocks, completedToolCallIds);
 }
 
 function hasDisplayableProcessMessage(message: AgentMessage): boolean {
@@ -538,6 +555,7 @@ export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, 
                   toolResultsMap.set((msg as ToolResultMessage).toolCallId, msg as ToolResultMessage);
                 }
               }
+              const completedToolCallIds = new Set(toolResultsMap.keys());
 
               let lastUserIdx = -1;
               for (let i = messages.length - 1; i >= 0; i--) {
@@ -664,16 +682,17 @@ export function ChatWindow({ session, sessionViewBinding, sessionViewTransport, 
                     .map((processIdx) => visibleRefIndexByMessage.get(processIdx))
                     .find((value): value is number => typeof value === "number")
                     ?? (finalAnswerMessage ? undefined : visibleRefIndexByMessage.get(finalAssistantIdx));
-                  const processContainsEdit = processGroupContainsEdit(
+                  const processStartsExpanded = processGroupShouldStartExpanded(
                     messages,
                     visibleProcessIndices,
                     finalSplit.processBlocks,
+                    completedToolCallIds,
                   );
                   const processGroup = (
                     <ProcessDetailsGroup
                       messageCount={processCount}
                       toolCallCount={countToolCalls(messages, visibleProcessIndices) + countToolCallBlocks(finalSplit.processBlocks)}
-                      defaultExpanded={processContainsEdit}
+                      defaultExpanded={processStartsExpanded}
                     >
                       {visibleProcessIndices.map((processIdx) => renderMessage(processIdx, { attachRef: false, keyPrefix: "process" }))}
                       {finalProcessMessage && renderMessage(finalAssistantIdx, {

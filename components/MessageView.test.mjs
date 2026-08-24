@@ -12,10 +12,14 @@ const jiti = createJiti(import.meta.url, {
   tsconfigPaths: true,
 });
 const { MessageView } = await jiti.import("./MessageView.tsx");
-const { ProcessDetailsGroup, processGroupContainsEdit } = await jiti.import("./ChatWindow.tsx");
+const { ProcessDetailsGroup, processGroupContainsEdit, processGroupShouldStartExpanded } = await jiti.import("./ChatWindow.tsx");
 
 function toolCall(toolName, toolCallId, path = "demo.ts") {
   return { type: "toolCall", toolCallId, toolName, input: { path } };
+}
+
+function writeCall(toolCallId, { path = "demo.ts", content = "export const value = 1;\n" } = {}) {
+  return { type: "toolCall", toolCallId, toolName: "write", input: { path, content } };
 }
 
 function toolResult(toolName, toolCallId, options = {}) {
@@ -273,14 +277,199 @@ test("plain success and failed edit results start open and remain understandable
   assert.match(html, /tool-result-text is-error is-natural-height/);
 });
 
+test("pending writes hide arguments, open once on completion, and respect later manual collapse", async () => {
+  const call = writeCall("write-live", {
+    path: "src/live.ts",
+    content: 'const message = "completed";\n',
+  });
+  const success = toolResult("write", "write-live", { text: "Successfully wrote 29 bytes to src/live.ts" });
+  const mounted = await mount(messageElement([call], []));
+
+  try {
+    let button = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "tool-call-disclosure"))[0];
+    let body = controlledBody(mounted.dom.container, button);
+    assert.equal(attribute(button, "aria-expanded"), "false");
+    assert.equal(body.hasAttribute("hidden"), true);
+    assert.equal(elementText(body), "", "pending write arguments are not mounted as raw JSON or code");
+    assert.equal(findAll(body, (node) => hasClass(node, "tool-call-input")).length, 0);
+    assert.equal(findAll(body, (node) => hasClass(node, "write-content")).length, 0);
+
+    await mounted.render(messageElement([call], [success]));
+    button = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "tool-call-disclosure"))[0];
+    body = controlledBody(mounted.dom.container, button);
+    assert.equal(attribute(button, "aria-expanded"), "true", "the first matching result opens an untouched live card");
+    assert.match(elementText(body), /Written contentsrc\/live\.ts/);
+    assert.match(elementText(body), /const message = "completed";/);
+    assert.match(elementText(body), /Successfully wrote 29 bytes/);
+    assert.equal(findAll(body, (node) => hasClass(node, "tool-call-input")).length, 0, "valid writes suppress raw JSON");
+
+    await flushReactUpdate(() => button.click());
+    button = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "tool-call-disclosure"))[0];
+    body = controlledBody(mounted.dom.container, button);
+    assert.equal(attribute(button, "aria-expanded"), "false");
+    assert.equal(elementText(body), "", "collapse releases the whole-file renderer");
+
+    const updated = toolResult("write", "write-live", { text: "Updated result identity" });
+    await mounted.render(messageElement([call], [updated]));
+    button = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "tool-call-disclosure"))[0];
+    assert.equal(attribute(button, "aria-expanded"), "false", "later result identities never reopen a touched card");
+
+    await flushReactUpdate(() => button.click());
+    button = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "tool-call-disclosure"))[0];
+    assert.equal(attribute(button, "aria-expanded"), "true");
+    assert.match(elementText(controlledBody(mounted.dom.container, button)), /Updated result identity/);
+  } finally {
+    await mounted.cleanup();
+  }
+});
+
+test("pre-completion write disclosure choices stay authoritative for success and failure", async () => {
+  const calls = [
+    writeCall("manual-open", { content: "open();" }),
+    writeCall("manual-closed", { content: "closed();" }),
+  ];
+  const mounted = await mount(messageElement(calls, []));
+
+  try {
+    let buttons = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "tool-call-disclosure"));
+    await flushReactUpdate(() => buttons[0].click());
+    buttons = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "tool-call-disclosure"));
+    await flushReactUpdate(() => buttons[1].click());
+    buttons = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "tool-call-disclosure"));
+    await flushReactUpdate(() => buttons[1].click());
+
+    const results = [
+      toolResult("write", "manual-open", { text: "done" }),
+      toolResult("write", "manual-closed", { text: "permission denied", isError: true }),
+    ];
+    await mounted.render(messageElement(calls, results));
+    buttons = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "tool-call-disclosure"));
+    assert.deepEqual(buttons.map((button) => attribute(button, "aria-expanded")), ["true", "false"]);
+    assert.match(elementText(controlledBody(mounted.dom.container, buttons[0])), /Written content/);
+    assert.equal(elementText(controlledBody(mounted.dom.container, buttons[1])), "");
+
+    await flushReactUpdate(() => buttons[1].click());
+    buttons = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "tool-call-disclosure"));
+    const failedBody = controlledBody(mounted.dom.container, buttons[1]);
+    assert.match(elementText(failedBody), /Attempted content/);
+    assert.match(elementText(failedBody), /permission denied/);
+  } finally {
+    await mounted.cleanup();
+  }
+});
+
+test("completed write views preserve content, path, status, and decorative line numbers", () => {
+  const content = '<script data-x="1">alert("owned")</script>\n\tconst long = "' + "x".repeat(4_100) + '";\n';
+  const successHtml = renderMessage(
+    [writeCall("write-fidelity", { path: "src/hostile.ts", content })],
+    [toolResult("write", "write-fidelity", { text: "Successfully wrote the requested content." })],
+  );
+
+  assert.match(successHtml, /aria-expanded="true"/);
+  assert.match(successHtml, /class="write-content" data-file-path="src\/hostile\.ts" data-language="typescript" data-empty="false"/);
+  assert.match(successHtml, /Written content/);
+  assert.match(successHtml, /Successfully wrote the requested content\./);
+  assert.match(successHtml, /data-renderer="plaintext"/, "an over-budget source line skips syntax work without losing content");
+  assert.equal((successHtml.match(/class="write-code-line-number" aria-hidden="true"/g) ?? []).length, 3);
+  assert.match(successHtml, /\tconst long/);
+  assert.match(successHtml, new RegExp(`x{${4_100}}`));
+  assert.doesNotMatch(successHtml, /<script[ >]/i);
+  assert.match(successHtml, /&lt;script data-x=&quot;1&quot;&gt;alert/);
+  assert.doesNotMatch(successHtml, /tool-call-input/);
+
+  const failedHtml = renderMessage(
+    [writeCall("write-failed", { path: "src/failure.ts", content: "attempt();" })],
+    [toolResult("write", "write-failed", { text: "Permission denied.", isError: true })],
+  );
+  assert.match(failedHtml, /Attempted content/);
+  assert.doesNotMatch(failedHtml, /Written content/);
+  assert.match(failedHtml, /Permission denied\./);
+  assert.match(failedHtml, /tool-result-text is-error is-natural-height/);
+});
+
+test("write code rows retain exact hostile text, tabs, and a final newline", async () => {
+  const content = '<script data-x="1">alert("owned")</script>\n\tconst value = "snow: 雪";\n';
+  const call = writeCall("write-exact", { path: "src/exact.ts", content });
+  const mounted = await mount(messageElement([call], [toolResult("write", "write-exact")]));
+
+  try {
+    const codeLines = findAll(mounted.dom.container, (node) => hasClass(node, "write-code-text"));
+    const lineNumbers = findAll(mounted.dom.container, (node) => hasClass(node, "write-code-line-number"));
+    assert.deepEqual(codeLines.map(elementText), content.split("\n"));
+    assert.deepEqual(lineNumbers.map(elementText), ["1", "2", "3"]);
+    assert.ok(lineNumbers.every((lineNumber) => attribute(lineNumber, "aria-hidden") === "true"));
+    assert.equal(findAll(mounted.dom.container, (node) => node.tagName === "SCRIPT").length, 0);
+  } finally {
+    await mounted.cleanup();
+  }
+});
+
+test("empty, syntax-highlighted, unsupported, and oversized writes keep complete line-numbered text", () => {
+  const emptyHtml = renderMessage(
+    [writeCall("empty", { path: "empty.ts", content: "" })],
+    [toolResult("write", "empty")],
+  );
+  assert.match(emptyHtml, /data-empty="true"/);
+  assert.match(emptyHtml, /Empty file/);
+  assert.match(emptyHtml, /\(empty file\)/);
+  assert.equal((emptyHtml.match(/class="write-code-line-number"/g) ?? []).length, 1);
+
+  const syntaxContent = "/* open\n * middle\n */\nconst value = 1;";
+  const syntaxHtml = renderMessage(
+    [writeCall("syntax", { path: "syntax.ts", content: syntaxContent })],
+    [toolResult("write", "syntax")],
+  );
+  assert.match(syntaxHtml, /data-renderer="syntax"/);
+  assert.equal((syntaxHtml.match(/class="write-code-line-number"/g) ?? []).length, 4);
+  for (const text of ["open", "middle", "const", "value"]) assert.match(syntaxHtml, new RegExp(text));
+
+  const unsupportedContent = "first\n\tsecond\nthird";
+  const unsupportedHtml = renderMessage(
+    [writeCall("unsupported", { path: "source.unknown", content: unsupportedContent })],
+    [toolResult("write", "unsupported")],
+  );
+  assert.match(unsupportedHtml, /data-language="text"/);
+  assert.match(unsupportedHtml, /data-renderer="plaintext"/);
+  assert.equal((unsupportedHtml.match(/class="write-code-line-number"/g) ?? []).length, 3);
+  assert.match(unsupportedHtml, /first/);
+  assert.match(unsupportedHtml, /\tsecond/);
+  assert.match(unsupportedHtml, /third/);
+
+  const oversizedContent = `first\n${"z".repeat(120_001)}\nlast`;
+  const oversizedHtml = renderMessage(
+    [writeCall("oversized", { path: "oversized.ts", content: oversizedContent })],
+    [toolResult("write", "oversized")],
+  );
+  assert.match(oversizedHtml, /data-renderer="plaintext"/);
+  assert.equal((oversizedHtml.match(/class="write-code-line-number"/g) ?? []).length, 3);
+  assert.match(oversizedHtml, /first/);
+  assert.match(oversizedHtml, new RegExp(`z{${120_001}}`));
+  assert.match(oversizedHtml, /last/);
+});
+
+test("malformed completed writes use ordinary JSON and result fallback", () => {
+  const malformed = { type: "toolCall", toolCallId: "malformed-write", toolName: "write", input: { path: "missing-content.ts" } };
+  const html = renderMessage([malformed], [toolResult("write", "malformed-write", { text: "Invalid write input." })]);
+
+  assert.match(html, /aria-expanded="true"/);
+  assert.match(html, /tool-call-input/);
+  assert.match(html, /&quot;path&quot;: &quot;missing-content\.ts&quot;/);
+  assert.match(html, /Invalid write input\./);
+  assert.doesNotMatch(html, /write-content/);
+});
+
 test("non-edit and similar unrecognized tools stay collapsed and toggle independently", async () => {
-  const calls = [toolCall("bash", "bash"), toolCall("editor", "editor")];
-  const results = [toolResult("bash", "bash", { text: "bash output" }), toolResult("editor", "editor", { text: "editor output" })];
+  const calls = [toolCall("bash", "bash"), toolCall("editor", "editor"), toolCall("write_file", "write-near")];
+  const results = [
+    toolResult("bash", "bash", { text: "bash output" }),
+    toolResult("editor", "editor", { text: "editor output" }),
+    toolResult("write_file", "write-near", { text: "near-name output" }),
+  ];
   const mounted = await mount(messageElement(calls, results));
 
   try {
     let buttons = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "tool-call-disclosure"));
-    assert.deepEqual(buttons.map((button) => attribute(button, "aria-expanded")), ["false", "false"]);
+    assert.deepEqual(buttons.map((button) => attribute(button, "aria-expanded")), ["false", "false", "false"]);
     for (const button of buttons) {
       const body = controlledBody(mounted.dom.container, button);
       assert.equal(body.hasAttribute("hidden"), true);
@@ -289,8 +478,9 @@ test("non-edit and similar unrecognized tools stay collapsed and toggle independ
 
     await flushReactUpdate(() => buttons[1].click());
     buttons = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "tool-call-disclosure"));
-    assert.deepEqual(buttons.map((button) => attribute(button, "aria-expanded")), ["false", "true"]);
+    assert.deepEqual(buttons.map((button) => attribute(button, "aria-expanded")), ["false", "true", "false"]);
     assert.match(elementText(controlledBody(mounted.dom.container, buttons[1])), /editor output/);
+    assert.equal(findAll(mounted.dom.container, (node) => hasClass(node, "write-content")).length, 0);
   } finally {
     await mounted.cleanup();
   }
@@ -322,6 +512,18 @@ test("completed Process details classifies only its exact blocks, defaults edit 
   assert.equal(processGroupContainsEdit(messages, [1], []), false, "an edit outside the grouped indices does not open this group");
   assert.equal(processGroupContainsEdit(messages, [0], []), true, "a grouped edit opens the group");
   assert.equal(processGroupContainsEdit(messages, [1], [toolCall("workspace.edit", "final")]), true, "an edit in the final grouped blocks opens the group");
+
+  const groupedWrites = [
+    { role: "assistant", content: [writeCall("outside-write")] },
+    { role: "assistant", content: [writeCall("inside-write"), toolCall("workspace.write", "near-write")] },
+  ];
+  assert.equal(processGroupShouldStartExpanded(groupedWrites, [1], [], new Set()), false, "pending writes do not open a settled group");
+  assert.equal(processGroupShouldStartExpanded(groupedWrites, [1], [], new Set(["orphan"])), false, "an orphan result cannot open the group");
+  assert.equal(processGroupShouldStartExpanded(groupedWrites, [1], [], new Set(["outside-write"])), false, "an outside write cannot open this exact group");
+  assert.equal(processGroupShouldStartExpanded(groupedWrites, [1], [], new Set(["near-write"])), false, "a completed near-name tool cannot open the group");
+  assert.equal(processGroupShouldStartExpanded(groupedWrites, [1], [], new Set(["inside-write"])), true, "a matching completed grouped write opens the group");
+  assert.equal(processGroupShouldStartExpanded(groupedWrites, [], [writeCall("final-write")], new Set(["final-write"])), true, "a matching completed final block opens the group");
+  assert.equal(processGroupShouldStartExpanded(messages, [0], [], new Set()), true, "edit behavior stays result-independent");
 
   const openGroup = React.createElement(ProcessDetailsGroup, {
     messageCount: 2,
@@ -358,6 +560,43 @@ test("completed Process details classifies only its exact blocks, defaults edit 
   }, React.createElement("span", null, "ordinary process body")));
   assert.match(closedHtml, /aria-expanded="false"/);
   assert.doesNotMatch(closedHtml, /ordinary process body/);
+});
+
+test("completed write Process details and its card remain independently collapsible", async () => {
+  const call = writeCall("grouped-write", { path: "grouped.ts", content: "grouped();" });
+  const result = toolResult("write", "grouped-write", { text: "done" });
+  const group = React.createElement(ProcessDetailsGroup, {
+    messageCount: 1,
+    toolCallCount: 1,
+    defaultExpanded: true,
+  }, messageElement([call], [result]));
+  const mounted = await mount(group);
+
+  try {
+    let groupButton = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "process-details-disclosure"))[0];
+    let toolButton = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "tool-call-disclosure"))[0];
+    assert.equal(attribute(groupButton, "aria-expanded"), "true");
+    assert.equal(attribute(toolButton, "aria-expanded"), "true");
+
+    await flushReactUpdate(() => toolButton.click());
+    groupButton = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "process-details-disclosure"))[0];
+    toolButton = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "tool-call-disclosure"))[0];
+    assert.equal(attribute(groupButton, "aria-expanded"), "true", "collapsing the write does not collapse Process details");
+    assert.equal(attribute(toolButton, "aria-expanded"), "false");
+
+    await flushReactUpdate(() => groupButton.click());
+    groupButton = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "process-details-disclosure"))[0];
+    assert.equal(attribute(groupButton, "aria-expanded"), "false");
+    assert.equal(findAll(mounted.dom.container, (node) => hasClass(node, "tool-call-disclosure")).length, 0);
+
+    await flushReactUpdate(() => groupButton.click());
+    groupButton = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "process-details-disclosure"))[0];
+    toolButton = findAll(mounted.dom.container, (node) => node.tagName === "BUTTON" && hasClass(node, "tool-call-disclosure"))[0];
+    assert.equal(attribute(groupButton, "aria-expanded"), "true");
+    assert.equal(attribute(toolButton, "aria-expanded"), "true", "a remounted completed write uses its historical default");
+  } finally {
+    await mounted.cleanup();
+  }
 });
 
 test("structured patches render vertical review hierarchy, stats, truthful gutters, and conservative emphasis", () => {
@@ -503,17 +742,21 @@ test("malformed structured detail falls back to immutable readable plaintext", (
   assert.match(html, /&lt;script&gt;still text&lt;\/script&gt;/);
 });
 
-test("edit-specific CSS guarantees visible focus, natural height, unified width, and soft wrapping", async () => {
+test("write and edit CSS guarantee visible focus, natural height, neutral gutters, and soft wrapping", async () => {
   const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-  const editStart = css.indexOf("/* Transcript tool disclosures and change-focused edit review cards. */");
+  const editStart = css.indexOf("/* Transcript tool disclosures, whole-file writes, and change-focused edit review cards. */");
   const editEnd = css.indexOf(".mermaid-block {", editStart);
   const editCss = css.slice(editStart, editEnd);
+  const writeCss = editCss.slice(editCss.indexOf(".write-content"), editCss.indexOf(".edit-diff-stats"));
   const patchCss = editCss.slice(editCss.indexOf(".edit-patch-result"));
 
   assert.match(editCss, /\.tool-call-disclosure:focus-visible\s*\{[\s\S]*?outline: 2px solid var\(--accent\)/);
   assert.match(editCss, /\.process-details-disclosure:focus-visible\s*\{[\s\S]*?outline: 2px solid var\(--accent\)/);
   assert.match(editCss, /\.edit-diff-code\s*\{[\s\S]*?white-space: pre-wrap;[\s\S]*?overflow-wrap: anywhere;/);
   assert.match(editCss, /\.edit-diff-row\s*\{[\s\S]*?grid-template-columns:[^;]*minmax\(0, 1fr\)/);
+  assert.match(writeCss, /\.write-code-text\s*\{[\s\S]*?white-space: pre-wrap;[\s\S]*?overflow-wrap: anywhere;/);
+  assert.match(writeCss, /\.write-code-line-number\s*\{[\s\S]*?user-select: none;/);
+  assert.doesNotMatch(writeCss, /overflow-[xy]:\s*auto|max-height:\s*\d|diff-(?:add|remove)/, "whole-file writes use natural height and neutral code rows");
   assert.doesNotMatch(patchCss, /overflow-[xy]:\s*auto|max-height:\s*\d/, "patches use the transcript scroll and natural height");
   assert.doesNotMatch(patchCss, /grid-template-columns:\s*minmax\(0, 1fr\)\s+minmax\(0, 1fr\)/, "no split-view rule exists");
 });

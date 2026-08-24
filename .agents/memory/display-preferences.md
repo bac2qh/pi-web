@@ -29,8 +29,17 @@
 - Successful structured edit details remain immutable input. The transcript derives strict factual unified hunks with exactly three adjacent context lines, counted omissions, old/new gutters, bounded separate old/new syntax projections, and one-to-one-only intra-line emphasis. Unsupported or over-budget structure falls back intact to naturally sized, soft-wrapped plaintext.
 - The review card is always full-width and top-to-bottom. Removed rows precede added rows, red/green meaning also has textual markers, long content wraps without horizontal or nested vertical scrolling, and light/dark treatment remains transcript presentation rather than editor/repository authority.
 
+## 2026-08-24 — Exact write disclosures reveal completed call-time content
+
+- Exact, case-sensitive `write` stays separate from broad edit recognition. A pending card initializes collapsed and mounts neither raw arguments nor code. The first matching result opens an untouched mounted card once for success or failure; any earlier user toggle, later manual collapse, result replacement, or result reappearance remains authoritative.
+- Settled **Process details** starts open for a write only when the exact grouped call ID has a matching completed result. Outside writes, orphan results, pending writes, and near names do not broaden the default; outer and inner disclosures retain their established independent mounted lifetimes.
+- Valid completed `{ path, content }` renders the complete call-time string without a filesystem comparison. Success uses **Written content** and failure uses **Attempted content** with result text retained. Neutral decorative line numbers, natural soft wrapping, and bounded theme-aware syntax preserve text; unsupported, oversized, or syntax-inexact content falls back completely to line-numbered plaintext, while malformed input uses the ordinary JSON/result surface.
+
 ## References
 
+- Write-result disclosure plan: `.agents/plans/2026-08-24-show-write-code-by-default.md`
+- Write-result disclosure checkpoint: `.agents/checkpoints/2026-08-24-show-write-code-by-default-checkpoints.md`
+- Write-result browser evidence: `.agents/reports/2026-08-24-show-write-code-by-default/browser-validation.json`
 - Edit-result disclosure plan: `.agents/plans/2026-08-21-expand-edit-results-by-default.md`
 - Edit-result disclosure checkpoint: `.agents/checkpoints/2026-08-21-expand-edit-results-by-default-checkpoints.md`
 - Edit-result browser evidence: `.agents/reports/2026-08-21-expand-edit-results-by-default/browser-validation.json`

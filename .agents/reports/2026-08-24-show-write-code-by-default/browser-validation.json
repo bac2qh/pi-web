@@ -1,0 +1,424 @@
+{
+  "date": "2026-08-24T06:04:28.381Z",
+  "result": "pass",
+  "environment": {
+    "browser": "Chrome/151.0.7922.174",
+    "server": "owned Pi Web development server from the task checkout on port 30145 with an isolated PI_CODING_AGENT_DIR",
+    "desktopViewport": "1440x1000",
+    "mobileViewport": "390x844"
+  },
+  "fixture": {
+    "kind": "isolated synthetic Pi session",
+    "sessionId": "019c8f12-1234-7abc-8def-1234567890ab",
+    "cases": [
+      "pending",
+      "successful",
+      "failed",
+      "long line",
+      "near-name tool",
+      "collapse and reopen"
+    ]
+  },
+  "interactions": {
+    "focused": true,
+    "outlineWidth": "2px",
+    "outlineStyle": "solid",
+    "collapsed": "false",
+    "collapsedBodyText": "",
+    "reopened": "true",
+    "processCollapsed": "false",
+    "processReopened": "true",
+    "remountedStates": [
+      "true",
+      "true",
+      "true",
+      "false",
+      "false"
+    ]
+  },
+  "measurements": {
+    "desktopLight": {
+      "label": "desktop-light",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "dark": false,
+      "processExpanded": "true",
+      "cards": [
+        {
+          "name": "write",
+          "path": "src/success.ts",
+          "expanded": "true",
+          "label": "Collapse write tool details: src/success.ts",
+          "hasWriteContent": true,
+          "bodyText": "Written contentsrc/success.ts1export const success = true;2\tconsole.log(\"done\");3Successfully wrote 50 bytes to src/success.ts"
+        },
+        {
+          "name": "write",
+          "path": "src/failure.py",
+          "expanded": "true",
+          "label": "Collapse write tool details: src/failure.py",
+          "hasWriteContent": true,
+          "bodyText": "Attempted contentsrc/failure.py1def attempted():2\treturn \"not written\"3Permission denied while writing src/failure.py"
+        },
+        {
+          "name": "write",
+          "path": "src/long.ts",
+          "expanded": "true",
+          "label": "Collapse write tool details: src/long.ts",
+          "hasWriteContent": true,
+          "bodyText": "Written contentsrc/long.ts1export const longValue = \"wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-\";Successfully wrote long content to src/long.ts"
+        },
+        {
+          "name": "write",
+          "path": "src/pending.ts",
+          "expanded": "false",
+          "label": "Expand write tool details: src/pending.ts",
+          "hasWriteContent": false,
+          "bodyText": ""
+        },
+        {
+          "name": "workspace.write",
+          "path": "src/near.ts",
+          "expanded": "false",
+          "label": "Expand workspace.write tool details: src/near.ts",
+          "hasWriteContent": false,
+          "bodyText": ""
+        }
+      ],
+      "writeViews": [
+        {
+          "path": "src/success.ts",
+          "language": "typescript",
+          "label": "Written content",
+          "renderer": "syntax",
+          "lines": 3,
+          "result": "Successfully wrote 50 bytes to src/success.ts"
+        },
+        {
+          "path": "src/failure.py",
+          "language": "python",
+          "label": "Attempted content",
+          "renderer": "syntax",
+          "lines": 3,
+          "result": "Permission denied while writing src/failure.py"
+        },
+        {
+          "path": "src/long.ts",
+          "language": "typescript",
+          "label": "Written content",
+          "renderer": "syntax",
+          "lines": 1,
+          "result": "Successfully wrote long content to src/long.ts"
+        }
+      ],
+      "pendingSecretVisible": false,
+      "nestedCodeScrollers": 0,
+      "horizontalOverflow": false,
+      "longLine": {
+        "clientWidth": 788,
+        "scrollWidth": 788,
+        "clientHeight": 168,
+        "scrollHeight": 168,
+        "whiteSpace": "pre-wrap",
+        "overflowWrap": "anywhere"
+      },
+      "lineNumber": {
+        "ariaHidden": "true",
+        "userSelect": "none"
+      },
+      "runtimeText": "Pi Agent Web\nNew\nPINNED\n0\nNo pinned sessions\nRECENT\n1\ncwd\n·\nWrite display browser fixture\njust now\n7 msgs\nPROJECT\n1\n~/Documents/repos/pi-web/.agents/runtime/show-write-browser/cwd\nOpen repo root\nWrite"
+    },
+    "desktopDark": {
+      "label": "desktop-dark",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "dark": true,
+      "processExpanded": "true",
+      "cards": [
+        {
+          "name": "write",
+          "path": "src/success.ts",
+          "expanded": "true",
+          "label": "Collapse write tool details: src/success.ts",
+          "hasWriteContent": true,
+          "bodyText": "Written contentsrc/success.ts1export const success = true;2\tconsole.log(\"done\");3Successfully wrote 50 bytes to src/success.ts"
+        },
+        {
+          "name": "write",
+          "path": "src/failure.py",
+          "expanded": "true",
+          "label": "Collapse write tool details: src/failure.py",
+          "hasWriteContent": true,
+          "bodyText": "Attempted contentsrc/failure.py1def attempted():2\treturn \"not written\"3Permission denied while writing src/failure.py"
+        },
+        {
+          "name": "write",
+          "path": "src/long.ts",
+          "expanded": "true",
+          "label": "Collapse write tool details: src/long.ts",
+          "hasWriteContent": true,
+          "bodyText": "Written contentsrc/long.ts1export const longValue = \"wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-\";Successfully wrote long content to src/long.ts"
+        },
+        {
+          "name": "write",
+          "path": "src/pending.ts",
+          "expanded": "false",
+          "label": "Expand write tool details: src/pending.ts",
+          "hasWriteContent": false,
+          "bodyText": ""
+        },
+        {
+          "name": "workspace.write",
+          "path": "src/near.ts",
+          "expanded": "false",
+          "label": "Expand workspace.write tool details: src/near.ts",
+          "hasWriteContent": false,
+          "bodyText": ""
+        }
+      ],
+      "writeViews": [
+        {
+          "path": "src/success.ts",
+          "language": "typescript",
+          "label": "Written content",
+          "renderer": "syntax",
+          "lines": 3,
+          "result": "Successfully wrote 50 bytes to src/success.ts"
+        },
+        {
+          "path": "src/failure.py",
+          "language": "python",
+          "label": "Attempted content",
+          "renderer": "syntax",
+          "lines": 3,
+          "result": "Permission denied while writing src/failure.py"
+        },
+        {
+          "path": "src/long.ts",
+          "language": "typescript",
+          "label": "Written content",
+          "renderer": "syntax",
+          "lines": 1,
+          "result": "Successfully wrote long content to src/long.ts"
+        }
+      ],
+      "pendingSecretVisible": false,
+      "nestedCodeScrollers": 0,
+      "horizontalOverflow": false,
+      "longLine": {
+        "clientWidth": 788,
+        "scrollWidth": 788,
+        "clientHeight": 168,
+        "scrollHeight": 168,
+        "whiteSpace": "pre-wrap",
+        "overflowWrap": "anywhere"
+      },
+      "lineNumber": {
+        "ariaHidden": "true",
+        "userSelect": "none"
+      },
+      "runtimeText": "Pi Agent Web\nNew\nPINNED\n0\nNo pinned sessions\nRECENT\n1\ncwd\n·\nWrite display browser fixture\njust now\n7 msgs\nPROJECT\n1\n~/Documents/repos/pi-web/.agents/runtime/show-write-browser/cwd\nOpen repo root\nWrite"
+    },
+    "mobileDark": {
+      "label": "mobile-dark",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "dark": true,
+      "processExpanded": "true",
+      "cards": [
+        {
+          "name": "write",
+          "path": "src/success.ts",
+          "expanded": "true",
+          "label": "Collapse write tool details: src/success.ts",
+          "hasWriteContent": true,
+          "bodyText": "Written contentsrc/success.ts1export const success = true;2\tconsole.log(\"done\");3Successfully wrote 50 bytes to src/success.ts"
+        },
+        {
+          "name": "write",
+          "path": "src/failure.py",
+          "expanded": "true",
+          "label": "Collapse write tool details: src/failure.py",
+          "hasWriteContent": true,
+          "bodyText": "Attempted contentsrc/failure.py1def attempted():2\treturn \"not written\"3Permission denied while writing src/failure.py"
+        },
+        {
+          "name": "write",
+          "path": "src/long.ts",
+          "expanded": "true",
+          "label": "Collapse write tool details: src/long.ts",
+          "hasWriteContent": true,
+          "bodyText": "Written contentsrc/long.ts1export const longValue = \"wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-\";Successfully wrote long content to src/long.ts"
+        },
+        {
+          "name": "write",
+          "path": "src/pending.ts",
+          "expanded": "false",
+          "label": "Expand write tool details: src/pending.ts",
+          "hasWriteContent": false,
+          "bodyText": ""
+        },
+        {
+          "name": "workspace.write",
+          "path": "src/near.ts",
+          "expanded": "false",
+          "label": "Expand workspace.write tool details: src/near.ts",
+          "hasWriteContent": false,
+          "bodyText": ""
+        }
+      ],
+      "writeViews": [
+        {
+          "path": "src/success.ts",
+          "language": "typescript",
+          "label": "Written content",
+          "renderer": "syntax",
+          "lines": 3,
+          "result": "Successfully wrote 50 bytes to src/success.ts"
+        },
+        {
+          "path": "src/failure.py",
+          "language": "python",
+          "label": "Attempted content",
+          "renderer": "syntax",
+          "lines": 3,
+          "result": "Permission denied while writing src/failure.py"
+        },
+        {
+          "path": "src/long.ts",
+          "language": "typescript",
+          "label": "Written content",
+          "renderer": "syntax",
+          "lines": 1,
+          "result": "Successfully wrote long content to src/long.ts"
+        }
+      ],
+      "pendingSecretVisible": false,
+      "nestedCodeScrollers": 0,
+      "horizontalOverflow": false,
+      "longLine": {
+        "clientWidth": 328,
+        "scrollWidth": 328,
+        "clientHeight": 450,
+        "scrollHeight": 450,
+        "whiteSpace": "pre-wrap",
+        "overflowWrap": "anywhere"
+      },
+      "lineNumber": {
+        "ariaHidden": "true",
+        "userSelect": "none"
+      },
+      "runtimeText": "Pi Agent Web\nNew\nPINNED\n0\nNo pinned sessions\nRECENT\n1\ncwd\n·\nWrite display browser fixture\njust now\n7 msgs\nPROJECT\n1\n~/Documents/repos/pi-web/.agents/runtime/show-write-browser/cwd\nOpen repo root\nWrite"
+    },
+    "mobileLight": {
+      "label": "mobile-light",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "dark": false,
+      "processExpanded": "true",
+      "cards": [
+        {
+          "name": "write",
+          "path": "src/success.ts",
+          "expanded": "true",
+          "label": "Collapse write tool details: src/success.ts",
+          "hasWriteContent": true,
+          "bodyText": "Written contentsrc/success.ts1export const success = true;2\tconsole.log(\"done\");3Successfully wrote 50 bytes to src/success.ts"
+        },
+        {
+          "name": "write",
+          "path": "src/failure.py",
+          "expanded": "true",
+          "label": "Collapse write tool details: src/failure.py",
+          "hasWriteContent": true,
+          "bodyText": "Attempted contentsrc/failure.py1def attempted():2\treturn \"not written\"3Permission denied while writing src/failure.py"
+        },
+        {
+          "name": "write",
+          "path": "src/long.ts",
+          "expanded": "true",
+          "label": "Collapse write tool details: src/long.ts",
+          "hasWriteContent": true,
+          "bodyText": "Written contentsrc/long.ts1export const longValue = \"wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-wrap-me-\";Successfully wrote long content to src/long.ts"
+        },
+        {
+          "name": "write",
+          "path": "src/pending.ts",
+          "expanded": "false",
+          "label": "Expand write tool details: src/pending.ts",
+          "hasWriteContent": false,
+          "bodyText": ""
+        },
+        {
+          "name": "workspace.write",
+          "path": "src/near.ts",
+          "expanded": "false",
+          "label": "Expand workspace.write tool details: src/near.ts",
+          "hasWriteContent": false,
+          "bodyText": ""
+        }
+      ],
+      "writeViews": [
+        {
+          "path": "src/success.ts",
+          "language": "typescript",
+          "label": "Written content",
+          "renderer": "syntax",
+          "lines": 3,
+          "result": "Successfully wrote 50 bytes to src/success.ts"
+        },
+        {
+          "path": "src/failure.py",
+          "language": "python",
+          "label": "Attempted content",
+          "renderer": "syntax",
+          "lines": 3,
+          "result": "Permission denied while writing src/failure.py"
+        },
+        {
+          "path": "src/long.ts",
+          "language": "typescript",
+          "label": "Written content",
+          "renderer": "syntax",
+          "lines": 1,
+          "result": "Successfully wrote long content to src/long.ts"
+        }
+      ],
+      "pendingSecretVisible": false,
+      "nestedCodeScrollers": 0,
+      "horizontalOverflow": false,
+      "longLine": {
+        "clientWidth": 328,
+        "scrollWidth": 328,
+        "clientHeight": 450,
+        "scrollHeight": 450,
+        "whiteSpace": "pre-wrap",
+        "overflowWrap": "anywhere"
+      },
+      "lineNumber": {
+        "ariaHidden": "true",
+        "userSelect": "none"
+      },
+      "runtimeText": "Pi Agent Web\nNew\nPINNED\n0\nNo pinned sessions\nRECENT\n1\ncwd\n·\nWrite display browser fixture\njust now\n7 msgs\nPROJECT\n1\n~/Documents/repos/pi-web/.agents/runtime/show-write-browser/cwd\nOpen repo root\nWrite"
+    }
+  },
+  "runtimeIssues": [],
+  "screenshots": [
+    "desktop-light.png",
+    "desktop-dark.png",
+    "mobile-dark.png",
+    "mobile-light.png"
+  ],
+  "assertions": {
+    "passed": 54,
+    "total": 54
+  }
+}

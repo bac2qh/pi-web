@@ -8,7 +8,7 @@ import { vscDarkPlus } from "react-syntax-highlighter/dist/cjs/styles/prism";
 import { MarkdownBody } from "./MarkdownBody";
 import { copyText } from "@/lib/clipboard";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
-import { buildAssistantBlockKey, isEditToolName, isEmptyThinkingBlock } from "@/lib/message-display";
+import { buildAssistantBlockKey, isEditToolName, isEmptyThinkingBlock, isWriteToolName } from "@/lib/message-display";
 import type { FileOpenOptions } from "@/lib/file-links";
 import type { MermaidView } from "@/lib/mermaid-display";
 import { getFileLanguage } from "@/lib/file-types";
@@ -807,10 +807,16 @@ function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex }: {
 
 function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; result?: ToolResultMessage; duration?: number }) {
   const isEditTool = isEditToolName(block.toolName);
-  const [expanded, setExpanded] = useState(() => isEditTool);
+  const isWriteTool = isWriteToolName(block.toolName);
+  const hasResult = result !== undefined;
+  const userToggledDisclosureRef = useRef(false);
+  const observedWriteResultRef = useRef(isWriteTool && hasResult);
+  const [expanded, setExpanded] = useState(() => isEditTool || (isWriteTool && hasResult));
   const bodyId = useId();
-  const inputStr = JSON.stringify(block.input, null, 2);
-  const resultDiff = result && !result.isError ? getResultDiff(result) : null;
+  const completedWriteInput = isWriteTool && hasResult ? getWriteToolInput(block.input) : null;
+  const showRawInput = !isEditTool && (!isWriteTool || (hasResult && completedWriteInput === null));
+  const inputStr = showRawInput ? JSON.stringify(block.input, null, 2) : null;
+  const resultDiff = result && !result.isError && completedWriteInput === null ? getResultDiff(result) : null;
   const resultDiffText = resultDiff?.text ?? null;
   const shouldParseDiff = resultDiffText !== null && (isEditTool || expanded);
   const parsedFiles = useMemo(
@@ -818,6 +824,12 @@ function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; re
     [resultDiffText, shouldParseDiff],
   );
   const renderableFiles = parsedFiles && canRenderStructuredPatch(parsedFiles) ? parsedFiles : null;
+
+  useEffect(() => {
+    if (!isWriteTool || !hasResult || observedWriteResultRef.current) return;
+    observedWriteResultRef.current = true;
+    if (!userToggledDisclosureRef.current) setExpanded(true);
+  }, [hasResult, isWriteTool]);
 
   const resultText = result
     ? result.content.filter((b): b is { type: "text"; text: string } => b.type === "text").map((b) => b.text).join("\n")
@@ -841,6 +853,7 @@ function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; re
     "tool-call-card",
     isError ? "is-error" : "is-success",
     isEditTool ? "is-edit" : "",
+    isWriteTool ? "is-write" : "",
     structuredEdit ? "has-structured-edit" : "",
   ].filter(Boolean).join(" ");
 
@@ -852,7 +865,10 @@ function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; re
         aria-label={`${expanded ? "Collapse" : "Expand"} ${block.toolName} tool details${accessibleDetails ? `: ${accessibleDetails}` : ""}`}
         aria-expanded={expanded}
         aria-controls={bodyId}
-        onClick={() => setExpanded((value) => !value)}
+        onClick={() => {
+          userToggledDisclosureRef.current = true;
+          setExpanded((value) => !value);
+        }}
         style={{ fontSize: scaledMenuFontSize(12) }}
       >
         <span className="tool-call-name" style={{ fontSize: scaledMenuFontSize(11) }}>
@@ -873,11 +889,19 @@ function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; re
       <div id={bodyId} className="tool-call-body" hidden={!expanded}>
         {expanded && (
           <>
-            {!isEditTool && (
-              <pre className="tool-call-input">{inputStr}</pre>
+            {showRawInput && <pre className="tool-call-input">{inputStr}</pre>}
+            {completedWriteInput && (
+              <WriteContentView path={completedWriteInput.path} content={completedWriteInput.content} isError={isError} />
             )}
             {result && (
-              resultDiff ? (
+              completedWriteInput ? (
+                <PairedResult
+                  text={resultText ?? ""}
+                  isEmpty={resultIsEmpty}
+                  isError={isError}
+                  naturalHeight
+                />
+              ) : resultDiff ? (
                 <PairedDiffResult diff={resultDiff} files={renderableFiles} />
               ) : (
                 <PairedResult
@@ -893,6 +917,17 @@ function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; re
       </div>
     </div>
   );
+}
+
+interface WriteToolInput {
+  path: string;
+  content: string;
+}
+
+function getWriteToolInput(input: ToolCallContent["input"]): WriteToolInput | null {
+  return typeof input.path === "string" && typeof input.content === "string"
+    ? { path: input.path, content: input.content }
+    : null;
 }
 
 interface ResultDiff {
@@ -916,6 +951,112 @@ const MAX_HIGHLIGHTED_CHANGE_GROUPS = 80;
 const MAX_HIGHLIGHTED_HUNK_LINES = 600;
 const MAX_HIGHLIGHTED_HUNK_CHARS = 60_000;
 const MAX_HIGHLIGHTED_LINE_CHARS = 4_000;
+const MAX_HIGHLIGHTED_WRITE_LINES = 1_200;
+const MAX_HIGHLIGHTED_WRITE_CHARS = 120_000;
+const MAX_HIGHLIGHTED_WRITE_LINE_CHARS = 4_000;
+
+function WriteContentView({ path, content, isError }: WriteToolInput & { isError: boolean }) {
+  const { isDark } = useTheme();
+  const language = getFileLanguage(path);
+  const lines = useMemo(() => content.split("\n"), [content]);
+  const useSyntax = canHighlightWriteContent(lines, content, language);
+  const syntaxStyle = isDark ? vscDarkPlus : vs;
+  const label = isError ? "Attempted content" : "Written content";
+
+  return (
+    <section
+      className="write-content"
+      data-file-path={path}
+      data-language={language}
+      data-empty={content === "" ? "true" : "false"}
+    >
+      <header className="write-content-header">
+        <span className="write-content-label">{label}</span>
+        <span className="write-content-path" title={path}>{path}</span>
+        {content === "" && <span className="write-content-empty-label">Empty file</span>}
+      </header>
+      <div className="write-code-block">
+        {useSyntax ? (
+          <SyntaxHighlighter
+            language={language}
+            style={syntaxStyle}
+            PreTag={SyntaxPassthrough}
+            CodeTag={SyntaxPassthrough}
+            renderer={({ rows, stylesheet, useInlineStyles }) => {
+              const normalizedRows = (rows as SyntaxTreeNode[]).map(stripSyntaxRowTerminator);
+              const syntaxIsExact = normalizedRows.length === lines.length
+                && normalizedRows.every((node, index) => getSyntaxNodeText(node) === lines[index]);
+              return (
+                <WriteCodeRows
+                  lines={lines}
+                  contentIsEmpty={content === ""}
+                  renderer={syntaxIsExact ? "syntax" : "plaintext"}
+                  syntaxRows={syntaxIsExact ? normalizedRows : undefined}
+                  stylesheet={stylesheet}
+                  useInlineStyles={useInlineStyles}
+                />
+              );
+            }}
+          >
+            {content}
+          </SyntaxHighlighter>
+        ) : (
+          <WriteCodeRows lines={lines} contentIsEmpty={content === ""} renderer="plaintext" />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function WriteCodeRows({
+  lines,
+  contentIsEmpty,
+  renderer,
+  syntaxRows,
+  stylesheet,
+  useInlineStyles = true,
+}: {
+  lines: string[];
+  contentIsEmpty: boolean;
+  renderer: "syntax" | "plaintext";
+  syntaxRows?: SyntaxTreeNode[];
+  stylesheet?: Record<string, React.CSSProperties>;
+  useInlineStyles?: boolean;
+}) {
+  return (
+    <code className="write-code-lines" data-renderer={renderer}>
+      {lines.map((line, index) => {
+        const syntaxNode = syntaxRows?.[index];
+        const renderedLine = syntaxNode && stylesheet
+          ? createSyntaxElement({
+              node: syntaxNode as never,
+              stylesheet,
+              useInlineStyles,
+              key: `write-syntax-line-${index}`,
+            })
+          : line;
+        return (
+          <span className="write-code-row" data-line-number={index + 1} key={index}>
+            <span className="write-code-line-number" aria-hidden="true">{index + 1}</span>
+            <span className="write-code-text">
+              {contentIsEmpty && index === 0
+                ? <span className="write-code-empty" aria-hidden="true">(empty file)</span>
+                : renderedLine}
+            </span>
+          </span>
+        );
+      })}
+    </code>
+  );
+}
+
+function canHighlightWriteContent(lines: string[], content: string, language: string): boolean {
+  return PATCH_SYNTAX_LANGUAGES.has(language)
+    && content.length > 0
+    && lines.length <= MAX_HIGHLIGHTED_WRITE_LINES
+    && content.length <= MAX_HIGHLIGHTED_WRITE_CHARS
+    && lines.every((line) => line.length <= MAX_HIGHLIGHTED_WRITE_LINE_CHARS);
+}
 
 interface SyntaxTreeNode {
   type: "element" | "text";
