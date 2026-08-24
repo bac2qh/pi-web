@@ -41,3 +41,15 @@ Plan: `.agents/plans/2026-08-24-show-write-code-by-default.md`
 **Uncertainty / gaps:** Correctness noted low-priority missing explicit coverage for result disappearance followed by reappearance, while confirming the persistent ref implements it correctly. It also noted that complete plaintext rendering necessarily creates one row per source line for exceptionally large writes, consistent with the approved complete-content requirement. UX noted that DOM/CSS assertions and computed browser evidence do not include a real clipboard-selection or accessibility-tree capture. Neither note represents an unmet obligation or a fix worth starting in this implementation run.
 
 **Recommended use:** Treat the implementation as ready, retain the notes as bounded residual validation gaps, and proceed through final parent validation, commit, and guarded closeout without an iterative fix/review cycle.
+
+## Implementation Summary
+
+**Plan section:** Final implementation outcome; Validation Contract VC-001 through VC-005.
+
+**Work and outcome:** The approved exact-write transcript behavior is complete. Pending `write` cards remain collapsed without mounted arguments, untouched cards open once on their first matching success or failure result, mounted user choices and later result changes remain authoritative, and only matching completed writes open their exact settled Process details group. Valid call-time content renders completely as neutral, line-numbered **Written content** or **Attempted content** with retained status, bounded syntax, truthful complete fallback, soft wrapping, natural height, and no filesystem comparison. Malformed writes use the ordinary fallback, while edit cards and unrelated or near-name tools preserve their prior behavior. Maintained architecture, memory, tests, and browser evidence are current.
+
+**Validation / evidence:** Final `NODE_ENV=test node --test components/MessageView.test.mjs components/MarkdownBody.test.mjs lib/patch.test.mjs lib/message-display.test.mjs` passed 52/52; `../../../node_modules/.bin/tsc --noEmit`, `npm run lint`, and `git diff --check` passed. Chrome report `.agents/reports/2026-08-24-show-write-code-by-default/browser-validation.json` passed 54/54 assertions with zero runtime issues across light/dark desktop and mobile views, including pending/success/failure/long/near-name cases, exact defaults, focus, collapse/reopen, decorative line numbers, and overflow. Fresh reviewers `68df0246` and `66bc5ff3` found no blocker and concluded VC-001 through VC-005 are met.
+
+**Departures from approved obligations:** None. Every approved obligation is complete. No Pi fork or dependency changed, no current-file comparison or diff was introduced, and no Next build was run. The transient `.next` development artifacts and isolated browser-smoke runtime created by `npm run dev` were removed after evidence capture.
+
+**Implementation commit:** `c1828ff33a76c2875b70ac77df42547a1108762f` (`feat: show completed write content by default`).
