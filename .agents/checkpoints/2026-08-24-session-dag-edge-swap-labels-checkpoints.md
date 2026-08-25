@@ -41,3 +41,15 @@ Plan: `.agents/plans/2026-08-24-session-dag-edge-swap-labels.md`
 **Uncertainty / gaps:** The reviewer did not perform a browser runtime pass. The parent subsequently covered pointer and keyboard interactions, two-client conflict adoption, themes, responsive widths, TD/LR geometry, labels, persistence privacy, and visual screenshots with isolated synthetic fixtures.
 
 **Recommended use:** Proceed to final repository gates and closeout if the parent confirms the browser report and complete diff remain within the approved scope.
+
+## Implementation Summary
+
+**Plan section:** Entire approved plan, including Objective, Design / Implementation Strategy, Test Strategy, Telemetry / Debuggability, and Validation Contract VC-001 through VC-004.
+
+**Work and outcome:** Completed the approved DAG edge-swap and Raw-label work. Both committed Raw rows and graphical Preview use the existing concurrency-safe `replace_edge` mutation, trailing drafts remain local, self-edge no-ops stay disabled, and authoritative responses own success and rejection convergence. Raw retains exact IDs with current qualified endpoint labels and truthful unavailable/unresolved states. Preview uses generated validated edge aliases and trusted midpoint controls without changing graph persistence, routes, native sessions, sidebar state, or worktrees. Maintained DAG architecture and memory documentation plus a durable browser-validation report are complete.
+
+**Validation / evidence:** Final focused suite passed 29/29 with `NODE_ENV=test node --test components/SessionDag.test.mjs lib/session-dag.test.mjs lib/session-dag-svg.test.mjs`; `/Users/xin/Documents/repos/pi-web/node_modules/.bin/tsc --noEmit`, literal `npm run lint`, `git diff --check`, and staged diff checks passed. Independent reviewer run `41336a8c-bf16-4ce5-875a-7931605cfeb6` returned PASS with no material finding. `.agents/reports/2026-08-24-session-dag-edge-swap-labels-browser-validation.md` records successful isolated Chrome pointer/keyboard, in-flight, two-client conflict, TD/LR, theme, responsive, label, geometry, persistence, and privacy checks. The isolated development server stopped cleanly and port 30151 had no remaining listener; fixture Chrome profiles had no active process.
+
+**Departures from approved obligations:** None.
+
+**Implementation commit:** `dbe8b097db6bb95ee9a90eb64c38884c5f6b2c10`.
