@@ -67,3 +67,7 @@
 ## 2026-08-24
 
 - Updated browser-local display-preference memory after making exact `write` cards open once on their first matching completion, keeping pending/manual/result-replacement state authoritative, and adding complete call-time whole-file code presentation with neutral line numbers, bounded syntax, and truthful fallback.
+
+## 2026-08-25
+
+- Updated session-dependency-graph memory after adding exact-CAS edge Swap controls in Raw and Preview, current qualified Raw endpoint labels, generated validated edge aliases, strict Mermaid self-edge segment recognition, and trusted midpoint interaction without changing graph persistence or semantics.

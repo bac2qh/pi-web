@@ -14,7 +14,7 @@ export const SESSION_DAG_MAX_RECEIPTS = 512;
 export const SESSION_DAG_MAX_SESSION_ID_LENGTH = 512;
 export const SESSION_DAG_MAX_OPAQUE_ID_LENGTH = 128;
 export const SESSION_DAG_ACCESSIBLE_TITLE = "Session dependency graph";
-export const SESSION_DAG_ACCESSIBLE_DESCRIPTION = "Session dependencies and available completion controls";
+export const SESSION_DAG_ACCESSIBLE_DESCRIPTION = "Session dependencies and available completion and edge swap controls";
 
 const SESSION_DAG_MAX_LABEL_SEGMENT_LENGTH = 160;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/u;
@@ -1079,6 +1079,32 @@ export function buildSessionDagLabel(
   return [projectLabel, branchLabel, title].filter((segment): segment is string => Boolean(segment)).join(" · ");
 }
 
+export type SessionDagRawEndpointStatus = "resolved" | "unavailable" | "unresolved";
+
+export interface SessionDagRawEndpointPresentation {
+  label: string;
+  status: SessionDagRawEndpointStatus;
+}
+
+export function getSessionDagRawEndpointPresentation(
+  displayedSessionId: string,
+  acceptedSessionId: string | null,
+  sessionsById: ReadonlyMap<string, SessionInfo>,
+  projectPrefixes: ReadonlyMap<string, string>,
+): SessionDagRawEndpointPresentation {
+  const session = sessionsById.get(displayedSessionId);
+  if (session) {
+    return {
+      label: buildSessionDagLabel(displayedSessionId, session, projectPrefixes),
+      status: "resolved",
+    };
+  }
+  if (acceptedSessionId !== null && displayedSessionId === acceptedSessionId) {
+    return { label: "Session unavailable", status: "unavailable" };
+  }
+  return { label: "Session unresolved", status: "unresolved" };
+}
+
 export interface CompiledSessionDag {
   source: string;
   activeSessionIds: string[];
@@ -1087,6 +1113,8 @@ export interface CompiledSessionDag {
   aliasesBySessionId: Map<string, string>;
   sessionIdsByAlias: Map<string, string>;
   labelsBySessionId: Map<string, string>;
+  aliasesByEdgeId: Map<string, string>;
+  edgesByAlias: Map<string, SessionDagEdge>;
 }
 
 export function compileSessionDag(
@@ -1100,6 +1128,8 @@ export function compileSessionDag(
   const aliasesBySessionId = new Map<string, string>();
   const sessionIdsByAlias = new Map<string, string>();
   const labelsBySessionId = new Map<string, string>();
+  const aliasesByEdgeId = new Map<string, string>();
+  const edgesByAlias = new Map<string, SessionDagEdge>();
   const lines = [
     `flowchart ${state.direction}`,
     `accTitle: ${SESSION_DAG_ACCESSIBLE_TITLE}`,
@@ -1115,22 +1145,28 @@ export function compileSessionDag(
     lines.push(`    ${alias}["${escapeMermaidLabel(label)}"]`);
   });
 
-  for (const edge of [...state.activeEdges].sort(compareEdges)) {
+  const activeEdges = [...state.activeEdges].sort(compareEdges);
+  activeEdges.forEach((edge, index) => {
     const fromAlias = aliasesBySessionId.get(edge.fromSessionId);
     const toAlias = aliasesBySessionId.get(edge.toSessionId);
     if (!fromAlias || !toAlias) {
       throw new SessionDagValueError("An active edge endpoint is missing from the compiled graph");
     }
-    lines.push(`    ${fromAlias} --> ${toAlias}`);
-  }
+    const edgeAlias = `e${index}`;
+    aliasesByEdgeId.set(edge.id, edgeAlias);
+    edgesByAlias.set(edgeAlias, { ...edge });
+    lines.push(`    ${fromAlias} ${edgeAlias}@--> ${toAlias}`);
+  });
 
   return {
     source: `${lines.join("\n")}\n`,
     activeSessionIds,
-    activeEdgeCount: state.activeEdges.length,
+    activeEdgeCount: activeEdges.length,
     eligibleSessionIds,
     aliasesBySessionId,
     sessionIdsByAlias,
     labelsBySessionId,
+    aliasesByEdgeId,
+    edgesByAlias,
   };
 }

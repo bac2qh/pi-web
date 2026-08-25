@@ -1649,6 +1649,20 @@ html.dark .session-dag-feedback[data-kind="success"] { color: #86efac; }
   background: var(--bg-hover);
   color: #dc2626;
 }
+.session-dag-edge-swap {
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--accent);
+  cursor: pointer;
+  font-size: calc(10px * var(--pi-menu-font-scale, 1));
+  white-space: nowrap;
+}
+.session-dag-edge-swap:not(:disabled):hover {
+  background: var(--bg-selected);
+}
 .session-dag-edge-list {
   display: flex;
   min-width: 0;
@@ -1658,7 +1672,7 @@ html.dark .session-dag-feedback[data-kind="success"] { color: #86efac; }
 .session-dag-edge-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
-  align-items: end;
+  align-items: start;
   gap: 6px;
   min-width: 0;
 }
@@ -1683,12 +1697,34 @@ html.dark .session-dag-feedback[data-kind="success"] { color: #86efac; }
   font-family: var(--font-mono);
   font-size: 11px;
 }
+.session-dag-edge-session-label {
+  min-height: 13px;
+  max-height: 26px;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: calc(9px * var(--pi-menu-font-scale, 1));
+  line-height: 13px;
+  overflow-wrap: anywhere;
+}
+.session-dag-edge-session-label[data-state="unavailable"],
+.session-dag-edge-session-label[data-state="unresolved"] {
+  font-style: italic;
+}
 .session-dag-edge-arrow {
-  align-self: end;
+  align-self: start;
   height: 30px;
+  margin-top: 15px;
   display: inline-flex;
   align-items: center;
   color: var(--text-dim);
+}
+.session-dag-edge-actions {
+  align-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin-top: 15px;
 }
 .session-dag-edge-draft {
   margin-top: 2px;
@@ -1696,7 +1732,6 @@ html.dark .session-dag-feedback[data-kind="success"] { color: #86efac; }
   border-top: 1px dashed var(--border);
 }
 .session-dag-edge-draft-hint {
-  align-self: end;
   min-width: 26px;
   height: 30px;
   display: inline-flex;
@@ -1769,8 +1804,7 @@ html.dark .session-dag-feedback[data-kind="success"] { color: #86efac; }
   .session-dag-edge-arrow {
     display: none;
   }
-  .session-dag-edge-delete,
-  .session-dag-edge-draft-hint {
+  .session-dag-edge-actions {
     grid-column: 2;
   }
   .session-dag-node-control {

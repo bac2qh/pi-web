@@ -20,6 +20,10 @@ test("DAG panel keeps structured Raw authoring canonical and serializes mutation
   assert.match(panel, /event\.key === "Escape"/);
   assert.match(panel, /type: "add_edge"/);
   assert.match(panel, /type: "replace_edge"/);
+  assert.match(panel, /onSwap=\{swapEdge\}/);
+  assert.match(panel, /getSessionDagRawEndpointPresentation/);
+  assert.match(panel, /data-state=\{fromPresentation\.status\}/);
+  assert.match(panel, /data-state=\{trailingFromPresentation\.status\}/);
   assert.doesNotMatch(panel, /draft\.fromSessionId === edge\.fromSessionId/);
   assert.match(panel, /type: "delete_edge"/);
   assert.match(panel, /type: "complete"/);
@@ -41,6 +45,37 @@ test("DAG panel keeps structured Raw authoring canonical and serializes mutation
   assert.match(panel, /source\?: "graph-load" \| "session-load"/);
   assert.match(panel, /current\?\.source === "graph-load" \? null : current/);
   assert.match(panel, /current\?\.source === "session-load" \? null : current/);
+});
+
+test("Raw Swap reverses displayed committed values atomically while trailing Swap stays local", async () => {
+  const panel = await read("./SessionDagPanel.tsx");
+  const committedSwap = panel.slice(
+    panel.indexOf("const submitEdgeSwap"),
+    panel.indexOf("const swapEdge", panel.indexOf("const submitEdgeSwap")),
+  );
+  assert.match(committedSwap, /const displayed = edgeDraftValue\(edgeDrafts, edge\)/);
+  assert.match(committedSwap, /if \(displayed\.fromSessionId === displayed\.toSessionId\) return/);
+  assert.match(committedSwap, /replaceEdge\(edge, \{\s*fromSessionId: displayed\.toSessionId,\s*toSessionId: displayed\.fromSessionId/);
+  assert.match(committedSwap, /if \(accepted\) clearEdgeDraft\(edge\.id\)/);
+
+  const replacement = panel.slice(
+    panel.indexOf("const replaceEdge"),
+    panel.indexOf("const clearEdgeDraft", panel.indexOf("const replaceEdge")),
+  );
+  assert.match(replacement, /const expected = createEdgeExpectation\(edge\)/);
+  assert.match(replacement, /currentEdge\.formId !== expected\.formId/);
+  assert.match(replacement, /currentEdge\.fromSessionId !== expected\.fromSessionId/);
+  assert.match(replacement, /currentEdge\.toSessionId !== expected\.toSessionId/);
+  assert.match(replacement, /type: "replace_edge"[\s\S]*?expected,[\s\S]*?next: nextPair/);
+
+  const trailingSwapStart = panel.indexOf('title="Swap new dependency From and To values"');
+  const trailingSwap = panel.slice(trailingSwapStart, panel.indexOf("</button>", trailingSwapStart));
+  assert.match(trailingSwap, /setFormDrafts/);
+  assert.match(trailingSwap, /fromSessionId: trailingDraft\.toSessionId/);
+  assert.match(trailingSwap, /toSessionId: trailingDraft\.fromSessionId/);
+  assert.doesNotMatch(trailingSwap, /runMutation|add_edge|replace_edge/);
+  assert.match(panel, /disabled=\{busy \|\| trailingDraft\.fromSessionId === trailingDraft\.toSessionId\}/);
+  assert.match(panel, /disabled=\{busy \|\| draft\.fromSessionId === draft\.toSessionId\}/);
 });
 
 test("DAG refresh and copy behavior stay separated from graph mutations", async () => {
@@ -114,9 +149,17 @@ test("Preview uses strict serialized Mermaid and fail-closed explicit controls",
   assert.match(preview, /trustedStyle\.textContent = SESSION_DAG_SHADOW_STYLES/);
   assert.match(preview, /stack\.replaceChildren\(prepared\.svg, controlLayer\)/);
   assert.match(preview, /renderRoot\.replaceChildren\(trustedStyle, stack\)/);
+  assert.match(preview, /for \(const \[alias, edge\] of compiled\.edgesByAlias\)/);
+  assert.match(preview, /prepared\.edgePathsByAlias\.get\(alias\)/);
+  assert.match(preview, /createSessionDagSwapControl/);
+  assert.match(preview, /getSessionDagEdgeMidpoint\(edgePath, prepared\.svg\)/);
+  assert.match(preview, /const selfEdge = edge\.fromSessionId === edge\.toSessionId/);
+  assert.match(preview, /if \(!selfEdge\) bindActivation\(control, \(\) => onSwapRef\.current\(edge\)\)/);
   assert.match(preview, /controlLayer\.appendChild\(control\)/);
-  assert.doesNotMatch(preview, /nodeGroup\.appendChild\(control\)/);
+  assert.doesNotMatch(preview, /nodeGroup\.appendChild\(control\)|edgePath\.appendChild\(control\)/);
   assert.match(preview, /if \(inFlight\) return/);
+  assert.match(preview, /data-session-dag-pending/);
+  assert.match(preview, /if \(!accepted\) restoreAfterRejection\(\)/);
   assert.match(preview, /event\.key !== "Enter" && event\.key !== " "/);
   assert.match(preview, /event\.repeat/);
   assert.match(preview, /bounds\.width < 22 \|\| bounds\.height < 22/);
@@ -144,19 +187,31 @@ test("Preview uses strict serialized Mermaid and fail-closed explicit controls",
   assert.doesNotMatch(svg, /svg\.setAttribute\("role", "img"\)/);
   assert.match(svg, /compiled\.sessionIdsByAlias\.has\(alias\)/);
   assert.match(svg, /nodeGroupsByAlias\.size !== compiled\.sessionIdsByAlias\.size/);
+  assert.match(svg, /svg\.querySelectorAll<SVGElement>\("\[data-edge\], \[data-et\]"\)/);
+  assert.match(svg, /element\.getAttribute\("data-edge"\) !== "true"/);
+  assert.match(svg, /element\.getAttribute\("data-et"\) !== "edge"/);
+  assert.match(svg, /validateSessionDagEdgeAliases/);
+  assert.match(svg, /cyclic-special-mid/);
+  assert.match(svg, /elementIdCounts\.get\(`\$\{renderId\}-\$\{descriptor\.dataAlias\}`\) !== 1/);
+  assert.match(svg, /edgePathsByAlias/);
   assert.match(svg, /createElementNS\(SVG_NAMESPACE, "title"\)/);
   assert.match(svg, /tooltip\.textContent = sessionId/);
   assert.match(svg, /expectedGradientId = `\$\{renderId\}-gradient`/);
   assert.match(svg, /allowedLocalReferenceIds\.add\(expectedGradientId\)/);
   assert.match(svg, /propertyName === "fill" \|\| propertyName === "stroke"/);
-  assert.match(svg, /layer\.setAttribute\("class", "session-dag-complete-layer"\)/);
+  assert.match(svg, /layer\.setAttribute\("class", "session-dag-control-layer"\)/);
   assert.match(svg, /layer\.setAttribute\("role", "group"\)/);
-  assert.match(svg, /nodeGroup\.getScreenCTM\(\)/);
+  assert.match(svg, /element\.getScreenCTM\(\)/);
   assert.match(svg, /graphSvg\.getScreenCTM\(\)/);
+  assert.match(svg, /edgePath\.getTotalLength\(\)/);
+  assert.match(svg, /edgePath\.getPointAtLength\(length \/ 2\)/);
   assert.match(svg, /createElementNS\(SVG_NAMESPACE, "g"\)/);
+  assert.match(svg, /createSessionDagSwapControl/);
+  assert.match(svg, /label\.textContent = "Swap"/);
   assert.match(svg, /control\.setAttribute\("role", "button"\)/);
   assert.match(svg, /control\.setAttribute\("pointer-events", "all"\)/);
   assert.match(svg, /\.session-dag-complete-control:focus/);
+  assert.match(svg, /\.session-dag-swap-control:focus/);
   assert.doesNotMatch(svg, /dangerouslySetInnerHTML|innerHTML|insertAdjacentHTML|\.onclick\s*=|__sessionDagDebug/);
 });
 
@@ -168,6 +223,10 @@ test("DAG styles preserve responsive panel behavior and explicit focus states", 
   assert.match(css, /\.session-dag-mode-panel\[hidden\]/);
   assert.match(css, /\.session-dag-preview\s*\{[\s\S]*?overflow: auto/);
   assert.match(css, /\.session-dag-edge-row\s*\{[\s\S]*?grid-template-columns/);
+  assert.match(css, /\.session-dag-edge-session-label\s*\{[\s\S]*?overflow-wrap: anywhere/);
+  assert.match(css, /\.session-dag-edge-swap\s*\{[\s\S]*?color: var\(--accent\)/);
+  assert.match(css, /\.session-dag-edge-actions\s*\{[\s\S]*?display: inline-flex/);
+  assert.match(css, /@media \(max-width: 420px\)[\s\S]*?\.session-dag-edge-actions\s*\{[\s\S]*?grid-column: 2/);
   assert.match(css, /\.session-dag-node-text code\s*\{[\s\S]*?overflow-wrap: anywhere/);
   assert.match(css, /@media \(min-width: 641px\)[\s\S]*?\.right-panel-container\.right-panel-expanded/);
   assert.match(css, /@media \(max-width: 640px\)[\s\S]*?\.right-panel-container\.right-panel-open\s*\{[\s\S]*?width: 100%/);

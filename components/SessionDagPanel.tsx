@@ -17,6 +17,7 @@ import {
   deriveSessionDagNodeFormAssignments,
   getActiveSessionIds,
   getEligibleSessionIds,
+  getSessionDagRawEndpointPresentation,
   parseSessionDagState,
   type CompiledSessionDag,
   type SessionDagEdge,
@@ -350,15 +351,12 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
     });
   };
 
-  const submitEdgeDraft = (edge: SessionDagEdge) => {
-    const draft = edgeDraftValue(edgeDrafts, edge);
-    if (!draft.fromSessionId || !draft.toSessionId) {
-      setFeedback({ kind: "error", message: "Enter both From session ID and To session ID." });
-      return;
-    }
-    const submitted = { ...draft };
+  const replaceEdge = useCallback((
+    edge: SessionDagEdge,
+    nextPair: PairDraft,
+  ): Promise<boolean> => {
     const expected = createEdgeExpectation(edge);
-    void runMutation((state) => {
+    return runMutation((state) => {
       const currentEdge = state.activeEdges.find((candidate) => candidate.id === edge.id);
       if (!currentEdge || currentEdge.formId !== expected.formId
         || currentEdge.fromSessionId !== expected.fromSessionId
@@ -370,17 +368,52 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
         type: "replace_edge",
         edgeId: edge.id,
         expected,
-        next: submitted,
+        next: nextPair,
       };
-    }).then((accepted) => {
-      if (!accepted) return;
-      setEdgeDrafts((current) => {
-        const next = new Map(current);
-        next.delete(edge.id);
-        return next;
-      });
+    });
+  }, [runMutation]);
+
+  const clearEdgeDraft = (edgeId: string) => {
+    setEdgeDrafts((current) => {
+      const next = new Map(current);
+      next.delete(edgeId);
+      return next;
     });
   };
+
+  const submitEdgeDraft = (edge: SessionDagEdge) => {
+    const draft = edgeDraftValue(edgeDrafts, edge);
+    if (!draft.fromSessionId || !draft.toSessionId) {
+      setFeedback({ kind: "error", message: "Enter both From session ID and To session ID." });
+      return;
+    }
+    void replaceEdge(edge, { ...draft }).then((accepted) => {
+      if (accepted) clearEdgeDraft(edge.id);
+    });
+  };
+
+  const submitEdgeSwap = (edge: SessionDagEdge) => {
+    const displayed = edgeDraftValue(edgeDrafts, edge);
+    if (!displayed.fromSessionId || !displayed.toSessionId) {
+      setFeedback({ kind: "error", message: "Enter both From session ID and To session ID." });
+      return;
+    }
+    if (displayed.fromSessionId === displayed.toSessionId) return;
+    void replaceEdge(edge, {
+      fromSessionId: displayed.toSessionId,
+      toSessionId: displayed.fromSessionId,
+    }).then((accepted) => {
+      if (accepted) clearEdgeDraft(edge.id);
+    });
+  };
+
+  const swapEdge = useCallback((edge: SessionDagEdge): Promise<boolean> => {
+    if (edge.fromSessionId === edge.toSessionId) return Promise.resolve(false);
+    return replaceEdge(edge, {
+      fromSessionId: edge.toSessionId,
+      toSessionId: edge.fromSessionId,
+    });
+  }, [replaceEdge]);
 
   const pairKeyDown = (
     event: KeyboardEvent<HTMLInputElement>,
@@ -505,6 +538,7 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
               nodeCount={activeSessionIds.length}
               edgeCount={graphState.activeEdges.length}
               onComplete={completeSession}
+              onSwap={swapEdge}
             />
           </div>
           <div
@@ -518,6 +552,18 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
               const edges = graphState.activeEdges.filter((edge) => edge.formId === form.id);
               const nodeIds = activeSessionIds.filter((sessionId) => nodeAssignments.get(sessionId) === form.id);
               const trailingDraft = formDrafts.get(form.id) ?? EMPTY_PAIR;
+              const trailingFromPresentation = getSessionDagRawEndpointPresentation(
+                trailingDraft.fromSessionId,
+                null,
+                sessionsById,
+                projectPrefixes,
+              );
+              const trailingToPresentation = getSessionDagRawEndpointPresentation(
+                trailingDraft.toSessionId,
+                null,
+                sessionsById,
+                projectPrefixes,
+              );
               const hasUnfinishedDraft = Boolean(trailingDraft.fromSessionId || trailingDraft.toSessionId);
               const canDelete = !referencedFormIds.has(form.id) && !hasUnfinishedDraft;
               return (
@@ -543,6 +589,19 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
                   <div className="session-dag-edge-list" aria-label={`Form ${formIndex + 1} dependencies`}>
                     {edges.map((edge) => {
                       const draft = edgeDraftValue(edgeDrafts, edge);
+                      const fromPresentation = getSessionDagRawEndpointPresentation(
+                        draft.fromSessionId,
+                        edge.fromSessionId,
+                        sessionsById,
+                        projectPrefixes,
+                      );
+                      const toPresentation = getSessionDagRawEndpointPresentation(
+                        draft.toSessionId,
+                        edge.toSessionId,
+                        sessionsById,
+                        projectPrefixes,
+                      );
+                      const swapLabel = `Swap dependency from ${fromPresentation.label} to ${toPresentation.label}`;
                       return (
                         <div key={edge.id} className="session-dag-edge-row">
                           <label>
@@ -558,13 +617,16 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
                               onKeyDown={(event) => pairKeyDown(
                                 event,
                                 () => submitEdgeDraft(edge),
-                                () => setEdgeDrafts((current) => {
-                                  const next = new Map(current);
-                                  next.delete(edge.id);
-                                  return next;
-                                }),
+                                () => clearEdgeDraft(edge.id),
                               )}
                             />
+                            <span
+                              className="session-dag-edge-session-label"
+                              data-state={fromPresentation.status}
+                              title={fromPresentation.label}
+                            >
+                              {fromPresentation.label}
+                            </span>
                           </label>
                           <span className="session-dag-edge-arrow" aria-hidden="true">→</span>
                           <label>
@@ -580,30 +642,45 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
                               onKeyDown={(event) => pairKeyDown(
                                 event,
                                 () => submitEdgeDraft(edge),
-                                () => setEdgeDrafts((current) => {
-                                  const next = new Map(current);
-                                  next.delete(edge.id);
-                                  return next;
-                                }),
+                                () => clearEdgeDraft(edge.id),
                               )}
                             />
+                            <span
+                              className="session-dag-edge-session-label"
+                              data-state={toPresentation.status}
+                              title={toPresentation.label}
+                            >
+                              {toPresentation.label}
+                            </span>
                           </label>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            className="session-dag-edge-delete"
-                            title="Delete dependency"
-                            aria-label="Delete dependency"
-                            onClick={() => {
-                              void runMutation(() => ({
-                                type: "delete_edge",
-                                edgeId: edge.id,
-                                expected: createEdgeExpectation(edge),
-                              }));
-                            }}
-                          >
-                            ×
-                          </button>
+                          <div className="session-dag-edge-actions">
+                            <button
+                              type="button"
+                              disabled={busy || draft.fromSessionId === draft.toSessionId}
+                              className="session-dag-edge-swap"
+                              title={swapLabel}
+                              aria-label={swapLabel}
+                              onClick={() => submitEdgeSwap(edge)}
+                            >
+                              Swap
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              className="session-dag-edge-delete"
+                              title="Delete dependency"
+                              aria-label="Delete dependency"
+                              onClick={() => {
+                                void runMutation(() => ({
+                                  type: "delete_edge",
+                                  edgeId: edge.id,
+                                  expected: createEdgeExpectation(edge),
+                                }));
+                              }}
+                            >
+                              ×
+                            </button>
+                          </div>
                         </div>
                       );
                     })}
@@ -622,6 +699,13 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
                           })}
                           onKeyDown={(event) => pairKeyDown(event, () => submitTrailingDraft(form.id))}
                         />
+                        <span
+                          className="session-dag-edge-session-label"
+                          data-state={trailingFromPresentation.status}
+                          title={trailingFromPresentation.label}
+                        >
+                          {trailingFromPresentation.label}
+                        </span>
                       </label>
                       <span className="session-dag-edge-arrow" aria-hidden="true">→</span>
                       <label>
@@ -637,8 +721,34 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
                           })}
                           onKeyDown={(event) => pairKeyDown(event, () => submitTrailingDraft(form.id))}
                         />
+                        <span
+                          className="session-dag-edge-session-label"
+                          data-state={trailingToPresentation.status}
+                          title={trailingToPresentation.label}
+                        >
+                          {trailingToPresentation.label}
+                        </span>
                       </label>
-                      <span className="session-dag-edge-draft-hint">Enter to add</span>
+                      <div className="session-dag-edge-actions">
+                        <button
+                          type="button"
+                          disabled={busy || trailingDraft.fromSessionId === trailingDraft.toSessionId}
+                          className="session-dag-edge-swap"
+                          title="Swap new dependency From and To values"
+                          aria-label="Swap new dependency From and To values"
+                          onClick={() => setFormDrafts((current) => {
+                            const next = new Map(current);
+                            next.set(form.id, {
+                              fromSessionId: trailingDraft.toSessionId,
+                              toSessionId: trailingDraft.fromSessionId,
+                            });
+                            return next;
+                          })}
+                        >
+                          Swap
+                        </button>
+                        <span className="session-dag-edge-draft-hint">Enter to add</span>
+                      </div>
                     </div>
                   </div>
 

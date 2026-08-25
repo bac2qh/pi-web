@@ -30,7 +30,7 @@ const UNSAFE_CSS_PROPERTY = /(?:^|[;{])\s*(?:behavior|-moz-binding)\s*:/iu;
 const UNSAFE_PROTOCOL = /(?:javascript|data|file|https?):/iu;
 const LOCAL_CSS_URL = /url\(\s*(?:"(#[A-Za-z_][A-Za-z0-9_.:-]*)"|'(#[A-Za-z_][A-Za-z0-9_.:-]*)'|(#[A-Za-z_][A-Za-z0-9_.:-]*))\s*\)/giu;
 const LOCAL_SVG_URL = /^url\(\s*#[A-Za-z_][A-Za-z0-9_.:-]*\s*\)$/u;
-const SESSION_DAG_CONTROLS_ACCESSIBLE_LABEL = "Dependency graph completion controls";
+const SESSION_DAG_CONTROLS_ACCESSIBLE_LABEL = "Dependency graph controls";
 const SESSION_DAG_TRUSTED_CLASS_PREFIX = "session-dag-";
 const SESSION_DAG_TRUSTED_ATTRIBUTE_PREFIX = "data-session-dag-";
 export const SESSION_DAG_CURRENT_NODE_ATTRIBUTE = `${SESSION_DAG_TRUSTED_ATTRIBUTE_PREFIX}current`;
@@ -59,7 +59,7 @@ export const SESSION_DAG_SHADOW_STYLES = `
   stroke-width: 3px !important;
   stroke-linejoin: round;
 }
-.session-dag-complete-layer {
+.session-dag-control-layer {
   pointer-events: none;
   z-index: 1;
 }
@@ -87,6 +87,38 @@ export const SESSION_DAG_SHADOW_STYLES = `
   opacity: 0.55;
   cursor: wait;
 }
+.session-dag-swap-control {
+  color: var(--accent);
+  cursor: pointer;
+}
+.session-dag-swap-control:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.session-dag-swap-control-background {
+  fill: var(--bg);
+  stroke: currentColor;
+  stroke-width: 1.4;
+}
+.session-dag-swap-control-label {
+  fill: currentColor;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 600;
+  pointer-events: none;
+  user-select: none;
+}
+.session-dag-swap-control:hover .session-dag-swap-control-background,
+.session-dag-swap-control:focus .session-dag-swap-control-background {
+  fill: var(--bg-selected);
+}
+.session-dag-swap-control[aria-disabled="true"] {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+.session-dag-swap-control[data-session-dag-pending="true"] {
+  cursor: wait;
+}
 `;
 
 export type SessionDagSvgFailureStage = "root" | "safety" | "accessibility" | "sizing" | "aliases" | "controls";
@@ -104,6 +136,17 @@ export class SessionDagSvgError extends Error {
 export interface PreparedSessionDagSvg {
   svg: SVGSVGElement;
   nodeGroupsByAlias: Map<string, SVGGElement>;
+  edgePathsByAlias: Map<string, SVGPathElement>;
+}
+
+export interface SessionDagRenderedEdgeAlias {
+  dataAlias: string | null;
+  pathId: string | null;
+}
+
+export interface SessionDagExpectedRenderedEdge {
+  edgeAlias: string;
+  selfNodeAlias: string | null;
 }
 
 export function hasReservedSessionDagClass(value: string): boolean {
@@ -162,6 +205,68 @@ export function getSessionDagNodeAlias(
     throw new SessionDagSvgError("aliases", "Mermaid output contains conflicting node aliases");
   }
   return dataAlias ?? idAlias;
+}
+
+export function getSessionDagEdgeAlias(
+  dataAlias: string | null,
+  pathId: string | null,
+  renderId: string,
+): string {
+  const supportedAlias = dataAlias && (
+    /^e\d+$/u.test(dataAlias)
+    || /^n\d+-cyclic-special-(?:1|mid|2)$/u.test(dataAlias)
+  );
+  if (!supportedAlias || pathId !== `${renderId}-${dataAlias}`) {
+    throw new SessionDagSvgError("aliases", "Mermaid output contains an unexpected edge alias");
+  }
+  return dataAlias;
+}
+
+export function validateSessionDagEdgeAliases(
+  renderedEdges: readonly SessionDagRenderedEdgeAlias[],
+  expectedEdges: readonly SessionDagExpectedRenderedEdge[],
+  renderId: string,
+): Map<string, number> {
+  const expectedByRenderedAlias = new Map<string, { edgeAlias: string; midpoint: boolean }>();
+  for (const expectedEdge of expectedEdges) {
+    if (!/^e\d+$/u.test(expectedEdge.edgeAlias)
+      || (expectedEdge.selfNodeAlias !== null && !/^n\d+$/u.test(expectedEdge.selfNodeAlias))) {
+      throw new SessionDagSvgError("aliases", "The compiled graph contains an invalid edge alias");
+    }
+    const renderedAliases = expectedEdge.selfNodeAlias === null
+      ? [{ alias: expectedEdge.edgeAlias, midpoint: true }]
+      : [
+          { alias: `${expectedEdge.selfNodeAlias}-cyclic-special-1`, midpoint: false },
+          { alias: `${expectedEdge.selfNodeAlias}-cyclic-special-mid`, midpoint: true },
+          { alias: `${expectedEdge.selfNodeAlias}-cyclic-special-2`, midpoint: false },
+        ];
+    for (const renderedAlias of renderedAliases) {
+      if (expectedByRenderedAlias.has(renderedAlias.alias)) {
+        throw new SessionDagSvgError("aliases", "The compiled graph contains duplicate edge aliases");
+      }
+      expectedByRenderedAlias.set(renderedAlias.alias, {
+        edgeAlias: expectedEdge.edgeAlias,
+        midpoint: renderedAlias.midpoint,
+      });
+    }
+  }
+
+  const seen = new Set<string>();
+  const pathIndexesByEdgeAlias = new Map<string, number>();
+  renderedEdges.forEach((renderedEdge, index) => {
+    const renderedAlias = getSessionDagEdgeAlias(renderedEdge.dataAlias, renderedEdge.pathId, renderId);
+    const expected = expectedByRenderedAlias.get(renderedAlias);
+    if (!expected || seen.has(renderedAlias)) {
+      throw new SessionDagSvgError("aliases", "Mermaid output contains an unexpected edge alias");
+    }
+    seen.add(renderedAlias);
+    if (expected.midpoint) pathIndexesByEdgeAlias.set(expected.edgeAlias, index);
+  });
+  if (seen.size !== expectedByRenderedAlias.size
+    || pathIndexesByEdgeAlias.size !== expectedEdges.length) {
+    throw new SessionDagSvgError("aliases", "Mermaid output is missing a compiled edge alias");
+  }
+  return pathIndexesByEdgeAlias;
 }
 
 function directSvgChildren(root: SVGSVGElement, localName: string): SVGElement[] {
@@ -431,10 +536,64 @@ export function prepareSessionDagSvg(
     group.setAttribute("data-session-dag-alias", alias);
   }
 
-  return { svg, nodeGroupsByAlias };
+  const edgePathGroups = svg.querySelectorAll<SVGGElement>("g.edgePaths");
+  if (edgePathGroups.length !== 1) {
+    throw new SessionDagSvgError("aliases", "Mermaid output contains unexpected edge structure");
+  }
+  const renderedEdgePaths = [...edgePathGroups[0].children];
+  const edgeCandidates = [...svg.querySelectorAll<SVGElement>("[data-edge], [data-et]")];
+  if (renderedEdgePaths.length !== edgeCandidates.length
+    || renderedEdgePaths.some((element) => (
+      element.namespaceURI !== SVG_NAMESPACE
+      || element.localName !== "path"
+      || element.getAttribute("data-edge") !== "true"
+      || element.getAttribute("data-et") !== "edge"
+    ))
+    || edgeCandidates.some((element) => element.parentNode !== edgePathGroups[0])) {
+    throw new SessionDagSvgError("aliases", "Mermaid output contains unexpected edge structure");
+  }
+  const expectedRenderedEdges: SessionDagExpectedRenderedEdge[] = [];
+  for (const [edgeAlias, edge] of compiled.edgesByAlias) {
+    const selfNodeAlias = edge.fromSessionId === edge.toSessionId
+      ? compiled.aliasesBySessionId.get(edge.fromSessionId)
+      : null;
+    if (edge.fromSessionId === edge.toSessionId && !selfNodeAlias) {
+      throw new SessionDagSvgError("aliases", "A self-edge node is missing from the compiled graph");
+    }
+    expectedRenderedEdges.push({ edgeAlias, selfNodeAlias: selfNodeAlias ?? null });
+  }
+  // Mermaid 11.15 expands a self-edge into three deterministic path segments
+  // named from the generated node alias. Validate all three and retain only the
+  // middle segment as that compiled edge's control-position path.
+  const renderedEdgeDescriptors = renderedEdgePaths.map((element) => ({
+    dataAlias: element.getAttribute("data-id"),
+    pathId: element.getAttribute("id"),
+  }));
+  const pathIndexesByEdgeAlias = validateSessionDagEdgeAliases(
+    renderedEdgeDescriptors,
+    expectedRenderedEdges,
+    renderId,
+  );
+  const elementIdCounts = new Map<string, number>();
+  for (const element of [svg, ...svg.querySelectorAll<SVGElement>("[id]")]) {
+    const id = element.getAttribute("id");
+    if (id) elementIdCounts.set(id, (elementIdCounts.get(id) ?? 0) + 1);
+  }
+  for (const descriptor of renderedEdgeDescriptors) {
+    if (!descriptor.dataAlias
+      || elementIdCounts.get(`${renderId}-${descriptor.dataAlias}`) !== 1) {
+      throw new SessionDagSvgError("aliases", "Mermaid output contains an unexpected edge alias");
+    }
+  }
+  const edgePathsByAlias = new Map<string, SVGPathElement>();
+  for (const [edgeAlias, index] of pathIndexesByEdgeAlias) {
+    edgePathsByAlias.set(edgeAlias, renderedEdgePaths[index] as SVGPathElement);
+  }
+
+  return { svg, nodeGroupsByAlias, edgePathsByAlias };
 }
 
-export function createSessionDagCompleteLayer(
+export function createSessionDagControlLayer(
   ownerDocument: Document,
   graphSvg: SVGSVGElement,
 ): SVGSVGElement {
@@ -442,7 +601,7 @@ export function createSessionDagCompleteLayer(
   if (!viewBox) throw new SessionDagSvgError("controls", "The rendered graph has no control geometry");
 
   const layer = ownerDocument.createElementNS(SVG_NAMESPACE, "svg");
-  layer.setAttribute("class", "session-dag-complete-layer");
+  layer.setAttribute("class", "session-dag-control-layer");
   layer.setAttribute("viewBox", viewBox);
   const preserveAspectRatio = graphSvg.getAttribute("preserveAspectRatio");
   if (preserveAspectRatio) layer.setAttribute("preserveAspectRatio", preserveAspectRatio);
@@ -456,31 +615,53 @@ export function createSessionDagCompleteLayer(
 }
 
 export function getSessionDagControlPosition(
-  nodeGroup: SVGGElement,
+  element: SVGGraphicsElement,
   graphSvg: SVGSVGElement,
   localX: number,
   localY: number,
 ): { x: number; y: number } {
-  const nodeMatrix = nodeGroup.getScreenCTM();
+  const elementMatrix = element.getScreenCTM();
   const graphMatrix = graphSvg.getScreenCTM();
-  if (!nodeMatrix || !graphMatrix || !Number.isFinite(localX) || !Number.isFinite(localY)) {
-    throw new SessionDagSvgError("controls", "An eligible node has invalid geometry");
+  if (!elementMatrix || !graphMatrix || !Number.isFinite(localX) || !Number.isFinite(localY)) {
+    throw new SessionDagSvgError("controls", "A graph control has invalid geometry");
   }
 
   let inverseGraphMatrix: DOMMatrix;
   try {
     inverseGraphMatrix = graphMatrix.inverse();
   } catch (error) {
-    throw new SessionDagSvgError("controls", "An eligible node has invalid geometry", { cause: error });
+    throw new SessionDagSvgError("controls", "A graph control has invalid geometry", { cause: error });
   }
-  const screenX = nodeMatrix.a * localX + nodeMatrix.c * localY + nodeMatrix.e;
-  const screenY = nodeMatrix.b * localX + nodeMatrix.d * localY + nodeMatrix.f;
+  const screenX = elementMatrix.a * localX + elementMatrix.c * localY + elementMatrix.e;
+  const screenY = elementMatrix.b * localX + elementMatrix.d * localY + elementMatrix.f;
   const x = inverseGraphMatrix.a * screenX + inverseGraphMatrix.c * screenY + inverseGraphMatrix.e;
   const y = inverseGraphMatrix.b * screenX + inverseGraphMatrix.d * screenY + inverseGraphMatrix.f;
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
-    throw new SessionDagSvgError("controls", "An eligible node has invalid geometry");
+    throw new SessionDagSvgError("controls", "A graph control has invalid geometry");
   }
   return { x, y };
+}
+
+export function getSessionDagEdgeMidpoint(
+  edgePath: SVGPathElement,
+  graphSvg: SVGSVGElement,
+): { x: number; y: number } {
+  let length: number;
+  let midpoint: DOMPoint;
+  try {
+    length = edgePath.getTotalLength();
+    if (!Number.isFinite(length) || length <= 0) {
+      throw new SessionDagSvgError("controls", "An edge has invalid control geometry");
+    }
+    midpoint = edgePath.getPointAtLength(length / 2);
+  } catch (error) {
+    if (error instanceof SessionDagSvgError) throw error;
+    throw new SessionDagSvgError("controls", "An edge has invalid control geometry", { cause: error });
+  }
+  if (!Number.isFinite(midpoint.x) || !Number.isFinite(midpoint.y)) {
+    throw new SessionDagSvgError("controls", "An edge has invalid control geometry");
+  }
+  return getSessionDagControlPosition(edgePath, graphSvg, midpoint.x, midpoint.y);
 }
 
 export function createSessionDagCompleteControl(
@@ -510,6 +691,41 @@ export function createSessionDagCompleteControl(
   check.setAttribute("stroke-linecap", "round");
   check.setAttribute("stroke-linejoin", "round");
   control.appendChild(check);
+
+  return control;
+}
+
+export function createSessionDagSwapControl(
+  ownerDocument: Document,
+  fromLabel: string,
+  toLabel: string,
+  disabled: boolean,
+): SVGGElement {
+  const control = ownerDocument.createElementNS(SVG_NAMESPACE, "g");
+  control.setAttribute("class", "session-dag-swap-control");
+  control.setAttribute("role", "button");
+  control.setAttribute("tabindex", disabled ? "-1" : "0");
+  control.setAttribute("aria-label", `Swap dependency from ${fromLabel} to ${toLabel}`);
+  control.setAttribute("pointer-events", "all");
+  if (disabled) control.setAttribute("aria-disabled", "true");
+
+  const background = ownerDocument.createElementNS(SVG_NAMESPACE, "rect");
+  background.setAttribute("x", "-17");
+  background.setAttribute("y", "-9");
+  background.setAttribute("width", "34");
+  background.setAttribute("height", "18");
+  background.setAttribute("rx", "5");
+  background.setAttribute("class", "session-dag-swap-control-background");
+  control.appendChild(background);
+
+  const label = ownerDocument.createElementNS(SVG_NAMESPACE, "text");
+  label.setAttribute("x", "0");
+  label.setAttribute("y", "0");
+  label.setAttribute("dy", "0.32em");
+  label.setAttribute("text-anchor", "middle");
+  label.setAttribute("class", "session-dag-swap-control-label");
+  label.textContent = "Swap";
+  control.appendChild(label);
 
   return control;
 }

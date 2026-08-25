@@ -8,13 +8,15 @@ import {
   enqueueMermaidOperation,
   mermaidDisplayConfig,
 } from "@/lib/mermaid-display";
-import type { CompiledSessionDag } from "@/lib/session-dag";
+import type { CompiledSessionDag, SessionDagEdge } from "@/lib/session-dag";
 import {
   SESSION_DAG_SHADOW_STYLES,
   SessionDagSvgError,
   createSessionDagCompleteControl,
-  createSessionDagCompleteLayer,
+  createSessionDagControlLayer,
+  createSessionDagSwapControl,
   getSessionDagControlPosition,
+  getSessionDagEdgeMidpoint,
   prepareSessionDagSvg,
   updateSessionDagCurrentNode,
   type PreparedSessionDagSvg,
@@ -30,6 +32,7 @@ interface Props {
   nodeCount: number;
   edgeCount: number;
   onComplete: (sessionId: string) => Promise<boolean>;
+  onSwap: (edge: SessionDagEdge) => Promise<boolean>;
 }
 
 type PreviewFailureStage = "compile" | "load" | "parse" | "render" | SessionDagSvgFailureStage;
@@ -66,6 +69,7 @@ export function SessionDagPreview({
   nodeCount,
   edgeCount,
   onComplete,
+  onSwap,
 }: Props) {
   const { isDark } = useTheme();
   const { transcriptFontSize } = useDisplayPreferences();
@@ -78,6 +82,8 @@ export function SessionDagPreview({
   const currentSelectionRef = useRef({ active, selectedSessionId });
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
+  const onSwapRef = useRef(onSwap);
+  onSwapRef.current = onSwap;
   const [renderStage, setRenderStage] = useState("idle");
   const [failure, setFailure] = useState<{ stage: PreviewFailureStage; errorClass: string } | null>(null);
   const currentKey = compiled
@@ -157,11 +163,66 @@ export function SessionDagPreview({
       const stack = container.ownerDocument.createElement("div");
       stack.setAttribute("class", "session-dag-svg-stack");
       stack.style.setProperty("max-width", prepared.svg.style.maxWidth);
-      const controlLayer = createSessionDagCompleteLayer(container.ownerDocument, prepared.svg);
+      const controlLayer = createSessionDagControlLayer(container.ownerDocument, prepared.svg);
       stack.replaceChildren(prepared.svg, controlLayer);
       renderRoot.replaceChildren(trustedStyle, stack);
 
       try {
+        const bindActivation = (control: SVGGElement, operation: () => Promise<boolean>) => {
+          let inFlight = false;
+          const restoreAfterRejection = () => {
+            if (!control.isConnected) return;
+            inFlight = false;
+            control.removeAttribute("aria-disabled");
+            control.removeAttribute("data-session-dag-pending");
+            control.setAttribute("tabindex", "0");
+          };
+          const activate = () => {
+            if (inFlight) return;
+            inFlight = true;
+            control.setAttribute("aria-disabled", "true");
+            control.setAttribute("data-session-dag-pending", "true");
+            control.setAttribute("tabindex", "-1");
+            try {
+              void operation().then((accepted) => {
+                if (!accepted) restoreAfterRejection();
+              }, restoreAfterRejection);
+            } catch {
+              restoreAfterRejection();
+            }
+          };
+          control.addEventListener("click", (event) => {
+            event.stopPropagation();
+            activate();
+          });
+          control.addEventListener("keydown", (event) => {
+            if ((event.key !== "Enter" && event.key !== " ") || event.repeat) return;
+            event.preventDefault();
+            event.stopPropagation();
+            activate();
+          });
+        };
+
+        for (const [alias, edge] of compiled.edgesByAlias) {
+          const edgePath = prepared.edgePathsByAlias.get(alias);
+          const fromLabel = compiled.labelsBySessionId.get(edge.fromSessionId);
+          const toLabel = compiled.labelsBySessionId.get(edge.toSessionId);
+          if (!edgePath || !fromLabel || !toLabel) {
+            throw new SessionDagSvgError("controls", "An edge is missing from the rendered graph");
+          }
+          const selfEdge = edge.fromSessionId === edge.toSessionId;
+          const control = createSessionDagSwapControl(
+            container.ownerDocument,
+            fromLabel,
+            toLabel,
+            selfEdge,
+          );
+          const position = getSessionDagEdgeMidpoint(edgePath, prepared.svg);
+          control.setAttribute("transform", `translate(${String(position.x)} ${String(position.y)})`);
+          if (!selfEdge) bindActivation(control, () => onSwapRef.current(edge));
+          controlLayer.appendChild(control);
+        }
+
         for (const sessionId of compiled.eligibleSessionIds) {
           const alias = compiled.aliasesBySessionId.get(sessionId);
           const label = compiled.labelsBySessionId.get(sessionId);
@@ -182,34 +243,7 @@ export function SessionDagPreview({
             bounds.y + 11,
           );
           control.setAttribute("transform", `translate(${String(position.x)} ${String(position.y)})`);
-          let inFlight = false;
-          const activate = () => {
-            if (inFlight) return;
-            inFlight = true;
-            control.setAttribute("aria-disabled", "true");
-            control.setAttribute("tabindex", "-1");
-            void onCompleteRef.current(sessionId).then((accepted) => {
-              if (accepted || !control.isConnected) return;
-              inFlight = false;
-              control.removeAttribute("aria-disabled");
-              control.setAttribute("tabindex", "0");
-            }, () => {
-              if (!control.isConnected) return;
-              inFlight = false;
-              control.removeAttribute("aria-disabled");
-              control.setAttribute("tabindex", "0");
-            });
-          };
-          control.addEventListener("click", (event) => {
-            event.stopPropagation();
-            activate();
-          });
-          control.addEventListener("keydown", (event) => {
-            if ((event.key !== "Enter" && event.key !== " ") || event.repeat) return;
-            event.preventDefault();
-            event.stopPropagation();
-            activate();
-          });
+          bindActivation(control, () => onCompleteRef.current(sessionId));
           controlLayer.appendChild(control);
         }
       } catch (error) {
