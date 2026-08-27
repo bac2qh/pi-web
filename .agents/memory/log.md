@@ -71,3 +71,7 @@
 ## 2026-08-25
 
 - Updated session-dependency-graph memory after adding exact-CAS edge Swap controls in Raw and Preview, current qualified Raw endpoint labels, generated validated edge aliases, strict Mermaid self-edge segment recognition, and trusted midpoint interaction without changing graph persistence or semantics.
+
+## 2026-08-27
+
+- Updated session-dependency-graph memory after replacing always-visible Preview Swap buttons with one-expanded trusted edge-action dots and adding bounded recoverable Insert forms backed by one strict, generation-current, atomic one-edge-to-two-edge transaction without a persistence schema change.

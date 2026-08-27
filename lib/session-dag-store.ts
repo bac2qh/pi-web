@@ -150,7 +150,9 @@ function isNodeError(error: unknown, code: string): boolean {
 }
 
 function operationNeedsSessionListing(operation: SessionDagOperation): boolean {
-  return operation.type === "add_edge" || operation.type === "replace_edge";
+  return operation.type === "add_edge"
+    || operation.type === "replace_edge"
+    || operation.type === "insert_edge";
 }
 
 function assertCurrentSessionListingGeneration(
@@ -434,7 +436,7 @@ export async function mutateSessionDagState(
     stateForDiagnostics = currentState;
     // readStateFile is asynchronous. Recheck immediately before the synchronous
     // receipt/revision/apply decision so a rename/create invalidation that raced
-    // the state read cannot authorize an add/replace from an obsolete listing.
+    // the state read cannot authorize an add/replace/insert from an obsolete listing.
     assertCurrentSessionListingGeneration(
       envelope.operation,
       options.expectedSessionListGeneration,

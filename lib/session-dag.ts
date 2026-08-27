@@ -14,7 +14,7 @@ export const SESSION_DAG_MAX_RECEIPTS = 512;
 export const SESSION_DAG_MAX_SESSION_ID_LENGTH = 512;
 export const SESSION_DAG_MAX_OPAQUE_ID_LENGTH = 128;
 export const SESSION_DAG_ACCESSIBLE_TITLE = "Session dependency graph";
-export const SESSION_DAG_ACCESSIBLE_DESCRIPTION = "Session dependencies and available completion and edge swap controls";
+export const SESSION_DAG_ACCESSIBLE_DESCRIPTION = "Session dependencies and available completion and edge action controls";
 
 const SESSION_DAG_MAX_LABEL_SEGMENT_LENGTH = 160;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/u;
@@ -103,6 +103,14 @@ export type SessionDagOperation =
       next: Pick<SessionDagEdgeExpectation, "fromSessionId" | "toSessionId">;
     }
   | {
+      type: "insert_edge";
+      edgeId: string;
+      expected: SessionDagEdgeExpectation;
+      insertedSessionId: string;
+      firstEdgeId: string;
+      secondEdgeId: string;
+    }
+  | {
       type: "delete_edge";
       edgeId: string;
       expected: SessionDagEdgeExpectation;
@@ -131,6 +139,7 @@ export interface SessionDagMutationEnvelope {
 export type SessionDagConflictCode =
   | "session_dag_target_changed"
   | "session_dag_duplicate_edge"
+  | "session_dag_insert_endpoint"
   | "session_dag_session_not_found"
   | "session_dag_session_completed"
   | "session_dag_node_not_active"
@@ -593,6 +602,20 @@ export function parseSessionDagOperation(value: unknown): SessionDagOperation {
         },
       };
     }
+    case "insert_edge":
+      assertExactKeys(
+        value,
+        ["type", "edgeId", "expected", "insertedSessionId", "firstEdgeId", "secondEdgeId"],
+        "Insert edge operation",
+      );
+      return {
+        type: value.type,
+        edgeId: parseOpaqueId(value.edgeId, "Edge id"),
+        expected: parseEdgeExpectation(value.expected, "Expected edge"),
+        insertedSessionId: parseSessionId(value.insertedSessionId, "Inserted session id"),
+        firstEdgeId: parseOpaqueId(value.firstEdgeId, "First edge id"),
+        secondEdgeId: parseOpaqueId(value.secondEdgeId, "Second edge id"),
+      };
     case "delete_edge":
       assertExactKeys(value, ["type", "edgeId", "expected"], "Delete edge operation");
       return {
@@ -741,19 +764,31 @@ function withRedoCleared<T extends SessionDagState>(state: T): T {
   return state.redo.length === 0 ? state : { ...state, redo: [] };
 }
 
+function assertCurrentSessionIds(
+  availableSessionIds: ReadonlySet<string> | undefined,
+  sessionIds: readonly string[],
+  message: string,
+): void {
+  if (!availableSessionIds || sessionIds.some((sessionId) => !availableSessionIds.has(sessionId))) {
+    throw new SessionDagConflictError("session_dag_session_not_found", message);
+  }
+}
+
 function assertCurrentSessions(
   availableSessionIds: ReadonlySet<string> | undefined,
   fromSessionId: string,
   toSessionId: string,
 ): void {
-  if (!availableSessionIds?.has(fromSessionId) || !availableSessionIds.has(toSessionId)) {
-    throw new SessionDagConflictError("session_dag_session_not_found", "Both sessions must exist in the current session listing");
-  }
+  assertCurrentSessionIds(
+    availableSessionIds,
+    [fromSessionId, toSessionId],
+    "Both sessions must exist in the current session listing",
+  );
 }
 
-function assertSessionsNotCompleted(state: SessionDagState, fromSessionId: string, toSessionId: string): void {
+function assertSessionsNotCompleted(state: SessionDagState, ...sessionIds: string[]): void {
   const completed = getCompletedSessionIds(state);
-  if (completed.has(fromSessionId) || completed.has(toSessionId)) {
+  if (sessionIds.some((sessionId) => completed.has(sessionId))) {
     throw new SessionDagConflictError("session_dag_session_completed", "Completed sessions cannot be used in an edge");
   }
 }
@@ -896,6 +931,79 @@ export function applySessionDagOperation(
               }
             : candidate),
         }),
+        changed: true,
+      };
+    }
+    case "insert_edge": {
+      const edge = requireEdge(state, operation.edgeId, operation.expected);
+      if (operation.insertedSessionId === edge.fromSessionId
+        || operation.insertedSessionId === edge.toSessionId) {
+        throw new SessionDagConflictError(
+          "session_dag_insert_endpoint",
+          "Insert a session ID different from both dependency endpoints",
+        );
+      }
+      if (operation.firstEdgeId === operation.secondEdgeId
+        || stateHasEdgeId(state, operation.firstEdgeId)
+        || stateHasEdgeId(state, operation.secondEdgeId)) {
+        throw new SessionDagConflictError("session_dag_target_changed", "A new edge id is already in use");
+      }
+      if (state.nextEdgeOrder >= Number.MAX_SAFE_INTEGER) {
+        throw new SessionDagConflictError("session_dag_counter_overflow", "The graph edge order cannot advance");
+      }
+      assertCurrentSessionIds(
+        options.availableSessionIds,
+        [edge.fromSessionId, edge.toSessionId, operation.insertedSessionId],
+        "All three sessions must exist in the current session listing",
+      );
+      assertSessionsNotCompleted(
+        state,
+        edge.fromSessionId,
+        edge.toSessionId,
+        operation.insertedSessionId,
+      );
+      assertNoDuplicatePair(
+        state,
+        edge.fromSessionId,
+        operation.insertedSessionId,
+        edge.id,
+      );
+      assertNoDuplicatePair(
+        state,
+        operation.insertedSessionId,
+        edge.toSessionId,
+        edge.id,
+      );
+
+      const firstEdge: SessionDagEdge = {
+        id: operation.firstEdgeId,
+        formId: edge.formId,
+        fromSessionId: edge.fromSessionId,
+        toSessionId: operation.insertedSessionId,
+        order: edge.order,
+      };
+      const secondEdge: SessionDagEdge = {
+        id: operation.secondEdgeId,
+        formId: edge.formId,
+        fromSessionId: operation.insertedSessionId,
+        toSessionId: edge.toSessionId,
+        order: state.nextEdgeOrder,
+      };
+      const nextState = withRedoCleared({
+        ...state,
+        activeEdges: [
+          ...state.activeEdges.filter((candidate) => candidate.id !== edge.id),
+          firstEdge,
+          secondEdge,
+        ].sort(compareEdges),
+        nextEdgeOrder: state.nextEdgeOrder + 1,
+      });
+      if (countLogicalEdges(nextState) > SESSION_DAG_MAX_EDGE_RECORDS) {
+        throw new SessionDagConflictError("session_dag_limit_exceeded", "The graph has reached its edge limit");
+      }
+      return {
+        // Validate every persisted relationship on the complete one-to-two result.
+        state: parseSessionDagState(nextState),
         changed: true,
       };
     }

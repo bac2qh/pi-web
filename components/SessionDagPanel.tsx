@@ -253,7 +253,10 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
           setLoading(false);
           adoptGraphState(authoritative);
           mutationEpochRef.current += 1;
-          setFeedback({ kind: "error", message: "Graph changed elsewhere; review and retry" });
+          setFeedback({
+            kind: "error",
+            message: responseErrorMessage(value, "Graph changed elsewhere; review and retry"),
+          });
           resolveResult(false);
           return;
         }
@@ -415,6 +418,32 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
     });
   }, [replaceEdge]);
 
+  const insertEdge = useCallback((
+    edge: SessionDagEdge,
+    insertedSessionId: string,
+  ): Promise<boolean> => {
+    const expected = createEdgeExpectation(edge);
+    const firstEdgeId = createClientEntityId("edge");
+    const secondEdgeId = createClientEntityId("edge");
+    return runMutation((state) => {
+      const currentEdge = state.activeEdges.find((candidate) => candidate.id === edge.id);
+      if (!currentEdge || currentEdge.formId !== expected.formId
+        || currentEdge.fromSessionId !== expected.fromSessionId
+        || currentEdge.toSessionId !== expected.toSessionId) {
+        setFeedback({ kind: "error", message: "Graph changed elsewhere; review and retry" });
+        return null;
+      }
+      return {
+        type: "insert_edge",
+        edgeId: edge.id,
+        expected,
+        insertedSessionId,
+        firstEdgeId,
+        secondEdgeId,
+      };
+    });
+  }, [runMutation]);
+
   const pairKeyDown = (
     event: KeyboardEvent<HTMLInputElement>,
     onEnter: () => void,
@@ -539,6 +568,7 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
               edgeCount={graphState.activeEdges.length}
               onComplete={completeSession}
               onSwap={swapEdge}
+              onInsert={insertEdge}
             />
           </div>
           <div

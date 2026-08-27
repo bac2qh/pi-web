@@ -80,7 +80,9 @@ async function readBoundedMutationJson(request: Request): Promise<unknown> {
 }
 
 function operationNeedsSessionListing(envelope: SessionDagMutationEnvelope): boolean {
-  return envelope.operation.type === "add_edge" || envelope.operation.type === "replace_edge";
+  return envelope.operation.type === "add_edge"
+    || envelope.operation.type === "replace_edge"
+    || envelope.operation.type === "insert_edge";
 }
 
 function storeErrorResponse(error: SessionDagStoreError): NextResponse {
