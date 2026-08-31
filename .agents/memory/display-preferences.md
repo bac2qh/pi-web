@@ -35,8 +35,17 @@
 - Settled **Process details** starts open for a write only when the exact grouped call ID has a matching completed result. Outside writes, orphan results, pending writes, and near names do not broaden the default; outer and inner disclosures retain their established independent mounted lifetimes.
 - Valid completed `{ path, content }` renders the complete call-time string without a filesystem comparison. Success uses **Written content** and failure uses **Attempted content** with result text retained. Neutral decorative line numbers, natural soft wrapping, and bounded theme-aware syntax preserve text; unsupported, oversized, or syntax-inexact content falls back completely to line-numbered plaintext, while malformed input uses the ordinary JSON/result surface.
 
+## 2026-08-30 — Side-panel resize availability follows split geometry
+
+- The former `1000px` separator cutoff is removed. Outside the `<=640px` overlay/full-width presentation, an open, non-expanded panel exposes its separator whenever its current `maxWidth` exceeds `minWidth`; the separate `<1000px` automatic right-panel expansion and **Restore** behavior remain unchanged.
+- Split visibility and handle eligibility are distinct. Bounds account for every split-visible panel even if that panel has no range of its own, and completed width changes can reveal or remove the other handle without weakening the `180px` sidebar, `300px` right-panel, or targeted `320px` conversation obligations.
+- Mouse, pen, touch, keyboard, preferred/effective width ownership, and reset/persistence continue through the shared owner. Coarse or any-coarse pointer devices receive a net-zero `24px` transparent target around the unchanged `2px` separator line; `touch-action: none` remains scoped to the handle.
+
 ## References
 
+- Mobile-capable panel resizing plan: `.agents/plans/2026-08-30-mobile-panel-resizing.md`
+- Mobile-capable panel resizing checkpoint: `.agents/checkpoints/2026-08-30-mobile-panel-resizing-checkpoints.md`
+- Mobile-capable panel resizing browser evidence: `.agents/reports/2026-08-30-mobile-panel-resizing/browser-validation.json`
 - Write-result disclosure plan: `.agents/plans/2026-08-24-show-write-code-by-default.md`
 - Write-result disclosure checkpoint: `.agents/checkpoints/2026-08-24-show-write-code-by-default-checkpoints.md`
 - Write-result browser evidence: `.agents/reports/2026-08-24-show-write-code-by-default/browser-validation.json`

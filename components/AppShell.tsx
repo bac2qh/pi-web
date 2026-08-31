@@ -33,13 +33,13 @@ import {
   fileViewerExpansionAfterToggle,
   fileViewerExpansionAfterViewportChange,
   isFileViewerExpandedForViewport,
+  isNarrowFileViewerWidth,
   isSameFileOpenContext,
   shouldConfirmAutomaticFileOpen,
 } from "@/lib/file-viewer-layout";
 import { buildAtMentionText, buildFileAtMentionsText } from "@/lib/file-fuzzy";
 import {
   PANEL_LAYOUT_MOBILE_MAX_WIDTH,
-  PANEL_RESIZE_MIN_VIEWPORT_WIDTH,
   RIGHT_PANEL_FALLBACK_WIDTH,
   RIGHT_PANEL_MAX_WIDTH,
   RIGHT_PANEL_MIN_WIDTH,
@@ -76,7 +76,9 @@ interface PendingAutomaticFileOpen {
 }
 
 function getViewportWidth(): number {
-  return typeof window === "undefined" ? PANEL_RESIZE_MIN_VIEWPORT_WIDTH : window.innerWidth;
+  return typeof window === "undefined"
+    ? PANEL_LAYOUT_MOBILE_MAX_WIDTH + 1
+    : window.innerWidth;
 }
 
 export function AppShell() {
@@ -207,23 +209,29 @@ export function AppShell() {
     isNarrowFileViewerViewport,
     rightPanelOpen,
   ) && !isMobile;
-  const panelResizeEligible = !isNarrowFileViewerViewport && !fileViewerExpandedActive;
-  const sidebarResizeEnabled = panelResizeEligible && sidebarOpen;
-  const rightPanelResizeEnabled = panelResizeEligible && rightPanelOpen;
+  const splitLayoutVisible = !isMobile && !fileViewerExpandedActive;
+  const sidebarSplitVisible = splitLayoutVisible && sidebarOpen;
+  const rightPanelSplitVisible = splitLayoutVisible && rightPanelOpen;
   const sidebarWidthRef = useRef(SIDEBAR_DEFAULT_WIDTH);
   const rightPanelWidthRef = useRef(RIGHT_PANEL_FALLBACK_WIDTH);
   const reconciledViewportWidthRef = useRef<number | null>(null);
 
   const getSidebarResizeBounds = useCallback(() => getSidebarWidthBounds({
     viewportWidth: getViewportWidth(),
-    rightPanelVisible: rightPanelResizeEnabled,
+    rightPanelVisible: rightPanelSplitVisible,
     rightPanelWidth: rightPanelWidthRef.current,
-  }), [rightPanelResizeEnabled]);
+  }), [rightPanelSplitVisible]);
   const getRightPanelResizeBounds = useCallback(() => getRightPanelWidthBounds({
     viewportWidth: getViewportWidth(),
-    sidebarVisible: sidebarResizeEnabled,
+    sidebarVisible: sidebarSplitVisible,
     sidebarWidth: sidebarWidthRef.current,
-  }), [sidebarResizeEnabled]);
+  }), [sidebarSplitVisible]);
+  const sidebarResizeBounds = getSidebarResizeBounds();
+  const rightPanelResizeBounds = getRightPanelResizeBounds();
+  const sidebarResizeEnabled = sidebarSplitVisible
+    && sidebarResizeBounds.maxWidth > sidebarResizeBounds.minWidth;
+  const rightPanelResizeEnabled = rightPanelSplitVisible
+    && rightPanelResizeBounds.maxWidth > rightPanelResizeBounds.minWidth;
   const getResponsiveRightPanelWidth = useCallback(
     () => getDefaultRightPanelWidth(getViewportWidth()),
     [],
@@ -267,7 +275,7 @@ export function AppShell() {
     if (!sidebarResizer.ready || !rightPanelResizer.ready) return;
     const viewportWidth = getViewportWidth();
     const mobile = viewportWidth <= PANEL_LAYOUT_MOBILE_MAX_WIDTH;
-    const narrowFileViewer = viewportWidth < PANEL_RESIZE_MIN_VIEWPORT_WIDTH;
+    const narrowFileViewer = isNarrowFileViewerWidth(viewportWidth);
     const expanded = !mobile && isFileViewerExpandedForViewport(
       fileViewerExpansion,
       narrowFileViewer,
