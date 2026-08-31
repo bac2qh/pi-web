@@ -67,3 +67,15 @@ Plan: `.agents/plans/2026-08-30-mobile-panel-resizing.md`
 **Departures from approved obligations:** The authorized matrix gap is resolved. The separately reviewed compact trusted coarse-touch receipt and `640px` overlay open/close receipt gaps remain unresolved and continue to block final VC-003/VC-005 acceptance; the user did not authorize those validation reruns in this direction.
 
 **Implementation commit:** Pending.
+
+## Implementation Summary
+
+**Plan section:** Informed incomplete closeout for the full Design / Implementation Strategy, Test Strategy, and Validation Contract VC-001–VC-005.
+
+**Work and outcome:** After the remaining validation gaps and their consequences were disclosed, the user explicitly directed: “close out as incomplete.” The accepted partial state is commit `2faaf42a0f1a32b68454b08d85f772d8d7bf910c`. That state implements geometry-derived split/range eligibility, opposing-visible-panel bounds, compact pointer resizing, coarse target sizing, focused breakpoint/range tests, maintained documentation, and the retained partial browser receipt. This instruction accepts integration of the named current-state gaps only; it does not make the approved plan complete.
+
+**Validation / evidence:** Focused panel/file/right-tab tests passed 20/20 after the matrix correction. The full Node suite passed 956/956 in the required disposable sibling-layout copy before the test-only matrix strengthening; the affected focused suite passed afterward. TypeScript, lint, and diff checks passed. The retained browser receipt proves roomy trusted mouse/touch/keyboard behavior, `24px`/`2px` coarse geometry, outside-handle scrolling, compact fine-pointer geometry and range transfer, expansion/Restore, preference restoration, cleanup, minima, and no overflow. Independent reviewers found no source-code correctness defect.
+
+**Departures from approved obligations:** The plan outcome is incomplete by explicit user instruction. VC-001 and VC-005 remain missing trusted coarse-touch interaction at a compact `641–999px` split viewport, including retained evidence for both handles' before/after widths, live bounds, cleanup, and scrolling in that same compact state. VC-003 remains missing a retained `640px` sidebar-overlay open/close interaction proving zero handles and no overflow in both states. The browser receipt's aggregate pass labels therefore overstate those specific retained details. No source-code defect is known, but residual risk remains that compact touch acquisition/cleanup or the open mobile overlay composition could regress without detection. VC-002 and VC-004 passed; the per-boundary pure matrix gap is resolved. No other obligation is known to be incomplete, blocked, waived, superseded, or divergent.
+
+**Implementation commit:** `2faaf42a0f1a32b68454b08d85f772d8d7bf910c` (`feat: enable compact split panel resizing`), the exact user-accepted partial-state commit.
