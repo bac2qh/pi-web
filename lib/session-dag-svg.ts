@@ -3,6 +3,7 @@ import {
   SESSION_DAG_ACCESSIBLE_DESCRIPTION,
   SESSION_DAG_ACCESSIBLE_TITLE,
   type CompiledSessionDag,
+  type SessionDagDirection,
 } from "./session-dag";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
@@ -64,27 +65,34 @@ export const SESSION_DAG_SHADOW_STYLES = `
   pointer-events: none;
   z-index: 1;
 }
-.session-dag-complete-control {
+.session-dag-complete-control,
+.session-dag-node-add-control {
   color: var(--accent);
   cursor: pointer;
 }
-.session-dag-complete-control:focus {
+.session-dag-complete-control:focus,
+.session-dag-node-add-control:focus {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.session-dag-complete-control-background {
+.session-dag-complete-control-background,
+.session-dag-node-add-control-background {
   fill: var(--bg);
   stroke: currentColor;
   stroke-width: 1.8;
 }
-.session-dag-complete-control-check {
+.session-dag-complete-control-check,
+.session-dag-node-add-control-plus {
   pointer-events: none;
 }
 .session-dag-complete-control:hover .session-dag-complete-control-background,
-.session-dag-complete-control:focus .session-dag-complete-control-background {
+.session-dag-complete-control:focus .session-dag-complete-control-background,
+.session-dag-node-add-control:hover .session-dag-node-add-control-background,
+.session-dag-node-add-control:focus .session-dag-node-add-control-background {
   fill: var(--bg-selected);
 }
-.session-dag-complete-control[aria-disabled="true"] {
+.session-dag-complete-control[aria-disabled="true"],
+.session-dag-node-add-control[aria-disabled="true"] {
   opacity: 0.55;
   cursor: wait;
 }
@@ -120,7 +128,7 @@ export const SESSION_DAG_SHADOW_STYLES = `
 .session-dag-edge-action-button-label {
   fill: currentColor;
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 600;
   pointer-events: none;
   user-select: none;
@@ -147,12 +155,10 @@ export const SESSION_DAG_SHADOW_STYLES = `
   min-width: 0;
   pointer-events: none;
 }
-.session-dag-edge-insert-form {
+.session-dag-edge-insert-form,
+.session-dag-node-add-form {
   position: absolute;
-  left: clamp(126px, var(--session-dag-insert-left), calc(100% - 126px));
-  top: var(--session-dag-insert-top);
   display: grid;
-  width: min(240px, calc(100% - 16px));
   gap: 7px;
   padding: 9px;
   transform: translate(-50%, 12px);
@@ -165,14 +171,27 @@ export const SESSION_DAG_SHADOW_STYLES = `
   font-size: 10px;
   pointer-events: all;
 }
-.session-dag-edge-insert-form[hidden] {
+.session-dag-edge-insert-form {
+  left: clamp(126px, var(--session-dag-insert-left), calc(100% - 126px));
+  top: var(--session-dag-insert-top);
+  width: min(240px, calc(100% - 16px));
+}
+.session-dag-node-add-form {
+  left: clamp(146px, var(--session-dag-node-add-left), calc(100% - 146px));
+  top: var(--session-dag-node-add-top);
+  width: min(280px, calc(100% - 16px));
+}
+.session-dag-edge-insert-form[hidden],
+.session-dag-node-add-form[hidden] {
   display: none;
 }
-.session-dag-edge-insert-form label {
+.session-dag-edge-insert-form label,
+.session-dag-node-add-form label {
   display: grid;
   gap: 4px;
 }
-.session-dag-edge-insert-form input {
+.session-dag-edge-insert-form input,
+.session-dag-node-add-form input {
   width: 100%;
   min-width: 0;
   height: 30px;
@@ -184,7 +203,8 @@ export const SESSION_DAG_SHADOW_STYLES = `
   color: var(--text);
   font: inherit;
 }
-.session-dag-edge-insert-form input:focus {
+.session-dag-edge-insert-form input:focus,
+.session-dag-node-add-form input:focus {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -193,7 +213,12 @@ export const SESSION_DAG_SHADOW_STYLES = `
   justify-content: flex-end;
   gap: 6px;
 }
-.session-dag-edge-insert-form button {
+.session-dag-node-add-actions {
+  display: grid;
+  gap: 6px;
+}
+.session-dag-edge-insert-form button,
+.session-dag-node-add-form button {
   min-height: 28px;
   padding: 4px 8px;
   border: 1px solid var(--border);
@@ -203,16 +228,26 @@ export const SESSION_DAG_SHADOW_STYLES = `
   cursor: pointer;
   font: inherit;
 }
-.session-dag-edge-insert-form button[type="submit"] {
+.session-dag-node-add-actions button {
+  text-align: left;
+}
+.session-dag-node-add-cancel {
+  justify-self: end;
+}
+.session-dag-edge-insert-form button[type="submit"],
+.session-dag-node-add-form button[type="submit"] {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   color: var(--accent);
 }
-.session-dag-edge-insert-form button:focus {
+.session-dag-edge-insert-form button:focus,
+.session-dag-node-add-form button:focus {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 .session-dag-edge-insert-form[aria-busy="true"] input,
-.session-dag-edge-insert-form button[aria-disabled="true"] {
+.session-dag-edge-insert-form button[aria-disabled="true"],
+.session-dag-node-add-form[aria-busy="true"] input,
+.session-dag-node-add-form button[aria-disabled="true"] {
   cursor: wait;
   opacity: 0.58;
 }
@@ -802,12 +837,44 @@ export function createSessionDagCompleteControl(
   return control;
 }
 
+export function createSessionDagNodeAddControl(
+  ownerDocument: Document,
+  label: string,
+): SVGGElement {
+  const control = ownerDocument.createElementNS(SVG_NAMESPACE, "g");
+  control.setAttribute("class", "session-dag-node-add-control");
+  control.setAttribute("role", "button");
+  control.setAttribute("tabindex", "0");
+  control.setAttribute("aria-expanded", "false");
+  control.setAttribute("aria-label", `Add dependency connected to ${label}`);
+  control.setAttribute("pointer-events", "all");
+
+  const circle = ownerDocument.createElementNS(SVG_NAMESPACE, "circle");
+  circle.setAttribute("r", "9");
+  circle.setAttribute("cx", "0");
+  circle.setAttribute("cy", "0");
+  circle.setAttribute("class", "session-dag-node-add-control-background");
+  control.appendChild(circle);
+
+  const plus = ownerDocument.createElementNS(SVG_NAMESPACE, "path");
+  plus.setAttribute("d", "M -4 0 H 4 M 0 -4 V 4");
+  plus.setAttribute("class", "session-dag-node-add-control-plus");
+  plus.setAttribute("fill", "none");
+  plus.setAttribute("stroke", "currentColor");
+  plus.setAttribute("stroke-width", "2");
+  plus.setAttribute("stroke-linecap", "round");
+  control.appendChild(plus);
+
+  return control;
+}
+
 function createSessionDagEdgeActionButton(
   ownerDocument: Document,
   className: string,
   accessibleLabel: string,
   text: string,
   centerX: number,
+  centerY: number,
   disabled: boolean,
 ): SVGGElement {
   const button = ownerDocument.createElementNS(SVG_NAMESPACE, "g");
@@ -819,17 +886,17 @@ function createSessionDagEdgeActionButton(
   if (disabled) button.setAttribute("aria-disabled", "true");
 
   const background = ownerDocument.createElementNS(SVG_NAMESPACE, "rect");
-  background.setAttribute("x", String(centerX - 20));
-  background.setAttribute("y", "-29");
-  background.setAttribute("width", "40");
-  background.setAttribute("height", "18");
-  background.setAttribute("rx", "5");
+  background.setAttribute("x", String(centerX - 24));
+  background.setAttribute("y", String(centerY - 11));
+  background.setAttribute("width", "48");
+  background.setAttribute("height", "22");
+  background.setAttribute("rx", "6");
   background.setAttribute("class", "session-dag-edge-action-button-background");
   button.appendChild(background);
 
   const label = ownerDocument.createElementNS(SVG_NAMESPACE, "text");
   label.setAttribute("x", String(centerX));
-  label.setAttribute("y", "-20");
+  label.setAttribute("y", String(centerY));
   label.setAttribute("dy", "0.32em");
   label.setAttribute("text-anchor", "middle");
   label.setAttribute("class", "session-dag-edge-action-button-label");
@@ -843,6 +910,7 @@ export function createSessionDagEdgeActionControl(
   fromLabel: string,
   toLabel: string,
   selfEdge: boolean,
+  direction: SessionDagDirection,
 ): SessionDagEdgeActionControl {
   const root = ownerDocument.createElementNS(SVG_NAMESPACE, "g");
   root.setAttribute("class", "session-dag-edge-action-control");
@@ -857,11 +925,11 @@ export function createSessionDagEdgeActionControl(
   dot.setAttribute("pointer-events", "all");
 
   const hitTarget = ownerDocument.createElementNS(SVG_NAMESPACE, "circle");
-  hitTarget.setAttribute("r", "11");
+  hitTarget.setAttribute("r", "14");
   hitTarget.setAttribute("class", "session-dag-edge-action-dot-hit");
   dot.appendChild(hitTarget);
   const visibleDot = ownerDocument.createElementNS(SVG_NAMESPACE, "circle");
-  visibleDot.setAttribute("r", "4");
+  visibleDot.setAttribute("r", "5");
   visibleDot.setAttribute("class", "session-dag-edge-action-dot-visible");
   dot.appendChild(visibleDot);
   root.appendChild(dot);
@@ -870,12 +938,14 @@ export function createSessionDagEdgeActionControl(
   actions.setAttribute("class", "session-dag-edge-action-buttons");
   actions.setAttribute("aria-hidden", "true");
   actions.setAttribute("display", "none");
+  const horizontalFlow = direction === "LR";
   const swap = createSessionDagEdgeActionButton(
     ownerDocument,
     "session-dag-edge-action-swap",
     `Swap dependency from ${fromLabel} to ${toLabel}`,
     "Swap",
-    -22,
+    horizontalFlow ? 0 : -40,
+    horizontalFlow ? -28 : 0,
     selfEdge,
   );
   const insert = createSessionDagEdgeActionButton(
@@ -883,7 +953,8 @@ export function createSessionDagEdgeActionControl(
     "session-dag-edge-action-insert",
     `Insert a session into dependency from ${fromLabel} to ${toLabel}`,
     "Insert",
-    22,
+    horizontalFlow ? 0 : 40,
+    horizontalFlow ? 28 : 0,
     false,
   );
   actions.appendChild(swap);
@@ -913,6 +984,16 @@ export function updateSessionDagEdgeActionControl(
     showActions && !pending && control.swap.getAttribute("aria-disabled") !== "true" ? "0" : "-1",
   );
   control.insert.setAttribute("tabindex", showActions && !pending ? "0" : "-1");
+}
+
+export function shouldDeferSessionDagNodeFocusRestore(
+  previewActive: boolean,
+  authorityAdopted: boolean,
+  currentControlAvailable: boolean,
+  currentControlIsSettledControl: boolean,
+): boolean {
+  return previewActive
+    && (!currentControlAvailable || (authorityAdopted && currentControlIsSettledControl));
 }
 
 export function getSessionDagOverlayPosition(

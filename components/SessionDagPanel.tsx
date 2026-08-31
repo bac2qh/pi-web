@@ -202,7 +202,10 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
     if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
   }, []);
 
-  const runMutation = useCallback((buildOperation: OperationBuilder): Promise<boolean> => {
+  const runMutation = useCallback((
+    buildOperation: OperationBuilder,
+    onAcceptedAuthority?: (adopted: boolean) => void,
+  ): Promise<boolean> => {
     const mutationId = createClientEntityId("mutation");
     const queuedEpoch = mutationEpochRef.current;
     setPendingMutations((count) => count + 1);
@@ -268,7 +271,8 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
         const authoritative = parseSessionDagState(value);
         graphRequestRef.current += 1;
         setLoading(false);
-        adoptGraphState(authoritative);
+        const authorityAdopted = adoptGraphState(authoritative);
+        onAcceptedAuthority?.(authorityAdopted);
         setFeedback({ kind: "success", message: "Dependency graph updated." });
         resolveResult(true);
       } catch {
@@ -444,6 +448,45 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
     });
   }, [runMutation]);
 
+  const addNodeEdge = useCallback((
+    anchorSessionId: string,
+    enteredSessionId: string,
+    direction: "incoming" | "outgoing",
+  ): Promise<{ accepted: boolean; authorityAdopted: boolean }> => {
+    if (!enteredSessionId) {
+      setFeedback({ kind: "error", message: "Enter a session ID." });
+      return Promise.resolve({ accepted: false, authorityAdopted: false });
+    }
+    if (enteredSessionId === anchorSessionId) {
+      setFeedback({
+        kind: "error",
+        message: "Choose a different session ID; quick add must connect another node.",
+      });
+      return Promise.resolve({ accepted: false, authorityAdopted: false });
+    }
+    let authorityAdopted = false;
+    return runMutation((state) => {
+      const activeIds = new Set(getActiveSessionIds(state));
+      const formId = deriveSessionDagNodeFormAssignments(state).get(anchorSessionId);
+      if (!activeIds.has(anchorSessionId) || !formId) {
+        setFeedback({ kind: "error", message: "Graph changed elsewhere; review and retry" });
+        return null;
+      }
+      return {
+        type: "add_edge",
+        edgeId: createClientEntityId("edge"),
+        formId,
+        fromSessionId: direction === "incoming" ? enteredSessionId : anchorSessionId,
+        toSessionId: direction === "incoming" ? anchorSessionId : enteredSessionId,
+      };
+    }, (adopted) => {
+      authorityAdopted = adopted;
+    }).then((accepted) => ({
+      accepted,
+      authorityAdopted: accepted && authorityAdopted,
+    }));
+  }, [runMutation]);
+
   const pairKeyDown = (
     event: KeyboardEvent<HTMLInputElement>,
     onEnter: () => void,
@@ -566,9 +609,12 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
               revision={graphState.revision}
               nodeCount={activeSessionIds.length}
               edgeCount={graphState.activeEdges.length}
+              nodeFormAssignments={nodeAssignments}
+              direction={graphState.direction}
               onComplete={completeSession}
               onSwap={swapEdge}
               onInsert={insertEdge}
+              onAddNodeEdge={addNodeEdge}
             />
           </div>
           <div
