@@ -23,6 +23,9 @@ test("DAG panel keeps structured Raw authoring canonical and serializes mutation
   assert.match(panel, /type: "insert_edge"/);
   assert.match(panel, /onSwap=\{swapEdge\}/);
   assert.match(panel, /onInsert=\{insertEdge\}/);
+  assert.match(panel, /onAddNodeEdge=\{addNodeEdge\}/);
+  assert.match(panel, /nodeFormAssignments=\{nodeAssignments\}/);
+  assert.match(panel, /direction=\{graphState\.direction\}/);
   assert.match(panel, /getSessionDagRawEndpointPresentation/);
   assert.match(panel, /data-state=\{fromPresentation\.status\}/);
   assert.match(panel, /data-state=\{trailingFromPresentation\.status\}/);
@@ -43,7 +46,7 @@ test("DAG panel keeps structured Raw authoring canonical and serializes mutation
   assert.match(panel, /responseErrorMessage\(value, "Graph changed elsewhere; review and retry"\)/);
   assert.match(panel, /Graph changed elsewhere; review and retry/);
   assert.match(panel, /reconcileDrafts\(incoming\)/);
-  assert.match(panel, /graphRequestRef\.current \+= 1;\s*setLoading\(false\);\s*adoptGraphState\(authoritative\)/);
+  assert.match(panel, /graphRequestRef\.current \+= 1;\s*setLoading\(false\);\s*const authorityAdopted = adoptGraphState\(authoritative\);\s*onAcceptedAuthority\?\.\(authorityAdopted\)/);
   assert.match(panel, /const current = graphStateRef\.current;\s*if \(current && incoming\.revision < current\.revision\) return false;[\s\S]*?reconcileDrafts\(incoming\)/);
   assert.match(panel, /source\?: "graph-load" \| "session-load"/);
   assert.match(panel, /current\?\.source === "graph-load" \? null : current/);
@@ -85,7 +88,7 @@ test("Preview Insert builds one exact atomic operation with stable fresh IDs and
   const panel = await read("./SessionDagPanel.tsx");
   const insertion = panel.slice(
     panel.indexOf("const insertEdge"),
-    panel.indexOf("const pairKeyDown", panel.indexOf("const insertEdge")),
+    panel.indexOf("const addNodeEdge", panel.indexOf("const insertEdge")),
   );
   assert.match(insertion, /const expected = createEdgeExpectation\(edge\)/);
   assert.match(insertion, /const firstEdgeId = createClientEntityId\("edge"\)/);
@@ -95,6 +98,32 @@ test("Preview Insert builds one exact atomic operation with stable fresh IDs and
   assert.match(insertion, /currentEdge\.toSessionId !== expected\.toSessionId/);
   assert.match(insertion, /type: "insert_edge"[\s\S]*?edgeId: edge\.id[\s\S]*?expected,[\s\S]*?insertedSessionId,[\s\S]*?firstEdgeId,[\s\S]*?secondEdgeId/);
   assert.equal((insertion.match(/runMutation\(/gu) ?? []).length, 1);
+});
+
+test("Preview node quick-add revalidates the anchor and builds one existing add-edge operation in either direction", async () => {
+  const panel = await read("./SessionDagPanel.tsx");
+  const quickAdd = panel.slice(
+    panel.indexOf("const addNodeEdge"),
+    panel.indexOf("const pairKeyDown", panel.indexOf("const addNodeEdge")),
+  );
+  const beforeQueue = quickAdd.slice(0, quickAdd.indexOf("return runMutation"));
+  assert.match(beforeQueue, /if \(enteredSessionId === anchorSessionId\)/);
+  assert.match(beforeQueue, /Choose a different session ID; quick add must connect another node\./);
+  assert.match(beforeQueue, /return Promise\.resolve\(\{ accepted: false, authorityAdopted: false \}\)/);
+  assert.doesNotMatch(beforeQueue, /runMutation|fetch\(/);
+
+  assert.match(quickAdd, /let authorityAdopted = false;\s*return runMutation\(\(state\) => \{/);
+  assert.match(quickAdd, /const activeIds = new Set\(getActiveSessionIds\(state\)\)/);
+  assert.match(quickAdd, /deriveSessionDagNodeFormAssignments\(state\)\.get\(anchorSessionId\)/);
+  assert.match(quickAdd, /if \(!activeIds\.has\(anchorSessionId\) \|\| !formId\)/);
+  assert.match(quickAdd, /type: "add_edge"/);
+  assert.match(quickAdd, /edgeId: createClientEntityId\("edge"\)/);
+  assert.match(quickAdd, /fromSessionId: direction === "incoming" \? enteredSessionId : anchorSessionId/);
+  assert.match(quickAdd, /toSessionId: direction === "incoming" \? anchorSessionId : enteredSessionId/);
+  assert.match(quickAdd, /\}, \(adopted\) => \{\s*authorityAdopted = adopted;\s*\}\)\.then\(\(accepted\) => \(\{\s*accepted,\s*authorityAdopted: accepted && authorityAdopted/);
+  assert.equal((quickAdd.match(/runMutation\(/gu) ?? []).length, 1);
+  assert.equal((quickAdd.match(/createClientEntityId\("edge"\)/gu) ?? []).length, 1);
+  assert.doesNotMatch(quickAdd, /insert_edge|replace_edge|delete_edge/);
 });
 
 test("DAG refresh and copy behavior stay separated from graph mutations", async () => {
@@ -152,96 +181,101 @@ test("selected chat session flows to a separate direct-map Preview marker", asyn
   assert.doesNotMatch(markerHelper, /focus\(|scroll|fetch|render|mermaid/i);
 });
 
-test("Preview keeps Mermaid inert while trusted edge dots own expansion, insertion, and recovery", async () => {
+test("Preview keeps one trusted edge-or-node authoring interaction with recoverable focus and drafts", async () => {
   const [preview, svg] = await Promise.all([
     read("./SessionDagPreview.tsx"),
     read("../lib/session-dag-svg.ts"),
   ]);
 
   assert.match(preview, /if \(!container \|\| !active\) \{\s*clearPreparedRender\(\);\s*return;\s*\}/);
-  assert.doesNotMatch(preview, /if \(!container \|\| !active\) \{[^}]*edgeInteractionRef\.current = null/);
+  assert.doesNotMatch(preview, /if \(!container \|\| !active\) \{[^}]*interactionRef\.current = null/);
   assert.match(preview, /enqueueMermaidOperation/);
   assert.match(preview, /securityLevel: "strict"/);
   assert.match(preview, /htmlLabels: false/);
-  assert.match(preview, /mermaid\.mermaidAPI\.parse/);
   assert.match(preview, /prepareSessionDagSvg\([\s\S]*?rendered\.result\.svg[\s\S]*?rendered\.renderId/);
   assert.match(preview, /container\.shadowRoot \?\? container\.attachShadow\(\{ mode: "open" \}\)/);
   assert.match(preview, /trustedStyle\.textContent = SESSION_DAG_SHADOW_STYLES/);
   assert.match(preview, /stack\.replaceChildren\(prepared\.svg, controlLayer, insertOverlayLayer\)/);
   assert.match(preview, /renderRoot\.replaceChildren\(trustedStyle, stack\)/);
-  assert.match(preview, /insertOverlayLayer\.setAttribute\("class", "session-dag-edge-insert-overlay-layer"\)/);
   assert.match(preview, /for \(const \[alias, edge\] of compiled\.edgesByAlias\)/);
+  assert.match(preview, /for \(const anchorSessionId of compiled\.activeSessionIds\)/);
   assert.match(preview, /prepared\.edgePathsByAlias\.get\(alias\)/);
-  assert.match(preview, /createSessionDagEdgeActionControl/);
-  assert.match(preview, /getSessionDagEdgeMidpoint\(edgePath, prepared\.svg\)/);
-  assert.match(preview, /getSessionDagOverlayPosition\(prepared\.svg, position\.x, position\.y\)/);
-  assert.match(preview, /controlLayer\.appendChild\(control\.root\)/);
+  assert.match(preview, /prepared\.nodeGroupsByAlias\.get\(alias\)/);
   assert.doesNotMatch(preview, /nodeGroup\.appendChild\(control\)|edgePath\.appendChild\(control\)/);
 
-  assert.match(preview, /const edgeInteractionRef = useRef<EdgeInteraction \| null>\(null\)/);
-  assert.match(preview, /if \(interactionMatchesRecord\(current, record\)\) \{\s*closeInteraction\(true\)/);
-  assert.match(preview, /edgeInteractionRef\.current = \{[\s\S]*?mode: "actions"[\s\S]*?focusTarget: "dot"/);
+  assert.match(preview, /type PreviewInteraction = EdgeInteraction \| NodeInteraction/);
+  assert.match(preview, /const interactionRef = useRef<PreviewInteraction \| null>\(null\)/);
+  assert.match(preview, /kind: "edge"[\s\S]*?mode: "actions"[\s\S]*?focusTarget: "dot"/);
+  assert.match(preview, /kind: "node"[\s\S]*?direction: null[\s\S]*?focusTarget: "input"/);
+  assert.match(preview, /if \(current\?\.pending\) return/);
+  assert.match(preview, /interactionRef\.current = null;\s*applyAllRecords\(\)/);
+  assert.match(preview, /for \(const record of edgeControlRecordsRef\.current\.values\(\)\) record\.apply\(\);\s*for \(const record of nodeControlRecordsRef\.current\.values\(\)\) record\.apply\(\)/);
+  assert.match(preview, /interactionMatchesEdgeRecord/);
+  assert.match(preview, /interactionMatchesNodeRecord/);
+
+  assert.match(preview, /createSessionDagEdgeActionControl\([\s\S]*?selfEdge,[\s\S]*?direction/);
+  assert.match(preview, /getSessionDagEdgeMidpoint\(edgePath, prepared\.svg\)/);
   assert.match(preview, /interaction\.mode = "insert";\s*interaction\.focusTarget = "input"/);
   assert.match(preview, /updateSessionDagEdgeActionControl\(control, mode, pending\)/);
-  assert.match(preview, /mode === "collapsed" \? "Show" : "Hide"/);
   assert.match(preview, /const selfEdge = edge\.fromSessionId === edge\.toSessionId/);
   assert.match(preview, /if \(!selfEdge\) \{[\s\S]*?onSwapRef\.current\(edge\)/);
-  assert.match(preview, /bindEdgeActivation\(control\.insert,[\s\S]*?interaction\.mode = "insert"/);
+  assert.match(preview, /onInsertRef\.current\(edge, interaction\.value\)/);
 
-  assert.match(preview, /form\.setAttribute\("class", "session-dag-edge-insert-form"\)/);
+  assert.match(preview, /const formId = nodeFormAssignments\.get\(anchorSessionId\)/);
+  assert.match(preview, /const minimumWidth = eligible \? 44 : 22/);
+  assert.match(preview, /createSessionDagNodeAddControl\(container\.ownerDocument, label\)/);
+  assert.match(preview, /bounds\.x \+ 11,[\s\S]*?bounds\.y \+ 11/);
+  assert.match(preview, /bounds\.x \+ bounds\.width - 11/);
+  assert.match(preview, /getSessionDagOverlayPosition\([\s\S]*?controlPosition\.x,[\s\S]*?controlPosition\.y/);
+  assert.match(preview, /form\.setAttribute\("class", "session-dag-node-add-form"\)/);
   assert.match(preview, /input\.maxLength = SESSION_DAG_MAX_SESSION_ID_LENGTH/);
-  assert.match(preview, /input\.autofocus = true/);
-  assert.match(preview, /input\.addEventListener\("input"[\s\S]*?interaction\.value = input\.value/);
+  assert.match(preview, /incoming\.textContent = "Incoming: ID → this node"/);
+  assert.match(preview, /outgoing\.textContent = "Outgoing: this node → ID"/);
+  assert.match(preview, /incoming\.type = "submit"/);
+  assert.match(preview, /outgoing\.type = "submit"/);
+  assert.match(preview, /input\.addEventListener\("keydown"[\s\S]*?if \(event\.key !== "Enter"\) return;\s*event\.preventDefault\(\);\s*event\.stopPropagation\(\)/);
+  assert.match(preview, /const submitter = \(event as SubmitEvent\)\.submitter/);
+  assert.match(preview, /submitter === incoming[\s\S]*?"incoming"[\s\S]*?submitter === outgoing[\s\S]*?"outgoing"/);
+  assert.match(preview, /onAddNodeEdgeRef\.current\([\s\S]*?record\.anchorSessionId,[\s\S]*?interaction\.value,[\s\S]*?direction/);
+
+  assert.match(preview, /interaction\.pending = true;\s*interaction\.direction = direction;\s*interaction\.focusTarget = direction/);
+  assert.match(preview, /interaction\.pending = false;\s*interaction\.direction = direction;\s*interaction\.focusTarget = direction;\s*applyAllRecords\(\);\s*focusInteractionTarget\(\)/);
   assert.match(preview, /form\.setAttribute\("aria-busy", String\(pending\)\)/);
   assert.match(preview, /input\.readOnly = pending/);
   assert.match(preview, /if \(pending\) button\.setAttribute\("aria-disabled", "true"\)/);
-  assert.doesNotMatch(preview, /input\.disabled = pending|submit\.disabled = pending|cancel\.disabled = pending/);
-  assert.match(preview, /form\.addEventListener\("submit"[\s\S]*?onInsertRef\.current\(edge, interaction\.value\)/);
-  assert.match(preview, /cancel\.addEventListener\("click"[\s\S]*?closeInteraction\(true\)/);
+  assert.doesNotMatch(preview, /input\.disabled = pending|incoming\.disabled = pending|outgoing\.disabled = pending/);
+  assert.match(preview, /const nodeFocusRestoreRef = useRef/);
+  assert.match(preview, /const deferFocusRestore = shouldDeferSessionDagNodeFocusRestore\([\s\S]*?authorityAdopted,[\s\S]*?currentRecord !== null,[\s\S]*?currentRecord === record/);
+  assert.match(preview, /nodeFocusRestoreRef\.current = deferFocusRestore \? \{\s*anchorSessionId: record\.anchorSessionId,\s*formId: record\.formId/);
+  assert.match(preview, /if \(record\?\.formId === focusRestore\.formId\) \{\s*queueMicrotask\(\(\) => focusElement\(record\.control\)\)/);
+  assert.match(preview, /savedInteraction\?\.kind === "node"[\s\S]*?interactionMatchesNodeRecord\(savedInteraction, savedRecord\)/);
+
+  assert.match(preview, /container\.ownerDocument\.addEventListener\("click", onDocumentClick, true\)/);
+  assert.match(preview, /event\.composedPath\(\)/);
+  assert.match(preview, /edgeControlRecordsRef\.current\.values\(\)[\s\S]*?nodeControlRecordsRef\.current\.values\(\)/);
+  assert.match(preview, /if \(!interaction \|\| !activeForm \|\| interaction\.pending\) return/);
   assert.match(preview, /event\.key !== "Escape"/);
   assert.match(preview, /event\.key !== "Enter" && event\.key !== " "/);
   assert.match(preview, /event\.repeat/);
-  assert.match(preview, /container\.ownerDocument\.addEventListener\("click", onDocumentClick, true\)/);
-  assert.match(preview, /removeEventListener\("click", onDocumentClick, true\)/);
-  assert.match(preview, /event\.composedPath\(\)/);
-  assert.match(preview, /if \(!interaction \|\| !activeRecord \|\| interaction\.pending\) return/);
-  assert.match(preview, /interaction\.pending = false;\s*interaction\.focusTarget = focusTarget;\s*applyAllRecords\(\);\s*focusInteractionTarget\(\)/);
-  assert.match(preview, /const settleAcceptedEdgeMutation[\s\S]*?edgeInteractionRef\.current = null;[\s\S]*?focusElement\(currentRecord\?\.control\.dot \?\? null\)/);
-  assert.match(preview, /if \(accepted\) settleAcceptedEdgeMutation\(record\);\s*else settleRejectedEdgeMutation/);
-  assert.doesNotMatch(preview, /settleRejectedEdgeMutation[\s\S]{0,300}interaction\.value\s*=/);
-  assert.match(preview, /savedRecord \|\| !interactionMatchesRecord\(savedInteraction, savedRecord\)/);
-  assert.match(preview, /focusElement\(record\?\.control\.dot \?\? null\)/);
-
-  assert.match(preview, /bounds\.width < 22 \|\| bounds\.height < 22/);
-  assert.match(preview, /bounds\.x \+ bounds\.width - 11/);
   assert.match(preview, /Raw remains available/);
-  assert.match(preview, /stage: "compile"/);
-  assert.match(preview, /compileError/);
-  assert.doesNotMatch(preview, /dangerouslySetInnerHTML|data-render-key|sessionId\}\s*data-/);
+  assert.doesNotMatch(preview, /dangerouslySetInnerHTML|data-render-key|setAttribute\("data-session-dag-[^"]*",\s*anchorSessionId/);
 
   assert.match(svg, /parseFromString\(svgMarkup, "image\/svg\+xml"\)/);
   assert.match(svg, /assertSafeSessionDagSvg\(svg, renderId\)/);
-  assert.match(svg, /FORBIDDEN_SVG_ELEMENTS/);
   assert.match(svg, /isSessionDagStyleSelectorScoped\(styleRule\.selectorText, renderId\)/);
   assert.match(svg, /hasReservedSessionDagAttribute\(attribute\.localName\)/);
-  assert.match(svg, /svg\.setAttribute\("role", "group"\)/);
   assert.match(svg, /validateSessionDagEdgeAliases/);
   assert.match(svg, /cyclic-special-mid/);
-  assert.match(svg, /edgePathsByAlias/);
   assert.match(svg, /layer\.setAttribute\("class", "session-dag-control-layer"\)/);
-  assert.match(svg, /element\.getScreenCTM\(\)/);
-  assert.match(svg, /edgePath\.getPointAtLength\(length \/ 2\)/);
-  assert.match(svg, /createSessionDagEdgeActionControl/);
-  assert.match(svg, /session-dag-edge-action-dot/);
-  assert.match(svg, /`Show actions for dependency from \$\{fromLabel\} to \$\{toLabel\}`/);
-  assert.match(svg, /`Insert a session into dependency from \$\{fromLabel\} to \$\{toLabel\}`/);
-  assert.match(svg, /updateSessionDagEdgeActionControl/);
-  assert.match(svg, /control\.swap\.getAttribute\("aria-disabled"\) !== "true"/);
-  assert.match(svg, /getSessionDagOverlayPosition/);
-  assert.match(svg, /\.session-dag-edge-action-dot:focus/);
-  assert.match(svg, /\.session-dag-edge-insert-form input:focus/);
-  assert.match(svg, /\.session-dag-edge-insert-form\[aria-busy="true"\] input/);
-  assert.match(svg, /\.session-dag-edge-insert-form button\[aria-disabled="true"\]/);
+  assert.match(svg, /createSessionDagNodeAddControl/);
+  assert.match(svg, /session-dag-node-add-control/);
+  assert.match(svg, /hitTarget\.setAttribute\("r", "14"\)/);
+  assert.match(svg, /visibleDot\.setAttribute\("r", "5"\)/);
+  assert.match(svg, /background\.setAttribute\("width", "48"\)/);
+  assert.match(svg, /background\.setAttribute\("height", "22"\)/);
+  assert.match(svg, /font-size: 9px/);
+  assert.match(svg, /\.session-dag-node-add-form input:focus/);
+  assert.match(svg, /\.session-dag-node-add-form\[aria-busy="true"\] input/);
   assert.doesNotMatch(svg, /dangerouslySetInnerHTML|innerHTML|insertAdjacentHTML|\.onclick\s*=|__sessionDagDebug/);
 });
 

@@ -11,6 +11,7 @@ import {
 import {
   SESSION_DAG_MAX_SESSION_ID_LENGTH,
   type CompiledSessionDag,
+  type SessionDagDirection,
   type SessionDagEdge,
 } from "@/lib/session-dag";
 import {
@@ -19,10 +20,12 @@ import {
   createSessionDagCompleteControl,
   createSessionDagControlLayer,
   createSessionDagEdgeActionControl,
+  createSessionDagNodeAddControl,
   getSessionDagControlPosition,
   getSessionDagEdgeMidpoint,
   getSessionDagOverlayPosition,
   prepareSessionDagSvg,
+  shouldDeferSessionDagNodeFocusRestore,
   updateSessionDagCurrentNode,
   updateSessionDagEdgeActionControl,
   type PreparedSessionDagSvg,
@@ -39,15 +42,30 @@ interface Props {
   revision: number;
   nodeCount: number;
   edgeCount: number;
+  nodeFormAssignments: ReadonlyMap<string, string>;
+  direction: SessionDagDirection;
   onComplete: (sessionId: string) => Promise<boolean>;
   onSwap: (edge: SessionDagEdge) => Promise<boolean>;
   onInsert: (edge: SessionDagEdge, insertedSessionId: string) => Promise<boolean>;
+  onAddNodeEdge: (
+    anchorSessionId: string,
+    enteredSessionId: string,
+    direction: NodeEdgeDirection,
+  ) => Promise<NodeEdgeMutationResult>;
 }
 
 type PreviewFailureStage = "compile" | "load" | "parse" | "render" | SessionDagSvgFailureStage;
 type EdgeFocusTarget = "dot" | "swap" | "insert" | "input" | null;
+type NodeFocusTarget = "add" | "input" | "incoming" | "outgoing" | null;
+type NodeEdgeDirection = "incoming" | "outgoing";
+
+interface NodeEdgeMutationResult {
+  accepted: boolean;
+  authorityAdopted: boolean;
+}
 
 interface EdgeInteraction {
+  kind: "edge";
   edgeId: string;
   formId: string;
   fromSessionId: string;
@@ -58,12 +76,36 @@ interface EdgeInteraction {
   focusTarget: EdgeFocusTarget;
 }
 
+interface NodeInteraction {
+  kind: "node";
+  anchorSessionId: string;
+  formId: string;
+  value: string;
+  pending: boolean;
+  direction: NodeEdgeDirection | null;
+  focusTarget: NodeFocusTarget;
+}
+
+type PreviewInteraction = EdgeInteraction | NodeInteraction;
+
 interface EdgeControlRecord {
   edge: SessionDagEdge;
   control: SessionDagEdgeActionControl;
   form: HTMLFormElement;
   input: HTMLInputElement;
   submit: HTMLButtonElement;
+  cancel: HTMLButtonElement;
+  apply: () => void;
+}
+
+interface NodeControlRecord {
+  anchorSessionId: string;
+  formId: string;
+  control: SVGGElement;
+  form: HTMLFormElement;
+  input: HTMLInputElement;
+  incoming: HTMLButtonElement;
+  outgoing: HTMLButtonElement;
   cancel: HTMLButtonElement;
   apply: () => void;
 }
@@ -91,14 +133,24 @@ function logPreviewFailure(
   });
 }
 
-function interactionMatchesRecord(
-  interaction: EdgeInteraction | null,
+function interactionMatchesEdgeRecord(
+  interaction: PreviewInteraction | null,
   record: EdgeControlRecord,
 ): interaction is EdgeInteraction {
-  return interaction?.edgeId === record.edge.id
+  return interaction?.kind === "edge"
+    && interaction.edgeId === record.edge.id
     && interaction.formId === record.edge.formId
     && interaction.fromSessionId === record.edge.fromSessionId
     && interaction.toSessionId === record.edge.toSessionId;
+}
+
+function interactionMatchesNodeRecord(
+  interaction: PreviewInteraction | null,
+  record: NodeControlRecord,
+): interaction is NodeInteraction {
+  return interaction?.kind === "node"
+    && interaction.anchorSessionId === record.anchorSessionId
+    && interaction.formId === record.formId;
 }
 
 function focusElement(element: Element | null): void {
@@ -114,9 +166,12 @@ export function SessionDagPreview({
   revision,
   nodeCount,
   edgeCount,
+  nodeFormAssignments,
+  direction,
   onComplete,
   onSwap,
   onInsert,
+  onAddNodeEdge,
 }: Props) {
   const { isDark } = useTheme();
   const { transcriptFontSize } = useDisplayPreferences();
@@ -127,14 +182,18 @@ export function SessionDagPreview({
   } | null>(null);
   const markedNodeRef = useRef<SVGGElement | null>(null);
   const currentSelectionRef = useRef({ active, selectedSessionId });
-  const edgeInteractionRef = useRef<EdgeInteraction | null>(null);
+  const interactionRef = useRef<PreviewInteraction | null>(null);
   const edgeControlRecordsRef = useRef<Map<string, EdgeControlRecord>>(new Map());
+  const nodeControlRecordsRef = useRef<Map<string, NodeControlRecord>>(new Map());
+  const nodeFocusRestoreRef = useRef<{ anchorSessionId: string; formId: string } | null>(null);
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
   const onSwapRef = useRef(onSwap);
   onSwapRef.current = onSwap;
   const onInsertRef = useRef(onInsert);
   onInsertRef.current = onInsert;
+  const onAddNodeEdgeRef = useRef(onAddNodeEdge);
+  onAddNodeEdgeRef.current = onAddNodeEdge;
   const [renderStage, setRenderStage] = useState("idle");
   const [failure, setFailure] = useState<{ stage: PreviewFailureStage; errorClass: string } | null>(null);
   const currentKey = compiled
@@ -152,6 +211,7 @@ export function SessionDagPreview({
       );
       preparedRenderRef.current = null;
       edgeControlRecordsRef.current = new Map();
+      nodeControlRecordsRef.current = new Map();
     };
     const container = containerRef.current;
     if (!container || !active) {
@@ -162,7 +222,8 @@ export function SessionDagPreview({
     const renderRoot = container.shadowRoot ?? container.attachShadow({ mode: "open" });
     if (!compiled) {
       const error = compileError ?? new Error("Dependency graph compilation failed");
-      edgeInteractionRef.current = null;
+      interactionRef.current = null;
+      nodeFocusRestoreRef.current = null;
       renderRoot.replaceChildren();
       setFailure({ stage: "compile", errorClass: boundedErrorClass(error) });
       setRenderStage("failed");
@@ -259,47 +320,76 @@ export function SessionDagPreview({
           });
         };
 
-        const records = new Map<string, EdgeControlRecord>();
-        const recordForInteraction = () => {
-          const interaction = edgeInteractionRef.current;
-          if (!interaction) return null;
+        const edgeRecords = new Map<string, EdgeControlRecord>();
+        const nodeRecords = new Map<string, NodeControlRecord>();
+        const edgeRecordForInteraction = () => {
+          const interaction = interactionRef.current;
+          if (interaction?.kind !== "edge") return null;
           const record = edgeControlRecordsRef.current.get(interaction.edgeId);
-          return record && interactionMatchesRecord(interaction, record) ? record : null;
+          return record && interactionMatchesEdgeRecord(interaction, record) ? record : null;
+        };
+        const nodeRecordForInteraction = () => {
+          const interaction = interactionRef.current;
+          if (interaction?.kind !== "node") return null;
+          const record = nodeControlRecordsRef.current.get(interaction.anchorSessionId);
+          return record && interactionMatchesNodeRecord(interaction, record) ? record : null;
         };
         const applyAllRecords = () => {
           for (const record of edgeControlRecordsRef.current.values()) record.apply();
+          for (const record of nodeControlRecordsRef.current.values()) record.apply();
         };
         const focusInteractionTarget = () => {
-          const interaction = edgeInteractionRef.current;
-          const record = recordForInteraction();
-          if (!interaction || !record) return;
-          const target = interaction.focusTarget === "dot"
-            ? record.control.dot
-            : interaction.focusTarget === "swap"
-              ? record.control.swap
-              : interaction.focusTarget === "insert"
-                ? record.control.insert
-                : interaction.focusTarget === "input"
-                  ? record.input
-                  : null;
-          focusElement(target);
+          const interaction = interactionRef.current;
+          if (interaction?.kind === "edge") {
+            const record = edgeRecordForInteraction();
+            if (!record) return;
+            const target = interaction.focusTarget === "dot"
+              ? record.control.dot
+              : interaction.focusTarget === "swap"
+                ? record.control.swap
+                : interaction.focusTarget === "insert"
+                  ? record.control.insert
+                  : interaction.focusTarget === "input"
+                    ? record.input
+                    : null;
+            focusElement(target);
+            return;
+          }
+          if (interaction?.kind === "node") {
+            const record = nodeRecordForInteraction();
+            if (!record) return;
+            const target = interaction.focusTarget === "add"
+              ? record.control
+              : interaction.focusTarget === "input"
+                ? record.input
+                : interaction.focusTarget === "incoming"
+                  ? record.incoming
+                  : interaction.focusTarget === "outgoing"
+                    ? record.outgoing
+                    : null;
+            focusElement(target);
+          }
         };
-        const closeInteraction = (restoreDotFocus: boolean) => {
-          const interaction = edgeInteractionRef.current;
-          const record = recordForInteraction();
+        const closeInteraction = (restoreControlFocus: boolean) => {
+          const interaction = interactionRef.current;
+          const edgeRecord = edgeRecordForInteraction();
+          const nodeRecord = nodeRecordForInteraction();
           if (!interaction || interaction.pending) return;
-          edgeInteractionRef.current = null;
+          interactionRef.current = null;
           applyAllRecords();
-          if (restoreDotFocus) focusElement(record?.control.dot ?? null);
+          if (restoreControlFocus) {
+            focusElement(edgeRecord?.control.dot ?? nodeRecord?.control ?? null);
+          }
         };
-        const openActions = (record: EdgeControlRecord) => {
-          const current = edgeInteractionRef.current;
+        const openEdgeActions = (record: EdgeControlRecord) => {
+          const current = interactionRef.current;
           if (current?.pending) return;
-          if (interactionMatchesRecord(current, record)) {
+          if (interactionMatchesEdgeRecord(current, record)) {
             closeInteraction(true);
             return;
           }
-          edgeInteractionRef.current = {
+          interactionRef.current = {
+            kind: "edge",
             edgeId: record.edge.id,
             formId: record.edge.formId,
             fromSessionId: record.edge.fromSessionId,
@@ -312,17 +402,39 @@ export function SessionDagPreview({
           applyAllRecords();
           focusElement(record.control.dot);
         };
+        const openNodeForm = (record: NodeControlRecord) => {
+          const current = interactionRef.current;
+          if (current?.pending) return;
+          if (interactionMatchesNodeRecord(current, record)) {
+            closeInteraction(true);
+            return;
+          }
+          interactionRef.current = {
+            kind: "node",
+            anchorSessionId: record.anchorSessionId,
+            formId: record.formId,
+            value: "",
+            pending: false,
+            direction: null,
+            focusTarget: "input",
+          };
+          applyAllRecords();
+          queueMicrotask(focusInteractionTarget);
+        };
         const settleAcceptedEdgeMutation = (record: EdgeControlRecord) => {
-          const interaction = edgeInteractionRef.current;
-          if (!interactionMatchesRecord(interaction, record)) return;
-          const currentRecord = recordForInteraction();
-          edgeInteractionRef.current = null;
+          const interaction = interactionRef.current;
+          if (!interactionMatchesEdgeRecord(interaction, record)) return;
+          const currentRecord = edgeRecordForInteraction();
+          interactionRef.current = null;
           applyAllRecords();
           focusElement(currentRecord?.control.dot ?? null);
         };
-        const settleRejectedEdgeMutation = (edgeId: string, focusTarget: EdgeFocusTarget) => {
-          const interaction = edgeInteractionRef.current;
-          if (!interaction || interaction.edgeId !== edgeId) return;
+        const settleRejectedEdgeMutation = (
+          edgeId: string,
+          focusTarget: Exclude<EdgeFocusTarget, null>,
+        ) => {
+          const interaction = interactionRef.current;
+          if (interaction?.kind !== "edge" || interaction.edgeId !== edgeId) return;
           interaction.pending = false;
           interaction.focusTarget = focusTarget;
           applyAllRecords();
@@ -333,8 +445,8 @@ export function SessionDagPreview({
           focusTarget: Exclude<EdgeFocusTarget, null>,
           operation: () => Promise<boolean>,
         ) => {
-          const interaction = edgeInteractionRef.current;
-          if (!interactionMatchesRecord(interaction, record) || interaction.pending) return;
+          const interaction = interactionRef.current;
+          if (!interactionMatchesEdgeRecord(interaction, record) || interaction.pending) return;
           interaction.pending = true;
           interaction.focusTarget = focusTarget;
           applyAllRecords();
@@ -347,7 +459,67 @@ export function SessionDagPreview({
             settleRejectedEdgeMutation(record.edge.id, focusTarget);
           }
         };
-        const bindEdgeActivation = (control: SVGGElement, activateControl: () => void) => {
+        const settleAcceptedNodeMutation = (
+          record: NodeControlRecord,
+          authorityAdopted: boolean,
+        ) => {
+          const interaction = interactionRef.current;
+          if (!interactionMatchesNodeRecord(interaction, record)) return;
+          const currentRecord = nodeRecordForInteraction();
+          const deferFocusRestore = shouldDeferSessionDagNodeFocusRestore(
+            currentSelectionRef.current.active,
+            authorityAdopted,
+            currentRecord !== null,
+            currentRecord === record,
+          );
+          nodeFocusRestoreRef.current = deferFocusRestore ? {
+            anchorSessionId: record.anchorSessionId,
+            formId: record.formId,
+          } : null;
+          interactionRef.current = null;
+          applyAllRecords();
+          focusElement(currentRecord?.control ?? null);
+        };
+        const settleRejectedNodeMutation = (
+          anchorSessionId: string,
+          formId: string,
+          direction: NodeEdgeDirection,
+        ) => {
+          const interaction = interactionRef.current;
+          if (interaction?.kind !== "node"
+            || interaction.anchorSessionId !== anchorSessionId
+            || interaction.formId !== formId) return;
+          interaction.pending = false;
+          interaction.direction = direction;
+          interaction.focusTarget = direction;
+          applyAllRecords();
+          focusInteractionTarget();
+        };
+        const runNodeMutation = (record: NodeControlRecord, direction: NodeEdgeDirection) => {
+          const interaction = interactionRef.current;
+          if (!interactionMatchesNodeRecord(interaction, record) || interaction.pending) return;
+          interaction.value = record.input.value;
+          interaction.pending = true;
+          interaction.direction = direction;
+          interaction.focusTarget = direction;
+          applyAllRecords();
+          try {
+            void onAddNodeEdgeRef.current(
+              record.anchorSessionId,
+              interaction.value,
+              direction,
+            ).then((result) => {
+              if (result.accepted) {
+                settleAcceptedNodeMutation(record, result.authorityAdopted);
+              } else {
+                settleRejectedNodeMutation(record.anchorSessionId, record.formId, direction);
+              }
+            }, () => settleRejectedNodeMutation(record.anchorSessionId, record.formId, direction));
+          } catch {
+            settleRejectedNodeMutation(record.anchorSessionId, record.formId, direction);
+          }
+        };
+        const bindAuthoringActivation = (control: SVGGElement, activateControl: () => void) => {
           control.addEventListener("click", (event) => {
             event.stopPropagation();
             if (control.getAttribute("aria-disabled") === "true") return;
@@ -381,6 +553,7 @@ export function SessionDagPreview({
             fromLabel,
             toLabel,
             selfEdge,
+            direction,
           );
           const position = getSessionDagEdgeMidpoint(edgePath, prepared.svg);
           const overlayPosition = getSessionDagOverlayPosition(prepared.svg, position.x, position.y);
@@ -424,8 +597,8 @@ export function SessionDagPreview({
             submit,
             cancel,
             apply: () => {
-              const interaction = edgeInteractionRef.current;
-              const ownsInteraction = interactionMatchesRecord(interaction, record);
+              const interaction = interactionRef.current;
+              const ownsInteraction = interactionMatchesEdgeRecord(interaction, record);
               const mode: SessionDagEdgeActionMode = ownsInteraction ? interaction.mode : "collapsed";
               const pending = ownsInteraction && interaction.pending;
               updateSessionDagEdgeActionControl(control, mode, pending);
@@ -445,45 +618,45 @@ export function SessionDagPreview({
               }
             },
           };
-          records.set(edge.id, record);
+          edgeRecords.set(edge.id, record);
           controlLayer.appendChild(control.root);
 
-          bindEdgeActivation(control.dot, () => openActions(record));
+          bindAuthoringActivation(control.dot, () => openEdgeActions(record));
           if (!selfEdge) {
-            bindEdgeActivation(control.swap, () => runEdgeMutation(
+            bindAuthoringActivation(control.swap, () => runEdgeMutation(
               record,
               "swap",
               () => onSwapRef.current(edge),
             ));
           }
-          bindEdgeActivation(control.insert, () => {
-            const interaction = edgeInteractionRef.current;
-            if (!interactionMatchesRecord(interaction, record) || interaction.pending) return;
+          bindAuthoringActivation(control.insert, () => {
+            const interaction = interactionRef.current;
+            if (!interactionMatchesEdgeRecord(interaction, record) || interaction.pending) return;
             interaction.mode = "insert";
             interaction.focusTarget = "input";
             applyAllRecords();
             queueMicrotask(focusInteractionTarget);
           });
           input.addEventListener("input", () => {
-            const interaction = edgeInteractionRef.current;
-            if (!interactionMatchesRecord(interaction, record) || interaction.pending) return;
+            const interaction = interactionRef.current;
+            if (!interactionMatchesEdgeRecord(interaction, record) || interaction.pending) return;
             interaction.value = input.value;
           });
           input.addEventListener("focus", () => {
-            const interaction = edgeInteractionRef.current;
-            if (interactionMatchesRecord(interaction, record)) interaction.focusTarget = "input";
+            const interaction = interactionRef.current;
+            if (interactionMatchesEdgeRecord(interaction, record)) interaction.focusTarget = "input";
           });
           control.dot.addEventListener("focus", () => {
-            const interaction = edgeInteractionRef.current;
-            if (interactionMatchesRecord(interaction, record)) interaction.focusTarget = "dot";
+            const interaction = interactionRef.current;
+            if (interactionMatchesEdgeRecord(interaction, record)) interaction.focusTarget = "dot";
           });
           control.swap.addEventListener("focus", () => {
-            const interaction = edgeInteractionRef.current;
-            if (interactionMatchesRecord(interaction, record)) interaction.focusTarget = "swap";
+            const interaction = interactionRef.current;
+            if (interactionMatchesEdgeRecord(interaction, record)) interaction.focusTarget = "swap";
           });
           control.insert.addEventListener("focus", () => {
-            const interaction = edgeInteractionRef.current;
-            if (interactionMatchesRecord(interaction, record)) interaction.focusTarget = "insert";
+            const interaction = interactionRef.current;
+            if (interactionMatchesEdgeRecord(interaction, record)) interaction.focusTarget = "insert";
           });
           cancel.addEventListener("click", (event) => {
             event.preventDefault();
@@ -498,8 +671,8 @@ export function SessionDagPreview({
           form.addEventListener("submit", (event) => {
             event.preventDefault();
             event.stopPropagation();
-            const interaction = edgeInteractionRef.current;
-            if (!interactionMatchesRecord(interaction, record) || interaction.pending) return;
+            const interaction = interactionRef.current;
+            if (!interactionMatchesEdgeRecord(interaction, record) || interaction.pending) return;
             interaction.value = input.value;
             runEdgeMutation(
               record,
@@ -509,35 +682,233 @@ export function SessionDagPreview({
           });
           record.apply();
         }
-        edgeControlRecordsRef.current = records;
+        for (const anchorSessionId of compiled.activeSessionIds) {
+          const alias = compiled.aliasesBySessionId.get(anchorSessionId);
+          const label = compiled.labelsBySessionId.get(anchorSessionId);
+          const nodeGroup = alias ? prepared.nodeGroupsByAlias.get(alias) : undefined;
+          const formId = nodeFormAssignments.get(anchorSessionId);
+          const eligible = compiled.eligibleSessionIds.has(anchorSessionId);
+          if (!alias || !label || !nodeGroup || !formId) {
+            throw new SessionDagSvgError("controls", "An active node is missing from the rendered graph");
+          }
+          const bounds = nodeGroup.getBBox();
+          const minimumWidth = eligible ? 44 : 22;
+          if (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)
+            || bounds.width < minimumWidth || bounds.height < 22) {
+            throw new SessionDagSvgError("controls", "An active node has invalid geometry");
+          }
+          const controlPosition = getSessionDagControlPosition(
+            nodeGroup,
+            prepared.svg,
+            bounds.x + 11,
+            bounds.y + 11,
+          );
+          const overlayPosition = getSessionDagOverlayPosition(
+            prepared.svg,
+            controlPosition.x,
+            controlPosition.y,
+          );
+          const control = createSessionDagNodeAddControl(container.ownerDocument, label);
+          control.setAttribute(
+            "transform",
+            `translate(${String(controlPosition.x)} ${String(controlPosition.y)})`,
+          );
 
-        const savedInteraction = edgeInteractionRef.current;
-        if (savedInteraction) {
-          const savedRecord = records.get(savedInteraction.edgeId);
-          if (!savedRecord || !interactionMatchesRecord(savedInteraction, savedRecord)) {
-            edgeInteractionRef.current = null;
+          const form = container.ownerDocument.createElement("form");
+          form.setAttribute("class", "session-dag-node-add-form");
+          form.setAttribute("aria-label", `Add dependency connected to ${label}`);
+          form.style.setProperty("--session-dag-node-add-left", `${String(overlayPosition.leftPercent)}%`);
+          form.style.setProperty("--session-dag-node-add-top", `${String(overlayPosition.topPercent)}%`);
+          form.hidden = true;
+          const inputLabel = container.ownerDocument.createElement("label");
+          const inputLabelText = container.ownerDocument.createElement("span");
+          inputLabelText.textContent = "Session ID";
+          const input = container.ownerDocument.createElement("input");
+          input.type = "text";
+          input.maxLength = SESSION_DAG_MAX_SESSION_ID_LENGTH;
+          input.autocomplete = "off";
+          input.autocapitalize = "off";
+          input.spellcheck = false;
+          input.autofocus = true;
+          input.setAttribute("aria-label", `Session ID to connect with ${label}`);
+          inputLabel.append(inputLabelText, input);
+          const formActions = container.ownerDocument.createElement("div");
+          formActions.setAttribute("class", "session-dag-node-add-actions");
+          const incoming = container.ownerDocument.createElement("button");
+          incoming.type = "submit";
+          incoming.textContent = "Incoming: ID → this node";
+          incoming.setAttribute("aria-label", `Incoming dependency from entered session ID to ${label}`);
+          const outgoing = container.ownerDocument.createElement("button");
+          outgoing.type = "submit";
+          outgoing.textContent = "Outgoing: this node → ID";
+          outgoing.setAttribute("aria-label", `Outgoing dependency from ${label} to entered session ID`);
+          formActions.append(incoming, outgoing);
+          const cancel = container.ownerDocument.createElement("button");
+          cancel.type = "button";
+          cancel.setAttribute("class", "session-dag-node-add-cancel");
+          cancel.textContent = "Cancel";
+          form.append(inputLabel, formActions, cancel);
+          insertOverlayLayer.appendChild(form);
+
+          const record: NodeControlRecord = {
+            anchorSessionId,
+            formId,
+            control,
+            form,
+            input,
+            incoming,
+            outgoing,
+            cancel,
+            apply: () => {
+              const interaction = interactionRef.current;
+              const ownsInteraction = interactionMatchesNodeRecord(interaction, record);
+              const pending = ownsInteraction && interaction.pending;
+              control.setAttribute("aria-expanded", String(ownsInteraction));
+              control.setAttribute(
+                "aria-label",
+                `${ownsInteraction ? "Close" : "Add"} dependency connected to ${label}`,
+              );
+              if (pending) {
+                control.setAttribute("aria-disabled", "true");
+                control.setAttribute("data-session-dag-pending", "true");
+                control.setAttribute("tabindex", "-1");
+              } else {
+                control.removeAttribute("aria-disabled");
+                control.removeAttribute("data-session-dag-pending");
+                control.setAttribute("tabindex", "0");
+              }
+              form.hidden = !ownsInteraction;
+              if (ownsInteraction && input.value !== interaction.value) {
+                input.value = interaction.value;
+              }
+              form.setAttribute("aria-busy", String(pending));
+              input.readOnly = pending;
+              for (const button of [incoming, outgoing, cancel]) {
+                if (pending) button.setAttribute("aria-disabled", "true");
+                else button.removeAttribute("aria-disabled");
+              }
+            },
+          };
+          nodeRecords.set(anchorSessionId, record);
+          controlLayer.appendChild(control);
+
+          bindAuthoringActivation(control, () => openNodeForm(record));
+          input.addEventListener("input", () => {
+            const interaction = interactionRef.current;
+            if (!interactionMatchesNodeRecord(interaction, record) || interaction.pending) return;
+            interaction.value = input.value;
+          });
+          input.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            event.stopPropagation();
+          });
+          input.addEventListener("focus", () => {
+            const interaction = interactionRef.current;
+            if (interactionMatchesNodeRecord(interaction, record)) interaction.focusTarget = "input";
+          });
+          control.addEventListener("focus", () => {
+            const interaction = interactionRef.current;
+            if (interactionMatchesNodeRecord(interaction, record)) interaction.focusTarget = "add";
+          });
+          incoming.addEventListener("focus", () => {
+            const interaction = interactionRef.current;
+            if (interactionMatchesNodeRecord(interaction, record)) interaction.focusTarget = "incoming";
+          });
+          outgoing.addEventListener("focus", () => {
+            const interaction = interactionRef.current;
+            if (interactionMatchesNodeRecord(interaction, record)) interaction.focusTarget = "outgoing";
+          });
+          cancel.addEventListener("click", (event) => {
+            event.preventDefault();
+            closeInteraction(true);
+          });
+          form.addEventListener("keydown", (event) => {
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            event.stopPropagation();
+            closeInteraction(true);
+          });
+          form.addEventListener("submit", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const submitter = (event as SubmitEvent).submitter;
+            const direction = submitter === incoming
+              ? "incoming"
+              : submitter === outgoing
+                ? "outgoing"
+                : null;
+            if (direction) runNodeMutation(record, direction);
+          });
+          record.apply();
+
+          if (eligible) {
+            const completeControl = createSessionDagCompleteControl(container.ownerDocument, label);
+            const completePosition = getSessionDagControlPosition(
+              nodeGroup,
+              prepared.svg,
+              bounds.x + bounds.width - 11,
+              bounds.y + 11,
+            );
+            completeControl.setAttribute(
+              "transform",
+              `translate(${String(completePosition.x)} ${String(completePosition.y)})`,
+            );
+            bindMutationActivation(completeControl, () => onCompleteRef.current(anchorSessionId));
+            controlLayer.appendChild(completeControl);
+          }
+        }
+
+        edgeControlRecordsRef.current = edgeRecords;
+        nodeControlRecordsRef.current = nodeRecords;
+
+        const savedInteraction = interactionRef.current;
+        if (savedInteraction?.kind === "edge") {
+          const savedRecord = edgeRecords.get(savedInteraction.edgeId);
+          if (!savedRecord || !interactionMatchesEdgeRecord(savedInteraction, savedRecord)) {
+            interactionRef.current = null;
+          }
+        } else if (savedInteraction?.kind === "node") {
+          const savedRecord = nodeRecords.get(savedInteraction.anchorSessionId);
+          if (!savedRecord || !interactionMatchesNodeRecord(savedInteraction, savedRecord)) {
+            interactionRef.current = null;
           }
         }
         applyAllRecords();
-        if (edgeInteractionRef.current?.focusTarget) queueMicrotask(focusInteractionTarget);
+        if (interactionRef.current?.focusTarget) queueMicrotask(focusInteractionTarget);
+
+        const focusRestore = nodeFocusRestoreRef.current;
+        if (focusRestore && !interactionRef.current) {
+          nodeFocusRestoreRef.current = null;
+          const record = nodeRecords.get(focusRestore.anchorSessionId);
+          if (record?.formId === focusRestore.formId) {
+            queueMicrotask(() => focusElement(record.control));
+          }
+        }
 
         const onDocumentClick = (event: Event) => {
-          const interaction = edgeInteractionRef.current;
-          const activeRecord = recordForInteraction();
-          if (!interaction || !activeRecord || interaction.pending) return;
+          const interaction = interactionRef.current;
+          const activeEdgeRecord = edgeRecordForInteraction();
+          const activeNodeRecord = nodeRecordForInteraction();
+          const activeForm = activeEdgeRecord?.form ?? activeNodeRecord?.form;
+          if (!interaction || !activeForm || interaction.pending) return;
           const path = event.composedPath();
-          if (path.includes(activeRecord.form)
-            || [...edgeControlRecordsRef.current.values()].some((record) => path.includes(record.control.root))) {
+          if (path.includes(activeForm)
+            || [...edgeControlRecordsRef.current.values()].some((record) => path.includes(record.control.root))
+            || [...nodeControlRecordsRef.current.values()].some((record) => path.includes(record.control))) {
             return;
           }
           closeInteraction(true);
         };
         const onDocumentFocusIn = (event: FocusEvent) => {
-          const interaction = edgeInteractionRef.current;
-          const activeRecord = recordForInteraction();
-          if (!interaction || !activeRecord) return;
+          const interaction = interactionRef.current;
+          const activeEdgeRecord = edgeRecordForInteraction();
+          const activeNodeRecord = nodeRecordForInteraction();
+          const activeForm = activeEdgeRecord?.form ?? activeNodeRecord?.form;
+          const activeControl = activeEdgeRecord?.control.root ?? activeNodeRecord?.control;
+          if (!interaction || !activeForm || !activeControl) return;
           const path = event.composedPath();
-          if (!path.includes(activeRecord.form) && !path.includes(activeRecord.control.root)) {
+          if (!path.includes(activeForm) && !path.includes(activeControl)) {
             interaction.focusTarget = null;
           }
         };
@@ -547,30 +918,6 @@ export function SessionDagPreview({
           container.ownerDocument.removeEventListener("click", onDocumentClick, true);
           container.ownerDocument.removeEventListener("focusin", onDocumentFocusIn, true);
         };
-
-        for (const sessionId of compiled.eligibleSessionIds) {
-          const alias = compiled.aliasesBySessionId.get(sessionId);
-          const label = compiled.labelsBySessionId.get(sessionId);
-          const nodeGroup = alias ? prepared.nodeGroupsByAlias.get(alias) : undefined;
-          if (!alias || !label || !nodeGroup) {
-            throw new SessionDagSvgError("controls", "An eligible node is missing from the rendered graph");
-          }
-          const bounds = nodeGroup.getBBox();
-          if (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)
-            || bounds.width < 22 || bounds.height < 22) {
-            throw new SessionDagSvgError("controls", "An eligible node has invalid geometry");
-          }
-          const control = createSessionDagCompleteControl(container.ownerDocument, label);
-          const position = getSessionDagControlPosition(
-            nodeGroup,
-            prepared.svg,
-            bounds.x + bounds.width - 11,
-            bounds.y + 11,
-          );
-          control.setAttribute("transform", `translate(${String(position.x)} ${String(position.y)})`);
-          bindMutationActivation(control, () => onCompleteRef.current(sessionId));
-          controlLayer.appendChild(control);
-        }
       } catch (error) {
         failureStage = error instanceof SessionDagSvgError ? error.stage : "controls";
         throw error;
@@ -617,6 +964,8 @@ export function SessionDagPreview({
     edgeCount,
     isDark,
     nodeCount,
+    nodeFormAssignments,
+    direction,
     revision,
     transcriptFontSize,
   ]);
