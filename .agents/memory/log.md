@@ -76,6 +76,10 @@
 
 - Updated session-dependency-graph memory after replacing always-visible Preview Swap buttons with one-expanded trusted edge-action dots and adding bounded recoverable Insert forms backed by one strict, generation-current, atomic one-edge-to-two-edge transaction without a persistence schema change.
 
+## 2026-08-30
+
+- Updated browser-local display-preference memory after replacing the artificial `1000px` panel-resize cutoff with split-presentation and real-range eligibility, preserving visible-panel bounds and minima, and widening coarse-pointer targets without changing separator appearance.
+
 ## 2026-08-31
 
 - Updated session-dependency-graph memory after adding persistent trusted node quick-add controls with explicit Incoming/Outgoing `add_edge` authoring, one unified recoverable node/edge interaction lifecycle, and larger midpoint edge controls without changing graph authority or persistence.

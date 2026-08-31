@@ -1831,7 +1831,7 @@ html.dark .session-dag-feedback[data-kind="success"] { color: #86efac; }
   content: "";
   position: absolute;
   inset-block: 0;
-  left: 5px;
+  left: calc(50% - 1px);
   width: 2px;
   pointer-events: none;
   background: transparent;
@@ -1845,7 +1845,14 @@ html.dark .session-dag-feedback[data-kind="success"] { color: #86efac; }
   background: var(--accent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
 }
-@media (max-width: 999px) {
+@media (pointer: coarse), (any-pointer: coarse) {
+  .panel-resize-handle {
+    width: 24px;
+    margin-inline: -12px;
+    flex-basis: 24px;
+  }
+}
+@media (max-width: 640px) {
   .panel-resize-handle {
     display: none !important;
     pointer-events: none !important;
