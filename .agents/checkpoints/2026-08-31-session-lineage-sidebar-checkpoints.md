@@ -24,7 +24,7 @@ Plan: `.agents/plans/2026-08-31-session-lineage-sidebar.md`
 
 **Departures from approved obligations:** None. Full relevant Node tests, independent review, final gates, implementation commit, mandatory final summary, and guarded closeout remain pending.
 
-**Implementation commit:** Pending.
+**Implementation commit:** `c69fbf9a260184a0c93ebb8f95069ff54d8fa920`
 
 ## Handoff
 
@@ -50,4 +50,4 @@ Plan: `.agents/plans/2026-08-31-session-lineage-sidebar.md`
 
 **Departures from approved obligations:** None. Final complete-suite rerun, memory update, final parent review/gates, implementation commit, mandatory final summary, and guarded closeout remain pending. Per user direction, no additional independent review was started.
 
-**Implementation commit:** Pending.
+**Implementation commit:** `c69fbf9a260184a0c93ebb8f95069ff54d8fa920`
