@@ -93,3 +93,15 @@ Plan: `.agents/plans/2026-08-31-dag-preview-performance-navigation.md`
 **Uncertainty / gaps:** The mounted same-session regression remains exercised by the ignored isolated browser harness rather than a tracked component-mount test; tracked structural assertions cover the narrow ownership wiring. No functional gap was identified.
 
 **Recommended use:** Accept the corrections and proceed to final parent validation, commit, and guarded closeout.
+
+## Implementation Summary
+
+**Plan section:** Final summary — complete approved DAG Preview performance and session-navigation plan, including VC-001 through VC-005.
+
+**Work and outcome:** Completed the plan in implementation commit `ec360d0`. Endpoint-authorized DAG mutations now use fresh generation-current bounded-header exact-ID discovery rather than transcript/project enrichment. Available rendered nodes now expose trusted accessible Go-to controls that select exact current session metadata through the existing application owner, preserve sidebar explicit-open unread/worktree effects, omit unavailable nodes, isolate authoring interactions, fail closed on overlapping control geometry, and leave DAG/right-panel/shared Hide state unchanged. Maintained architecture and memory documentation describe the resulting boundaries.
+
+**Validation / evidence:** The final focused DAG/sidebar/reader suite passed 98 tests. TypeScript, ESLint, and `git diff --check` passed. The fresh isolated 400-session browser run passed five successful additions with immediate pending feedback, one PATCH / zero DAG GETs / one render each, PATCH median 20.3 ms and maximum 25.4 ms, and click-to-completed-paint median 84.8 ms and maximum 96.7 ms. It also passed exact pointer/Enter/Space navigation, same-session unread clearing and manually switched worktree restoration, hidden/unavailable behavior, selected-marker/chat/URL/sidebar convergence, pending-authoring isolation, unchanged split/expanded/mobile panel state, later manual reveal, themes/focus, and TD/LR geometry with zero collisions or near-edge controls. Fresh follow-up reviewer `4edec44d` reported no blockers or required fixes.
+
+**Departures from approved obligations:** None. The two independent-review findings were disclosed to the user and, after explicit authorization, corrected within VC-003/VC-004; no obligation was waived, superseded, left incomplete, or expanded beyond the approved result.
+
+**Implementation commit:** `ec360d0` (`Speed DAG mutations and add session navigation`).
