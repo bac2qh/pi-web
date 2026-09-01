@@ -63,3 +63,13 @@ Plan: `.agents/plans/2026-08-31-session-lineage-sidebar.md`
 **Departures from approved obligations:** None. No obligation is incomplete, blocked, waived, superseded, or divergent. No API, schema, persisted preference, dependency, telemetry, or DOM-harness expansion was added; the approved source/pure tests plus explicit browser matrix supplied the intentionally unavailable DOM-interaction layer. The inherited risk of pathological depth beyond the validated depth-14 family remains unchanged and does not represent an implementation departure.
 
 **Implementation commit:** `c69fbf9a260184a0c93ebb8f95069ff54d8fa920`
+
+## Closeout Recovery
+
+**Completed transitions:** Committed the validated implementation and mandatory final Implementation Summary on the task branch, captured task tip `5b321b940eca1a304bdc5e52f18d3daa015e7d86` and then-current main tip `25f2a60ca3d3bcd22a860a879b3099458a80df59`, proved the task checkout clean and main free of staged changes or an ongoing Git operation, proved existing main-worktree dirt did not overlap task paths, acquired the local-main mutex, and attempted the required normal merge because main had advanced. The merge was aborted without conflict choices; exact post-abort checks proved both captured main HEAD and its pre-attempt worktree status were restored. The mutex was released.
+
+**Blocker:** The normal merge produced content conflicts in `.agents/memory/log.md` and `components/SessionSidebar.tsx` after concurrent DAG/sidebar work reached main. Closeout policy forbids guessing `ours` or `theirs`, so no integration commit was created.
+
+**Preserved state:** Local main remains at `25f2a60ca3d3bcd22a860a879b3099458a80df59` with its pre-existing unrelated unstaged/untracked plan files unchanged, no merge state, no staged changes, and no held main lock. The implementation, validation evidence, final summary, branch `2026-08-31-session-lineage-sidebar`, and registered task worktree remain intact at captured pre-recovery tip `5b321b940eca1a304bdc5e52f18d3daa015e7d86`; only this bounded recovery record is being added afterward.
+
+**Safe retry point:** Resume from the retained task branch after this recovery commit. Reacquire the main mutex, recapture the latest main and task tips and statuses, then deliberately reconcile the two named conflicts against both completed feature sets before retrying guarded integration. Do not rerun the failed merge or select conflict sides without that reconciliation.
