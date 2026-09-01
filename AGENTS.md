@@ -108,7 +108,7 @@ lib/
 components/
   AppShell.tsx        layout + URL state + tabs + side-panel resize ownership
   AutomaticFileOpenConfirmation.tsx  narrow-width agent-path confirmation
-  SessionSidebar.tsx  Pinned/Recent/Project presentations + FileExplorer
+  SessionSidebar.tsx  Pinned/Recent/Lineage/Project presentations + FileExplorer
   SessionDagPanel.tsx structured dependency authoring, refresh, and mutation queue
   SessionDagPreview.tsx serialized Mermaid render + explicit completion interaction
   GlobalStatusProvider.tsx one running/discovery socket per loaded page
@@ -236,7 +236,10 @@ Newer Pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - `GET/PATCH /api/sidebar-state` stores versioned pi-web-only metadata in `getAgentDir()/pi-web-sidebar.json`. Clients send one idempotent `pin`, `unpin`, `hide`, or `restore` operation rather than replacing arrays.
 - Unread remains a separate browser-local presentation set under `pi-web:unread-session-ids`. Automatic background completion and the row's **Mark unread** action restore the same blue dot in every presentation; a newly running session or any explicit row open (including re-clicking the selected row) clears it. Do not add unread to the strict shared sidebar-state schema or mutate session JSONL for it.
 - `lib/sidebar-state-store.ts` serializes mutations with a bounded exclusive lock, rereads under the lock, rejects malformed/unsupported state without rewriting it, and publishes same-directory temporary writes by atomic rename. Stale IDs are pruned only when a complete `listAllSessions()` scan remains generation-current through metadata-lock acquisition.
-- `lib/sidebar-session-state.ts` builds hidden-descendant closure from the raw global session graph before filtering. Pinned order comes from stored IDs; Recent is the uncapped, unpinned exact ten-day window; Project families sort by their newest visible descendant; duplicate project basenames expand to shortest unique suffixes.
+- `lib/sidebar-session-state.ts` builds hidden-descendant closure from the raw global session graph before filtering. Pinned order comes from stored IDs; Recent is the uncapped, unpinned exact ten-day window; duplicate project basenames expand to shortest unique suffixes.
+- Sidebar order is Pinned, Recent, Lineage, Project, Explorer. Lineage starts expanded and Project starts collapsed; their reload-local section, branch-collapse, and scroll owners are independent. Selection reveals only the selected ancestor path in Lineage and adjusts only the Lineage scroll owner without moving focus; Project selection highlighting never expands or scrolls it.
+- Lineage derives the selected session's oldest available native ancestor plus every available descendant from the complete global listing, independent of the selected project/worktree. Normal mode applies global hidden-subtree projection first and explains a hidden or unavailable selection; Show hidden restores and labels those rows. Cross-project/worktree rows receive compact visible context while every Lineage row retains full context in its tooltip and accessible name.
+- Lineage and Project share cycle-safe depth-first tree rows, continuous ancestor guides and child elbows, and sibling-subtree sorting by newest visible descendant activity with own-activity/ID tie-breaks. Their collapse IDs remain separate even when the same session appears in both.
 - Hide/Restore never mutates Pi JSONL, settings, selection, running agents, navigation, or pin state. Show hidden is a reload-local UI mode. Cross-client convergence uses existing Refresh paths—there is no sidebar-state polling or SSE channel.
 
 ### Worktrees and project grouping

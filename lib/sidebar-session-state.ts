@@ -27,6 +27,17 @@ export interface SidebarSessionTreeNode {
   latestVisibleDescendantModified: number;
 }
 
+export type SelectedSessionLineage =
+  | { status: "unavailable" }
+  | { status: "hidden"; hiddenKind: HiddenSessionKind }
+  | {
+      status: "available";
+      selectedSession: SessionInfo;
+      selectedAncestorSessionIds: string[];
+      roots: SidebarSessionTreeNode[];
+      sessionCount: number;
+    };
+
 export interface SidebarSessionLists {
   hiddenSessionKinds: Map<string, HiddenSessionKind>;
   presentedSessions: SessionInfo[];
@@ -425,6 +436,85 @@ export function buildVisibleProjectSessionTree(sessions: readonly SessionInfo[])
   return roots;
 }
 
+function findLineageBoundarySessionId(
+  selectedSessionId: string,
+  sessionsById: ReadonlyMap<string, SessionInfo>,
+): string {
+  const path: string[] = [];
+  const pathIndexById = new Map<string, number>();
+  let currentId = selectedSessionId;
+
+  while (true) {
+    const existingIndex = pathIndexById.get(currentId);
+    if (existingIndex !== undefined) {
+      return [...path.slice(existingIndex)].sort((left, right) => left.localeCompare(right))[0];
+    }
+    pathIndexById.set(currentId, path.length);
+    path.push(currentId);
+
+    const parentId = sessionsById.get(currentId)?.parentSessionId;
+    if (!parentId || !sessionsById.has(parentId)) return currentId;
+    currentId = parentId;
+  }
+}
+
+function findRenderedAncestorSessionIds(
+  roots: readonly SidebarSessionTreeNode[],
+  selectedSessionId: string,
+): string[] {
+  const pending = [...roots]
+    .reverse()
+    .map((node) => ({ node, ancestorSessionIds: [] as string[] }));
+
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (current.node.session.id === selectedSessionId) return current.ancestorSessionIds;
+    const childAncestorSessionIds = [...current.ancestorSessionIds, current.node.session.id];
+    for (let index = current.node.children.length - 1; index >= 0; index -= 1) {
+      pending.push({
+        node: current.node.children[index],
+        ancestorSessionIds: childAncestorSessionIds,
+      });
+    }
+  }
+
+  return [];
+}
+
+export function deriveSelectedSessionLineage(
+  allSessions: readonly SessionInfo[],
+  presentedSessions: readonly SessionInfo[],
+  hiddenSessionKinds: ReadonlyMap<string, HiddenSessionKind>,
+  selectedSessionId: string | null,
+): SelectedSessionLineage {
+  if (!selectedSessionId) return { status: "unavailable" };
+
+  const sessionsById = new Map(allSessions.map((session) => [session.id, session]));
+  const selectedSession = sessionsById.get(selectedSessionId);
+  if (!selectedSession) return { status: "unavailable" };
+
+  const presentedSessionIds = new Set(presentedSessions.map((session) => session.id));
+  if (!presentedSessionIds.has(selectedSessionId)) {
+    const hiddenKind = hiddenSessionKinds.get(selectedSessionId);
+    return hiddenKind
+      ? { status: "hidden", hiddenKind }
+      : { status: "unavailable" };
+  }
+
+  const boundarySessionId = findLineageBoundarySessionId(selectedSessionId, sessionsById);
+  const familySessionIds = collectDescendantIds(buildChildrenIndex(allSessions), boundarySessionId);
+  const familySessions = presentedSessions.filter((session) => familySessionIds.has(session.id));
+  const roots = buildVisibleProjectSessionTree(familySessions);
+
+  return {
+    status: "available",
+    selectedSession,
+    selectedAncestorSessionIds: findRenderedAncestorSessionIds(roots, selectedSessionId),
+    roots,
+    sessionCount: familySessions.length,
+  };
+}
+
 export function deriveSidebarSessionLists(
   allSessions: readonly SessionInfo[],
   state: SidebarState,
@@ -461,4 +551,15 @@ export function getGlobalSessionPrefix(
   const root = projectKey(session);
   const projectPrefix = projectPrefixes.get(root) ?? suffixForDepth(root, 1);
   return session.worktreeBranch ? `${projectPrefix} · ${session.worktreeBranch}` : projectPrefix;
+}
+
+export function getLineageSessionPrefix(
+  session: SessionInfo,
+  selectedSession: SessionInfo,
+  projectPrefixes: ReadonlyMap<string, string>,
+): string | undefined {
+  const sharesContext = projectKey(session) === projectKey(selectedSession)
+    && session.cwd === selectedSession.cwd
+    && session.worktreeBranch === selectedSession.worktreeBranch;
+  return sharesContext ? undefined : getGlobalSessionPrefix(session, projectPrefixes);
 }

@@ -1412,6 +1412,33 @@ span.linenumber {
   cursor: pointer;
 }
 
+.sidebar-tree-section {
+  --session-tree-indent: 12px;
+}
+
+.session-tree-connectors {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.session-tree-ancestor-line,
+.session-tree-current-line,
+.session-tree-child-stem {
+  position: absolute;
+  width: 1px;
+  background: var(--text-dim);
+  opacity: 0.55;
+}
+
+.session-tree-child-elbow {
+  position: absolute;
+  height: 1px;
+  background: var(--text-dim);
+  opacity: 0.55;
+}
+
 .session-row-actions {
   opacity: 0;
   visibility: hidden;
@@ -1455,6 +1482,10 @@ span.linenumber {
 }
 
 @media (max-width: 640px), (hover: none), (pointer: coarse), (any-pointer: coarse) {
+  .sidebar-tree-section {
+    --session-tree-indent: 8px;
+  }
+
   .session-row-actions {
     opacity: 1;
     visibility: visible;

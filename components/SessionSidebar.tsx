@@ -6,8 +6,10 @@ import {
   acceptAuthoritativeSidebarState,
   buildVisibleProjectSessionTree,
   createDefaultSidebarState,
+  deriveSelectedSessionLineage,
   deriveSidebarSessionLists,
   getGlobalSessionPrefix,
+  getLineageSessionPrefix,
   getSessionDisplayTitle,
   parseSidebarState,
   replaySidebarStateOperations,
@@ -52,6 +54,18 @@ export function resolveSidebarRunningSessionIds(
   runningAuthoritative: boolean,
 ): Set<string> {
   return new Set(runningAuthoritative ? globalRunningSessionIds : fallbackRunningSessionIds);
+}
+
+export function getScrollTopToRevealRow(
+  currentScrollTop: number,
+  containerTop: number,
+  containerBottom: number,
+  rowTop: number,
+  rowBottom: number,
+): number {
+  if (rowTop < containerTop) return Math.max(0, currentScrollTop - (containerTop - rowTop));
+  if (rowBottom > containerBottom) return currentScrollTop + (rowBottom - containerBottom);
+  return currentScrollTop;
 }
 
 export function createSessionListGenerationTracker() {
@@ -150,6 +164,12 @@ function getRecentProjects(sessions: SessionInfo[]): string[] {
 /** Substitute the home dir prefix with ~ (no path truncation — see PathLabel) */
 function displayCwd(cwd: string, homeDir?: string): string {
   return (homeDir && cwd.startsWith(homeDir)) ? "~" + cwd.slice(homeDir.length) : cwd;
+}
+
+function getSessionGlobalContextTitle(session: SessionInfo): string {
+  const projectRoot = session.projectRoot ?? session.cwd;
+  if (session.worktreeBranch) return `${projectRoot} · ${session.worktreeBranch} (${session.cwd})`;
+  return session.cwd === projectRoot ? projectRoot : `${projectRoot} (${session.cwd})`;
 }
 
 /**
@@ -372,6 +392,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [showHidden, setShowHidden] = useState(false);
   const [pinnedOpen, setPinnedOpen] = useState(true);
   const [recentOpen, setRecentOpen] = useState(true);
+  const [lineageOpen, setLineageOpen] = useState(true);
+  const [projectOpen, setProjectOpen] = useState(false);
+  const [lineageCollapsedSessionIds, setLineageCollapsedSessionIds] = useState<Set<string>>(() => new Set());
+  const [projectCollapsedSessionIds, setProjectCollapsedSessionIds] = useState<Set<string>>(() => new Set());
+  const [pendingLineageRevealId, setPendingLineageRevealId] = useState<string | null>(null);
+  const [explicitSessionActivationVersion, setExplicitSessionActivationVersion] = useState(0);
   const [sidebarNow, setSidebarNow] = useState(0);
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   const sessionLoadRequestRef = useRef(0);
@@ -386,6 +412,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const sessionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const explorerRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileExplorerRef = useRef<FileExplorerHandle>(null);
+  const lineageScrollRef = useRef<HTMLDivElement>(null);
+  const projectScrollRef = useRef<HTMLDivElement>(null);
+  const lineageRowRefs = useRef(new Map<string, HTMLDivElement>());
 
   const loadSidebarState = useCallback(async () => {
     const requestId = ++sidebarStateLoadRequestRef.current;
@@ -842,9 +871,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // works when the prop value won't change — e.g. re-clicking the already
   // open session after manually switching worktrees.
   const handleSelectSessionFromList = useCallback((s: SessionInfo) => {
-    // Clear on every explicit row open, including a re-click that leaves the
-    // selectedSessionId prop unchanged.
+    // Clear and request Lineage reveal on every explicit row open, including a
+    // re-click that leaves the selectedSessionId prop unchanged.
     setUnreadSessionIds((prev) => setSessionUnread(prev, s.id, false));
+    setExplicitSessionActivationVersion((version) => version + 1);
     if (s.cwd) setSelectedCwd(s.cwd);
     onSelectSession(s);
   }, [onSelectSession]);
@@ -875,6 +905,80 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     () => deriveSidebarSessionLists(allSessions, optimisticSidebarState, showHidden, sidebarNow),
     [allSessions, optimisticSidebarState, showHidden, sidebarNow],
   );
+  const selectedSessionLineage = useMemo(
+    () => deriveSelectedSessionLineage(
+      allSessions,
+      sidebarSessionLists.presentedSessions,
+      sidebarSessionLists.hiddenSessionKinds,
+      selectedSessionId,
+    ),
+    [allSessions, selectedSessionId, sidebarSessionLists],
+  );
+  const selectedLineageAncestorSignature = selectedSessionLineage.status === "available"
+    ? selectedSessionLineage.selectedAncestorSessionIds.join("\u0000")
+    : "";
+
+  useEffect(() => {
+    if (selectedSessionLineage.status !== "available" || !selectedSessionId) {
+      setPendingLineageRevealId(null);
+      return;
+    }
+    const ancestorIds = new Set(
+      selectedLineageAncestorSignature ? selectedLineageAncestorSignature.split("\u0000") : [],
+    );
+    setLineageCollapsedSessionIds((current) => {
+      if (![...ancestorIds].some((sessionId) => current.has(sessionId))) return current;
+      const next = new Set(current);
+      for (const sessionId of ancestorIds) next.delete(sessionId);
+      return next;
+    });
+    setPendingLineageRevealId(selectedSessionId);
+  }, [
+    explicitSessionActivationVersion,
+    selectedLineageAncestorSignature,
+    selectedSessionId,
+    selectedSessionLineage.status,
+  ]);
+
+  useLayoutEffect(() => {
+    if (!lineageOpen || !pendingLineageRevealId) return;
+    const scrollOwner = lineageScrollRef.current;
+    const row = lineageRowRefs.current.get(pendingLineageRevealId);
+    if (!scrollOwner || !row) return;
+    const ownerRect = scrollOwner.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    scrollOwner.scrollTop = getScrollTopToRevealRow(
+      scrollOwner.scrollTop,
+      ownerRect.top,
+      ownerRect.bottom,
+      rowRect.top,
+      rowRect.bottom,
+    );
+    setPendingLineageRevealId(null);
+  }, [lineageCollapsedSessionIds, lineageOpen, pendingLineageRevealId]);
+
+  const handleLineageRowMount = useCallback((sessionId: string, element: HTMLDivElement | null) => {
+    if (element) lineageRowRefs.current.set(sessionId, element);
+    else lineageRowRefs.current.delete(sessionId);
+  }, []);
+
+  const toggleLineageSessionCollapsed = useCallback((sessionId: string) => {
+    setLineageCollapsedSessionIds((current) => {
+      const next = new Set(current);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      return next;
+    });
+  }, []);
+
+  const toggleProjectSessionCollapsed = useCallback((sessionId: string) => {
+    setProjectCollapsedSessionIds((current) => {
+      const next = new Set(current);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (sidebarSessionLists.nextRecentExpiryAt === null) return;
@@ -1128,11 +1232,72 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         ))}
       </SidebarSessionSection>
 
-      <div style={{ display: "flex", flexDirection: "column", flex: "1 1 240px", minHeight: "min(180px, 38dvh)", overflow: "hidden", borderBottom: "1px solid var(--border)" }}>
-        <div className="sidebar-section-heading" style={{ flexShrink: 0 }}>
-          <span>Project</span>
-          <span style={{ color: "var(--text-dim)", fontWeight: 500, letterSpacing: 0, textTransform: "none" }}>{filteredSessions.length}</span>
+      <SidebarTreeSection
+        id="lineage-sessions"
+        label="Lineage"
+        open={lineageOpen}
+        onToggle={() => setLineageOpen((value) => !value)}
+        rowCount={selectedSessionLineage.status === "available" ? selectedSessionLineage.sessionCount : 0}
+      >
+        <div
+          ref={lineageScrollRef}
+          className="sidebar-tree-scroll-owner"
+          style={{ flex: "1 1 auto", minHeight: 0, overflowY: "auto", overflowX: "hidden" }}
+        >
+          {loading && (
+            <SidebarTreeState>Loading…</SidebarTreeState>
+          )}
+          {!loading && selectedSessionLineage.status === "unavailable" && (
+            <SidebarTreeState>
+              {selectedSessionId
+                ? "Lineage is unavailable until this session appears in the session list."
+                : "Select a session to view its lineage."}
+            </SidebarTreeState>
+          )}
+          {!loading && selectedSessionLineage.status === "hidden" && (
+            <SidebarTreeState>
+              The selected session is {selectedSessionLineage.hiddenKind === "explicit" ? "hidden" : "hidden by a parent"}. Show hidden sessions to view its lineage.
+            </SidebarTreeState>
+          )}
+          {!loading && selectedSessionLineage.status === "available" && selectedSessionLineage.roots.map((node) => (
+            <SessionTreeItem
+              key={node.session.id}
+              node={node}
+              selectedSessionId={selectedSessionId}
+              runningSessionIds={runningSessionIds}
+              unreadSessionIds={unreadSessionIds}
+              pinnedSessionIds={pinnedSessionIds}
+              hiddenSessionKinds={sidebarSessionLists.hiddenSessionKinds}
+              showHidden={showHidden}
+              onSelectSession={handleSelectSessionFromList}
+              onUnreadChange={handleUnreadChange}
+              onSidebarOperation={requestSidebarOperation}
+              onRenamed={loadSessions}
+              collapsedSessionIds={lineageCollapsedSessionIds}
+              onToggleCollapsed={toggleLineageSessionCollapsed}
+              getTitlePrefix={(session) => getLineageSessionPrefix(
+                session,
+                selectedSessionLineage.selectedSession,
+                sidebarSessionLists.projectPrefixes,
+              )}
+              getGlobalContextTitle={getSessionGlobalContextTitle}
+              onRowMount={handleLineageRowMount}
+              depth={0}
+              ancestorHasFollowingSiblings={[]}
+              hasNextSibling={false}
+            />
+          ))}
         </div>
+      </SidebarTreeSection>
+
+      <SidebarTreeSection
+        id="project-sessions"
+        label="Project"
+        open={projectOpen}
+        onToggle={() => setProjectOpen((value) => !value)}
+        rowCount={filteredSessions.length}
+        fixedContentHeight={80}
+      >
         <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
         {/* CWD picker */}
         <div ref={dropdownRef} style={{ position: "relative" }}>
@@ -1727,7 +1892,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       </div>
 
       {/* Selected-project session tree */}
-      <div style={{ flex: "1 1 auto", overflowY: "auto", padding: "0", minHeight: 0 }}>
+      <div
+        ref={projectScrollRef}
+        className="sidebar-tree-scroll-owner"
+        style={{ flex: "1 1 auto", overflowY: "auto", overflowX: "hidden", padding: "0", minHeight: 0 }}
+      >
         {loading && (
           <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: scaledMenuFontSize(12) }}>
             Loading...
@@ -1757,11 +1926,15 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             onUnreadChange={handleUnreadChange}
             onSidebarOperation={requestSidebarOperation}
             onRenamed={loadSessions}
+            collapsedSessionIds={projectCollapsedSessionIds}
+            onToggleCollapsed={toggleProjectSessionCollapsed}
             depth={0}
+            ancestorHasFollowingSiblings={[]}
+            hasNextSibling={false}
           />
         ))}
       </div>
-      </div>
+      </SidebarTreeSection>
 
       {/* File Explorer section */}
       {(selectedCwdProp || selectedCwd) && (
@@ -1889,6 +2062,84 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   );
 }
 
+function SidebarTreeSection({
+  id,
+  label,
+  open,
+  onToggle,
+  rowCount,
+  fixedContentHeight = 0,
+  children,
+}: {
+  id: string;
+  label: string;
+  open: boolean;
+  onToggle: () => void;
+  rowCount: number;
+  fixedContentHeight?: number;
+  children: ReactNode;
+}) {
+  const minimumOpenHeight = 96 + fixedContentHeight;
+  const preferredOpenHeight = 180 + fixedContentHeight;
+  return (
+    <section
+      className="sidebar-tree-section"
+      data-sidebar-tree-section={label.toLowerCase()}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        flex: open ? `1 1 ${preferredOpenHeight}px` : "0 0 31px",
+        minHeight: open ? minimumOpenHeight : 31,
+        overflow: "hidden",
+        borderBottom: "1px solid var(--border)",
+      }}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-controls={id}
+        className="sidebar-section-heading sidebar-section-toggle"
+        style={{ flexShrink: 0 }}
+      >
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <svg
+            width="9" height="9" viewBox="0 0 10 10" fill="none"
+            stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+            style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }}
+            aria-hidden="true"
+          >
+            <polyline points="3 2 7 5 3 8" />
+          </svg>
+          {label}
+        </span>
+        <span style={{ color: "var(--text-dim)", fontWeight: 500, letterSpacing: 0, textTransform: "none" }}>{rowCount}</span>
+      </button>
+      <div
+        id={id}
+        hidden={!open}
+        style={{
+          display: open ? "flex" : "none",
+          flex: "1 1 auto",
+          flexDirection: "column",
+          minHeight: 0,
+          overflow: "hidden",
+        }}
+      >
+        {children}
+      </div>
+    </section>
+  );
+}
+
+function SidebarTreeState({ children }: { children: ReactNode }) {
+  return (
+    <div style={{ padding: "10px 14px", color: "var(--text-dim)", fontSize: scaledMenuFontSize(10), lineHeight: 1.4, overflowWrap: "anywhere" }}>
+      {children}
+    </div>
+  );
+}
+
 function SidebarSessionSection({
   id,
   label,
@@ -1962,7 +2213,14 @@ function SessionTreeItem({
   onUnreadChange,
   onSidebarOperation,
   onRenamed,
+  collapsedSessionIds,
+  onToggleCollapsed,
+  getTitlePrefix,
+  getGlobalContextTitle,
+  onRowMount,
   depth,
+  ancestorHasFollowingSiblings,
+  hasNextSibling,
 }: {
   node: SidebarSessionTreeNode;
   selectedSessionId: string | null;
@@ -1975,25 +2233,60 @@ function SessionTreeItem({
   onUnreadChange: (sessionId: string, isUnread: boolean) => void;
   onSidebarOperation: (operation: SidebarStateOperation) => void;
   onRenamed?: () => void;
+  collapsedSessionIds: ReadonlySet<string>;
+  onToggleCollapsed: (sessionId: string) => void;
+  getTitlePrefix?: (session: SessionInfo) => string | undefined;
+  getGlobalContextTitle?: (session: SessionInfo) => string;
+  onRowMount?: (sessionId: string, element: HTMLDivElement | null) => void;
   depth: number;
+  ancestorHasFollowingSiblings: readonly boolean[];
+  hasNextSibling: boolean;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const collapsed = collapsedSessionIds.has(node.session.id);
   const hasChildren = node.children.length > 0;
+  const connectorLeft = (level: number) => `calc(var(--session-tree-indent, 12px) * ${level} + 6px)`;
+  const currentConnectorLeft = connectorLeft(depth);
+  const childConnectorLeft = connectorLeft(depth + 1);
+  const childAncestorContinuations = depth === 0
+    ? []
+    : [...ancestorHasFollowingSiblings, hasNextSibling];
 
   return (
     <div>
-      <div style={{ position: "relative" }}>
-        {/* Indent line for child sessions */}
-        {depth > 0 && (
-          <div style={{
-            position: "absolute",
-            left: depth * 12 + 6,
-            top: 0, bottom: 0,
-            width: 1,
-            background: "var(--border)",
-            pointerEvents: "none",
-          }} />
-        )}
+      <div
+        ref={(element) => onRowMount?.(node.session.id, element)}
+        className="session-tree-row"
+        style={{ position: "relative" }}
+      >
+        <div className="session-tree-connectors" aria-hidden="true">
+          {ancestorHasFollowingSiblings.map((continues, index) => continues && (
+            <span
+              key={index}
+              className="session-tree-ancestor-line"
+              style={{ left: connectorLeft(index + 1), top: 0, bottom: 0 }}
+            />
+          ))}
+          {depth > 0 && (
+            <>
+              <span
+                className="session-tree-current-line"
+                style={hasNextSibling
+                  ? { left: currentConnectorLeft, top: 0, bottom: 0 }
+                  : { left: currentConnectorLeft, top: 0, height: 27 }}
+              />
+              <span
+                className="session-tree-child-elbow"
+                style={{ left: currentConnectorLeft, top: 27, width: 9 }}
+              />
+            </>
+          )}
+          {hasChildren && !collapsed && (
+            <span
+              className="session-tree-child-stem"
+              style={{ left: childConnectorLeft, top: 27, bottom: 0 }}
+            />
+          )}
+        </div>
         <SessionItem
           session={node.session}
           isSelected={node.session.id === selectedSessionId}
@@ -2001,6 +2294,8 @@ function SessionTreeItem({
           isUnread={unreadSessionIds.has(node.session.id)}
           isPinned={pinnedSessionIds.has(node.session.id)}
           hiddenKind={showHidden ? hiddenSessionKinds.get(node.session.id) : undefined}
+          titlePrefix={getTitlePrefix?.(node.session)}
+          globalContextTitle={getGlobalContextTitle?.(node.session)}
           onClick={() => onSelectSession(node.session)}
           onUnreadChange={onUnreadChange}
           onPinChange={() => onSidebarOperation({
@@ -2017,12 +2312,12 @@ function SessionTreeItem({
           depth={depth}
           hasChildren={hasChildren}
           collapsed={collapsed}
-          onToggleCollapse={() => setCollapsed((v) => !v)}
+          onToggleCollapse={() => onToggleCollapsed(node.session.id)}
         />
       </div>
       {hasChildren && !collapsed && (
         <div>
-          {node.children.map((child) => (
+          {node.children.map((child, index) => (
             <SessionTreeItem
               key={child.session.id}
               node={child}
@@ -2036,7 +2331,14 @@ function SessionTreeItem({
               onUnreadChange={onUnreadChange}
               onSidebarOperation={onSidebarOperation}
               onRenamed={onRenamed}
+              collapsedSessionIds={collapsedSessionIds}
+              onToggleCollapsed={onToggleCollapsed}
+              getTitlePrefix={getTitlePrefix}
+              getGlobalContextTitle={getGlobalContextTitle}
+              onRowMount={onRowMount}
               depth={depth + 1}
+              ancestorHasFollowingSiblings={childAncestorContinuations}
+              hasNextSibling={index < node.children.length - 1}
             />
           ))}
         </div>
@@ -2254,7 +2556,9 @@ function SessionItem({
         height: ITEM_HEIGHT,
         display: "flex",
         alignItems: "center",
-        paddingLeft: depth > 0 ? depth * 12 + 14 : 14,
+        paddingLeft: depth > 0
+          ? `calc(var(--session-tree-indent, 12px) * ${depth} + 14px)`
+          : 14,
         paddingRight: 8,
         cursor: "default",
         background: isSelected ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",

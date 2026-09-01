@@ -83,3 +83,7 @@
 ## 2026-08-31
 
 - Updated session-dependency-graph memory after adding persistent trusted node quick-add controls with explicit Incoming/Outgoing `add_edge` authoring, one unified recoverable node/edge interaction lifecycle, and larger midpoint edge controls without changing graph authority or persistence.
+
+## 2026-09-01
+
+- Added sidebar-session-lineage memory after deriving the selected session's complete available native family, applying global hidden projection, sharing ordered connector rows, and separating Lineage reveal/scroll/collapse ownership from Project without new persisted state.

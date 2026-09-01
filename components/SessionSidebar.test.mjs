@@ -10,6 +10,7 @@ const jiti = createJiti(import.meta.url, {
 const {
   SessionUnreadAction,
   createSessionListGenerationTracker,
+  getScrollTopToRevealRow,
   isLatestSessionLoadRequest,
   resolveSidebarRunningSessionIds,
   shouldApplySidebarHttpRunningFallback,
@@ -61,18 +62,66 @@ test("a failed discovery load may retry the replayed generation", () => {
   tracker.finish(8, true);
 });
 
-test("the sidebar composes fixed global sections before Project and a collapsed Explorer", async () => {
+test("the sidebar orders independent Lineage and Project sections before a collapsed Explorer", async () => {
   const sidebarSource = await readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8");
   const pinnedIndex = sidebarSource.indexOf('label="Pinned"');
   const recentIndex = sidebarSource.indexOf('label="Recent"');
-  const projectIndex = sidebarSource.indexOf("<span>Project</span>");
+  const lineageIndex = sidebarSource.indexOf('label="Lineage"');
+  const projectIndex = sidebarSource.indexOf('label="Project"');
   const explorerIndex = sidebarSource.indexOf("{/* File Explorer section */}");
 
   assert.ok(pinnedIndex > 0 && pinnedIndex < recentIndex);
-  assert.ok(recentIndex < projectIndex && projectIndex < explorerIndex);
+  assert.ok(recentIndex < lineageIndex && lineageIndex < projectIndex && projectIndex < explorerIndex);
+  assert.match(sidebarSource, /const \[lineageOpen, setLineageOpen\] = useState\(true\)/);
+  assert.match(sidebarSource, /const \[projectOpen, setProjectOpen\] = useState\(false\)/);
   assert.match(sidebarSource, /const \[explorerOpen, setExplorerOpen\] = useState\(false\)/);
+  assert.match(sidebarSource, /data-sidebar-tree-section=\{label\.toLowerCase\(\)\}/);
+  assert.match(sidebarSource, /fixedContentHeight=\{80\}/);
+  assert.match(sidebarSource, /minimumOpenHeight = 96 \+ fixedContentHeight/);
+  assert.match(sidebarSource, /hidden=\{!open\}/);
   assert.match(sidebarSource, /aria-controls="sidebar-file-explorer"/);
   assert.match(sidebarSource, /Math\.min\(rowCount, 5\) \* 54/);
+});
+
+test("Lineage reveal expands and scrolls only its own controlled presentation without focusing", async () => {
+  const sidebarSource = await readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8");
+  assert.match(sidebarSource, /lineageCollapsedSessionIds, setLineageCollapsedSessionIds/);
+  assert.match(sidebarSource, /projectCollapsedSessionIds, setProjectCollapsedSessionIds/);
+  assert.match(sidebarSource, /lineageScrollRef = useRef/);
+  assert.match(sidebarSource, /projectScrollRef = useRef/);
+  assert.match(sidebarSource, /explicitSessionActivationVersion, setExplicitSessionActivationVersion/);
+  assert.match(sidebarSource, /setExplicitSessionActivationVersion\(\(version\) => version \+ 1\)/);
+  assert.match(sidebarSource, /setPendingLineageRevealId\(selectedSessionId\)/);
+  assert.match(sidebarSource, /\[\s*explicitSessionActivationVersion,[\s\S]*selectedLineageAncestorSignature/);
+
+  const revealEffect = sidebarSource.slice(
+    sidebarSource.indexOf("if (!lineageOpen || !pendingLineageRevealId) return"),
+    sidebarSource.indexOf("const handleLineageRowMount"),
+  );
+  assert.match(revealEffect, /lineageScrollRef\.current/);
+  assert.match(revealEffect, /getScrollTopToRevealRow/);
+  assert.doesNotMatch(revealEffect, /projectScrollRef|scrollIntoView|\.focus\(/);
+
+  assert.equal(getScrollTopToRevealRow(80, 100, 300, 70, 124), 50);
+  assert.equal(getScrollTopToRevealRow(80, 100, 300, 280, 334), 114);
+  assert.equal(getScrollTopToRevealRow(80, 100, 300, 120, 174), 80);
+});
+
+test("Lineage and Project share controlled depth-first rows with continuous guides and child elbows", async () => {
+  const [sidebarSource, cssSource] = await Promise.all([
+    readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(sidebarSource, /collapsedSessionIds=\{lineageCollapsedSessionIds\}/);
+  assert.match(sidebarSource, /collapsedSessionIds=\{projectCollapsedSessionIds\}/);
+  assert.match(sidebarSource, /ancestorHasFollowingSiblings/);
+  assert.match(sidebarSource, /hasNextSibling=\{index < node\.children\.length - 1\}/);
+  assert.match(sidebarSource, /session-tree-ancestor-line/);
+  assert.match(sidebarSource, /session-tree-current-line/);
+  assert.match(sidebarSource, /session-tree-child-elbow/);
+  assert.match(sidebarSource, /session-tree-child-stem/);
+  assert.match(cssSource, /\.session-tree-ancestor-line/);
+  assert.match(cssSource, /\.session-tree-child-elbow/);
 });
 
 test("shared sidebar metadata stays operation-only, optimistic, and separate from session browsing", async () => {
@@ -152,7 +201,7 @@ test("the unread row action reports state, stops navigation, and synchronizes du
   assert.equal(propagationStops, 1);
   assert.equal(unread, true);
 
-  const duplicateActions = ["Pinned", "Recent", "Project"].map(createAction);
+  const duplicateActions = ["Pinned", "Recent", "Lineage", "Project"].map(createAction);
   for (const action of duplicateActions) {
     assert.equal(action.props.title, "Mark read");
     assert.equal(action.props["aria-label"].startsWith("Mark read "), true);
@@ -163,12 +212,12 @@ test("the unread row action reports state, stops navigation, and synchronizes du
   assert.equal(unread, false);
 });
 
-test("manual unread uses one browser-local set across Pinned, Recent, and Project and every row open clears it", async () => {
+test("manual unread uses one browser-local set across every session presentation and every row open clears it", async () => {
   const [sidebarSource, routeSource] = await Promise.all([
     readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/sidebar-state/route.ts", import.meta.url), "utf8"),
   ]);
-  assert.equal((sidebarSource.match(/onUnreadChange=\{handleUnreadChange\}/g) ?? []).length, 3);
+  assert.equal((sidebarSource.match(/onUnreadChange=\{handleUnreadChange\}/g) ?? []).length, 4);
   assert.ok((sidebarSource.match(/onUnreadChange=\{onUnreadChange\}/g) ?? []).length >= 2);
   const explicitOpenHandler = sidebarSource.slice(
     sidebarSource.indexOf("const handleSelectSessionFromList"),

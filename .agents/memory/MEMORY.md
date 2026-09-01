@@ -12,5 +12,6 @@
 - [Session removal policy](session-removal.md) — permanent web deletion removal, reversible Hide/Restore boundary, stale-context rationale, and explicit teardown non-goals.
 - [Session dependency graph](session-dependency-graph.md) — machine-wide exact-ID dependencies, reversible completion history, non-enforcement boundary, strict persistence, qualified Raw labels, validated edge swapping, permanent DAG-tab ownership, and the local selected-session Preview marker.
 - [Sidebar unread state](sidebar-unread.md) — one browser-local manual/automatic dot, explicit-open and running transitions, duplicate presentation synchronization, and strict shared-state separation.
+- [Sidebar session lineage](sidebar-lineage.md) — complete available native-family derivation, hidden projection, rendered-path reveal, independent Lineage/Project ownership, and responsive tree connectors.
 - [Live session transcript reconciliation](session-transcript-reconciliation.md) — displayed-versus-pinned leaf intent, advancing-tip repair, prompt transcript floors, navigation ordering, and bounded browser-only recovery.
 - [OpenAI Fast indicator compatibility](openai-fast-indicator.md) — authenticated package-specific observation, transition-driven refresh, host-owned status metadata, and exact model/status authority correlation.
