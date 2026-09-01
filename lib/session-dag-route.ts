@@ -12,7 +12,10 @@ import {
   readSessionDagState,
   type SessionDagMutationResult,
 } from "./session-dag-store";
-import { listAllSessionsWithGeneration, type CompleteSessionListing } from "./session-reader";
+import {
+  listAllSessionIdsWithGeneration,
+  type CompleteSessionIdListing,
+} from "./session-reader";
 
 const NO_STORE_HEADERS = { "Cache-Control": "no-store" };
 const SESSION_LIST_RETRY_LIMIT = 4;
@@ -21,13 +24,13 @@ export const SESSION_DAG_MAX_MUTATION_BYTES = 2 * 1024 * 1024;
 export interface SessionDagRouteDependencies {
   readState: typeof readSessionDagState;
   mutateState: typeof mutateSessionDagState;
-  listSessions: typeof listAllSessionsWithGeneration;
+  listSessionIds: typeof listAllSessionIdsWithGeneration;
 }
 
 const defaultDependencies: SessionDagRouteDependencies = {
   readState: readSessionDagState,
   mutateState: mutateSessionDagState,
-  listSessions: listAllSessionsWithGeneration,
+  listSessionIds: listAllSessionIdsWithGeneration,
 };
 
 class SessionDagSessionsUnavailableError extends Error {
@@ -111,15 +114,15 @@ async function mutateWithCurrentSessionListing(
   dependencies: SessionDagRouteDependencies,
 ): Promise<SessionDagMutationResult> {
   for (let attempt = 0; attempt < SESSION_LIST_RETRY_LIMIT; attempt += 1) {
-    let listing: CompleteSessionListing;
+    let listing: CompleteSessionIdListing;
     try {
-      listing = await dependencies.listSessions();
+      listing = await dependencies.listSessionIds();
     } catch (error) {
       throw new SessionDagSessionsUnavailableError({ cause: error });
     }
     try {
       return await dependencies.mutateState(envelope, {
-        availableSessionIds: new Set(listing.sessions.map((session) => session.id)),
+        availableSessionIds: listing.sessionIds,
         expectedSessionListGeneration: listing.generation,
       });
     } catch (error) {

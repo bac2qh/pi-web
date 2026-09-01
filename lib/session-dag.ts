@@ -14,7 +14,7 @@ export const SESSION_DAG_MAX_RECEIPTS = 512;
 export const SESSION_DAG_MAX_SESSION_ID_LENGTH = 512;
 export const SESSION_DAG_MAX_OPAQUE_ID_LENGTH = 128;
 export const SESSION_DAG_ACCESSIBLE_TITLE = "Session dependency graph";
-export const SESSION_DAG_ACCESSIBLE_DESCRIPTION = "Session dependencies and available completion, node-add, and edge action controls";
+export const SESSION_DAG_ACCESSIBLE_DESCRIPTION = "Session dependencies and available completion, node-add, go-to-session, and edge action controls";
 
 const SESSION_DAG_MAX_LABEL_SEGMENT_LENGTH = 160;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/u;
