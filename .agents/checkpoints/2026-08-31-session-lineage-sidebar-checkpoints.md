@@ -51,3 +51,15 @@ Plan: `.agents/plans/2026-08-31-session-lineage-sidebar.md`
 **Departures from approved obligations:** None. Final complete-suite rerun, memory update, final parent review/gates, implementation commit, mandatory final summary, and guarded closeout remain pending. Per user direction, no additional independent review was started.
 
 **Implementation commit:** `c69fbf9a260184a0c93ebb8f95069ff54d8fa920`
+
+## Implementation Summary
+
+**Plan section:** Final implementation and Validation Contract VC-001 through VC-008.
+
+**Work and outcome:** Completed the approved native-family Lineage sidebar, shared Project/Lineage tree presentation, independent section and scroll ownership, selected-path reveal, hidden and unavailable states, responsive behavior, focused regression coverage, maintained English/Chinese/architecture documentation, durable memory, and browser-validation report. The user-authorized correction round resolved every required independent-review finding: rendered-forest cycle reveal, explicit same-ID activation reveal, and usable short-mobile Project scrolling.
+
+**Validation / evidence:** Focused sidebar tests passed 28/28. The complete relevant Node suite passed 967/967 with `NODE_ENV=test`; TypeScript, ESLint, and `git diff --check` passed. Isolated Chrome validation passed 42 assertions with zero failed HTTP responses and zero browser/page errors at desktop, ordinary mobile, and `600×480`, including hidden/cross-context families, continuous connectors, pointer and keyboard same-ID reveal without focus theft, and independent Lineage/Project scroll ownership. The validation server was stopped, port `30155` released, the temporary dependency symlink removed, generated `.next/` removed, and the task checkout was clean before this final summary. Evidence is retained in `.agents/reports/2026-08-31-session-lineage-sidebar-browser-validation.md` and the preceding checkpoint handoffs.
+
+**Departures from approved obligations:** None. No obligation is incomplete, blocked, waived, superseded, or divergent. No API, schema, persisted preference, dependency, telemetry, or DOM-harness expansion was added; the approved source/pure tests plus explicit browser matrix supplied the intentionally unavailable DOM-interaction layer. The inherited risk of pathological depth beyond the validated depth-14 family remains unchanged and does not represent an implementation departure.
+
+**Implementation commit:** `c69fbf9a260184a0c93ebb8f95069ff54d8fa920`
