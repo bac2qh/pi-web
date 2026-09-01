@@ -170,12 +170,19 @@ test("manual unread uses one browser-local set across Pinned, Recent, and Projec
   ]);
   assert.equal((sidebarSource.match(/onUnreadChange=\{handleUnreadChange\}/g) ?? []).length, 3);
   assert.ok((sidebarSource.match(/onUnreadChange=\{onUnreadChange\}/g) ?? []).length >= 2);
+  const explicitOpenEffects = sidebarSource.slice(
+    sidebarSource.indexOf("const applyExplicitSessionOpenEffects"),
+    sidebarSource.indexOf("const handleSelectSessionFromList"),
+  );
   const explicitOpenHandler = sidebarSource.slice(
     sidebarSource.indexOf("const handleSelectSessionFromList"),
     sidebarSource.indexOf("const handleUnreadChange"),
   );
-  assert.match(explicitOpenHandler, /setSessionUnread\(prev, s\.id, false\)/);
-  assert.ok(explicitOpenHandler.indexOf("setSessionUnread") < explicitOpenHandler.indexOf("onSelectSession(s)"));
+  assert.match(explicitOpenEffects, /setSessionUnread\(prev, session\.id, false\)/);
+  assert.match(explicitOpenEffects, /if \(session\.cwd\) setSelectedCwd\(session\.cwd\)/);
+  assert.match(explicitOpenEffects, /explicitSessionOpenRequest[\s\S]*?applyExplicitSessionOpenEffects\(\{[\s\S]*?sessionId[\s\S]*?cwd/);
+  assert.match(explicitOpenEffects, /onExplicitSessionOpenApplied\?\.\(explicitSessionOpenRequest\.generation\)/);
+  assert.match(explicitOpenHandler, /applyExplicitSessionOpenEffects\(s\);\s*onSelectSession\(s\)/);
   assert.match(sidebarSource, /from "@\/lib\/sidebar-unread-state"/);
   assert.doesNotMatch(routeSource, /unread/i);
 });

@@ -153,7 +153,7 @@ test("selected chat session flows to a separate direct-map Preview marker", asyn
   ]);
 
   assert.match(shell, /const dagPanelActive = rightPanelOpen && activeRightPanelTabId === RIGHT_PANEL_DAG_TAB_ID/);
-  assert.match(shell, /<SessionDagPanel[\s\S]*?active=\{dagPanelActive\}[\s\S]*?selectedSessionId=\{selectedSession\?\.id \?\? null\}/);
+  assert.match(shell, /<SessionDagPanel[\s\S]*?active=\{dagPanelActive\}[\s\S]*?selectedSessionId=\{selectedSession\?\.id \?\? null\}[\s\S]*?onSelectSession=\{handleDagSelectSession\}/);
   assert.match(panel, /selectedSessionId: string \| null/);
   assert.match(panel, /<SessionDagPreview[\s\S]*?active=\{active && mode === "preview"\}[\s\S]*?selectedSessionId=\{selectedSessionId\}/);
   assert.match(preview, /const preparedRenderRef = useRef/);
@@ -179,6 +179,68 @@ test("selected chat session flows to a separate direct-map Preview marker", asyn
   assert.doesNotMatch(markerHelper, /querySelector|querySelectorAll|new Set|for \(/);
   assert.match(svg, /\[data-session-dag-current="true"\] > \.label-container \{[\s\S]*?fill: var\(--bg-selected\) !important;[\s\S]*?stroke: var\(--accent\) !important;/);
   assert.doesNotMatch(markerHelper, /focus\(|scroll|fetch|render|mermaid/i);
+});
+
+test("Preview go-to controls resolve exact current metadata through the existing selection owner", async () => {
+  const [shell, panel, preview, svg] = await Promise.all([
+    read("./AppShell.tsx"),
+    read("./SessionDagPanel.tsx"),
+    read("./SessionDagPreview.tsx"),
+    read("../lib/session-dag-svg.ts"),
+  ]);
+
+  const selectionOwner = shell.slice(
+    shell.indexOf("const handleSelectSession"),
+    shell.indexOf("const handleNewSession", shell.indexOf("const handleSelectSession")),
+  );
+  assert.match(selectionOwner, /sessionViews\.prepareSelection\(session\.id\)/);
+  assert.match(selectionOwner, /setSelectedSession\(session\)/);
+  assert.match(selectionOwner, /router\.replace\(`\?session=\$\{encodeURIComponent\(session\.id\)\}`/);
+  assert.doesNotMatch(selectionOwner, /setRightPanelOpen|setActiveRightPanelTabId|setFileViewerExpansion/);
+  const dagSelectionOwner = shell.slice(
+    shell.indexOf("const handleDagSelectSession"),
+    shell.indexOf("const handleNewSession", shell.indexOf("const handleDagSelectSession")),
+  );
+  assert.match(dagSelectionOwner, /setSidebarExplicitSessionOpenRequest\(\{/);
+  assert.match(dagSelectionOwner, /sessionId: session\.id/);
+  assert.match(dagSelectionOwner, /handleSelectSession\(session\)/);
+  assert.doesNotMatch(dagSelectionOwner, /setRightPanelOpen|setActiveRightPanelTabId|setFileViewerExpansion/);
+  assert.match(shell, /<SessionSidebar[\s\S]*?explicitSessionOpenRequest=\{sidebarExplicitSessionOpenRequest\}[\s\S]*?onExplicitSessionOpenApplied=\{handleSidebarExplicitSessionOpenApplied\}/);
+  assert.match(shell, /<SessionDagPanel[\s\S]*?onSelectSession=\{handleDagSelectSession\}/);
+
+  assert.match(panel, /onSelectSession: \(session: SessionInfo\) => void/);
+  assert.match(panel, /const sessionsById = useMemo\(\(\) => new Map\(sessions\.map\(\(session\) => \[session\.id, session\]\)\), \[sessions\]\)/);
+  assert.match(panel, /const availableSessionIds = useMemo\(\(\) => new Set\(sessionsById\.keys\(\)\), \[sessionsById\]\)/);
+  assert.match(panel, /const goToSession = useCallback\(\(sessionId: string\) => \{\s*const session = sessionsById\.get\(sessionId\);\s*if \(session\) onSelectSession\(session\)/);
+  assert.match(panel, /<SessionDagPreview[\s\S]*?availableSessionIds=\{availableSessionIds\}[\s\S]*?onGoToSession=\{goToSession\}/);
+  assert.doesNotMatch(panel.slice(
+    panel.indexOf("const goToSession"),
+    panel.indexOf("const projectPrefixes", panel.indexOf("const goToSession")),
+  ), /fetch\(|runMutation|setSessions|sidebar/i);
+
+  assert.match(preview, /availableSessionIds: ReadonlySet<string>/);
+  assert.match(preview, /onGoToSession: \(sessionId: string\) => void/);
+  assert.match(preview, /const onGoToSessionRef = useRef\(onGoToSession\);\s*onGoToSessionRef\.current = onGoToSession/);
+  assert.match(preview, /const available = availableSessionIds\.has\(anchorSessionId\)/);
+  assert.match(preview, /if \(available\) \{\s*const goToControl = createSessionDagGoToControl\(container\.ownerDocument, label\)/);
+  assert.match(preview, /const goToLocalPosition = getSessionDagGoToControlLocalPosition\(bounds, direction\)/);
+  assert.match(preview, /goToLocalPosition\.x,[\s\S]*?goToLocalPosition\.y/);
+  assert.match(preview, /bindGoToActivation\(goToControl, \(\) => onGoToSessionRef\.current\(anchorSessionId\)\)/);
+  assert.match(preview, /goToControlsRef\.current = goToControls/);
+  assert.match(preview, /goToControlsRef\.current\.values\(\)[\s\S]*?path\.includes\(control\)/);
+  assert.match(preview, /control\.addEventListener\("click"[\s\S]*?event\.stopPropagation\(\);\s*activateControl\(\)/);
+  assert.match(preview, /control\.addEventListener\("keydown"[\s\S]*?event\.key !== "Enter" && event\.key !== " "[\s\S]*?event\.repeat[\s\S]*?event\.preventDefault\(\);\s*event\.stopPropagation\(\);\s*activateControl\(\)/);
+  assert.doesNotMatch(preview, /setAttribute\("data-session-dag-[^"]*",\s*anchorSessionId/);
+
+  const renderDependencies = /return \(\) => \{\s*cancelled = true;[\s\S]*?\};\s*\}, \[([\s\S]*?)\]\);\s*\n\s*useLayoutEffect/u.exec(preview);
+  assert.ok(renderDependencies);
+  assert.doesNotMatch(renderDependencies[1], /onGoToSession|selectedSessionId/);
+
+  assert.match(svg, /export function createSessionDagGoToControl/);
+  assert.match(svg, /export function getSessionDagGoToControlLocalPosition/);
+  assert.match(svg, /control\.setAttribute\("aria-label", `Go to session \$\{label\}`\)/);
+  assert.match(svg, /glyph\.setAttribute\("d", "M -5 0 H 2 M -1 -3 L 2 0 L -1 3 M 5 -5 V 5"\)/);
+  assert.match(svg, /\.session-dag-go-to-control:focus/);
 });
 
 test("Preview keeps one trusted edge-or-node authoring interaction with recoverable focus and drafts", async () => {
@@ -223,6 +285,8 @@ test("Preview keeps one trusted edge-or-node authoring interaction with recovera
 
   assert.match(preview, /const formId = nodeFormAssignments\.get\(anchorSessionId\)/);
   assert.match(preview, /const minimumWidth = eligible \? 44 : 22/);
+  assert.match(preview, /bounds\.width < minimumWidth \|\| bounds\.height < 22/);
+  assert.match(preview, /validateSessionDagNodeControlGeometry\(bounds, direction, eligible, available\)/);
   assert.match(preview, /createSessionDagNodeAddControl\(container\.ownerDocument, label\)/);
   assert.match(preview, /bounds\.x \+ 11,[\s\S]*?bounds\.y \+ 11/);
   assert.match(preview, /bounds\.x \+ bounds\.width - 11/);

@@ -20,14 +20,17 @@ import {
   createSessionDagCompleteControl,
   createSessionDagControlLayer,
   createSessionDagEdgeActionControl,
+  createSessionDagGoToControl,
   createSessionDagNodeAddControl,
   getSessionDagControlPosition,
   getSessionDagEdgeMidpoint,
+  getSessionDagGoToControlLocalPosition,
   getSessionDagOverlayPosition,
   prepareSessionDagSvg,
   shouldDeferSessionDagNodeFocusRestore,
   updateSessionDagCurrentNode,
   updateSessionDagEdgeActionControl,
+  validateSessionDagNodeControlGeometry,
   type PreparedSessionDagSvg,
   type SessionDagEdgeActionControl,
   type SessionDagEdgeActionMode,
@@ -37,6 +40,7 @@ import {
 interface Props {
   active: boolean;
   selectedSessionId: string | null;
+  availableSessionIds: ReadonlySet<string>;
   compiled: CompiledSessionDag | null;
   compileError: unknown;
   revision: number;
@@ -52,6 +56,7 @@ interface Props {
     enteredSessionId: string,
     direction: NodeEdgeDirection,
   ) => Promise<NodeEdgeMutationResult>;
+  onGoToSession: (sessionId: string) => void;
 }
 
 type PreviewFailureStage = "compile" | "load" | "parse" | "render" | SessionDagSvgFailureStage;
@@ -161,6 +166,7 @@ function focusElement(element: Element | null): void {
 export function SessionDagPreview({
   active,
   selectedSessionId,
+  availableSessionIds,
   compiled,
   compileError,
   revision,
@@ -172,6 +178,7 @@ export function SessionDagPreview({
   onSwap,
   onInsert,
   onAddNodeEdge,
+  onGoToSession,
 }: Props) {
   const { isDark } = useTheme();
   const { transcriptFontSize } = useDisplayPreferences();
@@ -185,6 +192,7 @@ export function SessionDagPreview({
   const interactionRef = useRef<PreviewInteraction | null>(null);
   const edgeControlRecordsRef = useRef<Map<string, EdgeControlRecord>>(new Map());
   const nodeControlRecordsRef = useRef<Map<string, NodeControlRecord>>(new Map());
+  const goToControlsRef = useRef<Map<string, SVGGElement>>(new Map());
   const nodeFocusRestoreRef = useRef<{ anchorSessionId: string; formId: string } | null>(null);
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
@@ -194,6 +202,8 @@ export function SessionDagPreview({
   onInsertRef.current = onInsert;
   const onAddNodeEdgeRef = useRef(onAddNodeEdge);
   onAddNodeEdgeRef.current = onAddNodeEdge;
+  const onGoToSessionRef = useRef(onGoToSession);
+  onGoToSessionRef.current = onGoToSession;
   const [renderStage, setRenderStage] = useState("idle");
   const [failure, setFailure] = useState<{ stage: PreviewFailureStage; errorClass: string } | null>(null);
   const currentKey = compiled
@@ -212,6 +222,7 @@ export function SessionDagPreview({
       preparedRenderRef.current = null;
       edgeControlRecordsRef.current = new Map();
       nodeControlRecordsRef.current = new Map();
+      goToControlsRef.current = new Map();
     };
     const container = containerRef.current;
     if (!container || !active) {
@@ -322,6 +333,7 @@ export function SessionDagPreview({
 
         const edgeRecords = new Map<string, EdgeControlRecord>();
         const nodeRecords = new Map<string, NodeControlRecord>();
+        const goToControls = new Map<string, SVGGElement>();
         const edgeRecordForInteraction = () => {
           const interaction = interactionRef.current;
           if (interaction?.kind !== "edge") return null;
@@ -519,6 +531,18 @@ export function SessionDagPreview({
             settleRejectedNodeMutation(record.anchorSessionId, record.formId, direction);
           }
         };
+        const bindGoToActivation = (control: SVGGElement, activateControl: () => void) => {
+          control.addEventListener("click", (event) => {
+            event.stopPropagation();
+            activateControl();
+          });
+          control.addEventListener("keydown", (event) => {
+            if ((event.key !== "Enter" && event.key !== " ") || event.repeat) return;
+            event.preventDefault();
+            event.stopPropagation();
+            activateControl();
+          });
+        };
         const bindAuthoringActivation = (control: SVGGElement, activateControl: () => void) => {
           control.addEventListener("click", (event) => {
             event.stopPropagation();
@@ -688,6 +712,7 @@ export function SessionDagPreview({
           const nodeGroup = alias ? prepared.nodeGroupsByAlias.get(alias) : undefined;
           const formId = nodeFormAssignments.get(anchorSessionId);
           const eligible = compiled.eligibleSessionIds.has(anchorSessionId);
+          const available = availableSessionIds.has(anchorSessionId);
           if (!alias || !label || !nodeGroup || !formId) {
             throw new SessionDagSvgError("controls", "An active node is missing from the rendered graph");
           }
@@ -697,6 +722,7 @@ export function SessionDagPreview({
             || bounds.width < minimumWidth || bounds.height < 22) {
             throw new SessionDagSvgError("controls", "An active node has invalid geometry");
           }
+          validateSessionDagNodeControlGeometry(bounds, direction, eligible, available);
           const controlPosition = getSessionDagControlPosition(
             nodeGroup,
             prepared.svg,
@@ -842,6 +868,24 @@ export function SessionDagPreview({
           });
           record.apply();
 
+          if (available) {
+            const goToControl = createSessionDagGoToControl(container.ownerDocument, label);
+            const goToLocalPosition = getSessionDagGoToControlLocalPosition(bounds, direction);
+            const goToPosition = getSessionDagControlPosition(
+              nodeGroup,
+              prepared.svg,
+              goToLocalPosition.x,
+              goToLocalPosition.y,
+            );
+            goToControl.setAttribute(
+              "transform",
+              `translate(${String(goToPosition.x)} ${String(goToPosition.y)})`,
+            );
+            bindGoToActivation(goToControl, () => onGoToSessionRef.current(anchorSessionId));
+            goToControls.set(anchorSessionId, goToControl);
+            controlLayer.appendChild(goToControl);
+          }
+
           if (eligible) {
             const completeControl = createSessionDagCompleteControl(container.ownerDocument, label);
             const completePosition = getSessionDagControlPosition(
@@ -861,6 +905,7 @@ export function SessionDagPreview({
 
         edgeControlRecordsRef.current = edgeRecords;
         nodeControlRecordsRef.current = nodeRecords;
+        goToControlsRef.current = goToControls;
 
         const savedInteraction = interactionRef.current;
         if (savedInteraction?.kind === "edge") {
@@ -895,7 +940,8 @@ export function SessionDagPreview({
           const path = event.composedPath();
           if (path.includes(activeForm)
             || [...edgeControlRecordsRef.current.values()].some((record) => path.includes(record.control.root))
-            || [...nodeControlRecordsRef.current.values()].some((record) => path.includes(record.control))) {
+            || [...nodeControlRecordsRef.current.values()].some((record) => path.includes(record.control))
+            || [...goToControlsRef.current.values()].some((control) => path.includes(control))) {
             return;
           }
           closeInteraction(true);
@@ -958,6 +1004,7 @@ export function SessionDagPreview({
     };
   }, [
     active,
+    availableSessionIds,
     compiled,
     compileError,
     currentKey,
