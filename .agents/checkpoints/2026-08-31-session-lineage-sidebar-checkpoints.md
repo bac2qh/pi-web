@@ -73,3 +73,15 @@ Plan: `.agents/plans/2026-08-31-session-lineage-sidebar.md`
 **Preserved state:** Local main remains at `25f2a60ca3d3bcd22a860a879b3099458a80df59` with its pre-existing unrelated unstaged/untracked plan files unchanged, no merge state, no staged changes, and no held main lock. The implementation, validation evidence, final summary, branch `2026-08-31-session-lineage-sidebar`, and registered task worktree remain intact at captured pre-recovery tip `5b321b940eca1a304bdc5e52f18d3daa015e7d86`; only this bounded recovery record is being added afterward.
 
 **Safe retry point:** Resume from the retained task branch after this recovery commit. Reacquire the main mutex, recapture the latest main and task tips and statuses, then deliberately reconcile the two named conflicts against both completed feature sets before retrying guarded integration. Do not rerun the failed merge or select conflict sides without that reconciliation.
+
+## Implementation Summary
+
+**Plan section:** Closeout recovery reconciliation and Validation Contract VC-003, VC-005, and VC-008.
+
+**Work and outcome:** After the user asked whether the two conflicts could be resolved autonomously, inspected both sides and determined that no product decision was required. Merged then-current main commit `25f2a60ca3d3bcd22a860a879b3099458a80df59` into the retained task branch. Preserved both append-only memory histories in date order. In `SessionSidebar`, preserved main's generation-safe DAG explicit-open handoff and moved the Lineage same-ID activation signal into the shared explicit-open effects owner, so sidebar rows and trusted DAG navigation both retain unread clearing, worktree restoration, and Lineage reveal without duplicating selection authority. Added a focused source assertion for that combined ownership.
+
+**Validation / evidence:** The combined focused sidebar/DAG/reader/state suite passed 93/93 and the complete relevant Node suite passed 974/974 with `NODE_ENV=test`. TypeScript, ESLint, staged/unstaged `git diff --check`, and conflict-marker checks passed. The temporary worktree dependency symlink was removed immediately afterward. Existing isolated browser evidence remains applicable to the unchanged row and presentation behavior: the Lineage matrix passed 42 assertions and the independently integrated DAG matrix covered same-session explicit-open unread/worktree effects; the conflict reconciliation composes those owners and is directly guarded by the updated source contract.
+
+**Departures from approved obligations:** None. The reconciliation preserves both already approved feature sets and introduces no new product behavior, API, schema, persistence, dependency, telemetry, or state authority. No obligation is incomplete, blocked, waived, superseded, or divergent.
+
+**Implementation commit:** `3358e8f` (`Merge main into session lineage sidebar`).
