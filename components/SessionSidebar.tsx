@@ -77,9 +77,17 @@ export function createSessionListGenerationTracker() {
   };
 }
 
+export interface SidebarExplicitSessionOpenRequest {
+  generation: number;
+  sessionId: string;
+  cwd?: string;
+}
+
 interface Props {
   selectedSessionId: string | null;
   onSelectSession: (session: SessionInfo, isRestore?: boolean) => void;
+  explicitSessionOpenRequest?: SidebarExplicitSessionOpenRequest | null;
+  onExplicitSessionOpenApplied?: (generation: number) => void;
   onNewSession?: (sessionId: string, cwd: string) => void;
   initialSessionId?: string | null;
   onInitialRestoreDone?: () => void;
@@ -318,7 +326,7 @@ function PiAgentTitle() {
   );
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, onInitialRestoreDone, refreshKey, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onAtMention, onAtMentions }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, explicitSessionOpenRequest, onExplicitSessionOpenApplied, onNewSession, initialSessionId, onInitialRestoreDone, refreshKey, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onAtMention, onAtMentions }: Props) {
   const {
     runningSessionIds: globalRunningSessionIds,
     runningAuthoritative,
@@ -837,17 +845,30 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  // Clicking a session moves the effective cwd to that session's worktree.
-  // Done on the click path (not via the selectedCwd prop sync) so it also
-  // works when the prop value won't change — e.g. re-clicking the already
-  // open session after manually switching worktrees.
+  // Every explicit session open clears unread state and moves the effective
+  // cwd to that session's worktree, including a re-open whose selected props
+  // do not change. Sidebar rows apply this directly; other trusted owners send
+  // one consumed request before invoking the shared application selection.
+  const applyExplicitSessionOpenEffects = useCallback((session: { id: string; cwd?: string }) => {
+    setUnreadSessionIds((prev) => setSessionUnread(prev, session.id, false));
+    if (session.cwd) setSelectedCwd(session.cwd);
+  }, []);
+  useEffect(() => {
+    if (!explicitSessionOpenRequest) return;
+    applyExplicitSessionOpenEffects({
+      id: explicitSessionOpenRequest.sessionId,
+      cwd: explicitSessionOpenRequest.cwd,
+    });
+    onExplicitSessionOpenApplied?.(explicitSessionOpenRequest.generation);
+  }, [
+    applyExplicitSessionOpenEffects,
+    explicitSessionOpenRequest,
+    onExplicitSessionOpenApplied,
+  ]);
   const handleSelectSessionFromList = useCallback((s: SessionInfo) => {
-    // Clear on every explicit row open, including a re-click that leaves the
-    // selectedSessionId prop unchanged.
-    setUnreadSessionIds((prev) => setSessionUnread(prev, s.id, false));
-    if (s.cwd) setSelectedCwd(s.cwd);
+    applyExplicitSessionOpenEffects(s);
     onSelectSession(s);
-  }, [onSelectSession]);
+  }, [applyExplicitSessionOpenEffects, onSelectSession]);
 
   const handleUnreadChange = useCallback((sessionId: string, isUnread: boolean) => {
     setUnreadSessionIds((prev) => setSessionUnread(prev, sessionId, isUnread));

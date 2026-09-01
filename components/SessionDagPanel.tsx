@@ -32,6 +32,7 @@ import { SessionDagPreview } from "./SessionDagPreview";
 interface Props {
   active: boolean;
   selectedSessionId: string | null;
+  onSelectSession: (session: SessionInfo) => void;
 }
 
 type DagMode = "preview" | "raw";
@@ -92,7 +93,7 @@ function operationButtonStyle(active = false): React.CSSProperties {
   };
 }
 
-export function SessionDagPanel({ active, selectedSessionId }: Props) {
+export function SessionDagPanel({ active, selectedSessionId, onSelectSession }: Props) {
   const { subscribeSessionsChanged } = useGlobalStatus();
   const [graphState, setGraphState] = useState<SessionDagState | null>(null);
   const graphStateRef = useRef<SessionDagState | null>(null);
@@ -312,6 +313,11 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
     }
   }, [graphState, sessions]);
   const sessionsById = useMemo(() => new Map(sessions.map((session) => [session.id, session])), [sessions]);
+  const availableSessionIds = useMemo(() => new Set(sessionsById.keys()), [sessionsById]);
+  const goToSession = useCallback((sessionId: string) => {
+    const session = sessionsById.get(sessionId);
+    if (session) onSelectSession(session);
+  }, [onSelectSession, sessionsById]);
   const projectPrefixes = useMemo(() => deriveShortestUniqueProjectPrefixes(sessions), [sessions]);
   const activeSessionIds = useMemo(() => graphState ? getActiveSessionIds(graphState) : [], [graphState]);
   const eligibleSessionIds = useMemo(() => graphState ? getEligibleSessionIds(graphState) : new Set<string>(), [graphState]);
@@ -604,6 +610,7 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
             <SessionDagPreview
               active={active && mode === "preview"}
               selectedSessionId={selectedSessionId}
+              availableSessionIds={availableSessionIds}
               compiled={compilation.compiled}
               compileError={compilation.error}
               revision={graphState.revision}
@@ -615,6 +622,7 @@ export function SessionDagPanel({ active, selectedSessionId }: Props) {
               onSwap={swapEdge}
               onInsert={insertEdge}
               onAddNodeEdge={addNodeEdge}
+              onGoToSession={goToSession}
             />
           </div>
           <div

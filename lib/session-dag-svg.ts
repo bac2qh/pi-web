@@ -66,29 +66,35 @@ export const SESSION_DAG_SHADOW_STYLES = `
   z-index: 1;
 }
 .session-dag-complete-control,
-.session-dag-node-add-control {
+.session-dag-node-add-control,
+.session-dag-go-to-control {
   color: var(--accent);
   cursor: pointer;
 }
 .session-dag-complete-control:focus,
-.session-dag-node-add-control:focus {
+.session-dag-node-add-control:focus,
+.session-dag-go-to-control:focus {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .session-dag-complete-control-background,
-.session-dag-node-add-control-background {
+.session-dag-node-add-control-background,
+.session-dag-go-to-control-background {
   fill: var(--bg);
   stroke: currentColor;
   stroke-width: 1.8;
 }
 .session-dag-complete-control-check,
-.session-dag-node-add-control-plus {
+.session-dag-node-add-control-plus,
+.session-dag-go-to-control-glyph {
   pointer-events: none;
 }
 .session-dag-complete-control:hover .session-dag-complete-control-background,
 .session-dag-complete-control:focus .session-dag-complete-control-background,
 .session-dag-node-add-control:hover .session-dag-node-add-control-background,
-.session-dag-node-add-control:focus .session-dag-node-add-control-background {
+.session-dag-node-add-control:focus .session-dag-node-add-control-background,
+.session-dag-go-to-control:hover .session-dag-go-to-control-background,
+.session-dag-go-to-control:focus .session-dag-go-to-control-background {
   fill: var(--bg-selected);
 }
 .session-dag-complete-control[aria-disabled="true"],
@@ -784,6 +790,54 @@ export function getSessionDagControlPosition(
   return { x, y };
 }
 
+export function getSessionDagGoToControlLocalPosition(
+  bounds: Pick<DOMRect, "x" | "y" | "width" | "height">,
+  direction: SessionDagDirection,
+): { x: number; y: number } {
+  if (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)
+    || bounds.width < 22 || bounds.height < 22) {
+    throw new SessionDagSvgError("controls", "An active node has invalid go-to geometry");
+  }
+  // Keep the control on the bottom-right quarter of the node boundary. Moving
+  // along the boundary, rather than into its label or the exact corner, leaves
+  // room around Mermaid's direction-dependent edge fan-out and self-edge loop.
+  const horizontalFraction = direction === "TD" ? 0.75 : 0.8;
+  return {
+    x: bounds.x + bounds.width * horizontalFraction,
+    y: bounds.y + bounds.height - 1,
+  };
+}
+
+export function validateSessionDagNodeControlGeometry(
+  bounds: Pick<DOMRect, "x" | "y" | "width" | "height">,
+  direction: SessionDagDirection,
+  eligible: boolean,
+  available: boolean,
+): void {
+  if (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)
+    || bounds.width < 22 || bounds.height < 22) {
+    throw new SessionDagSvgError("controls", "An active node has invalid control geometry");
+  }
+
+  const positions = [{ x: bounds.x + 11, y: bounds.y + 11 }];
+  if (eligible) {
+    positions.push({ x: bounds.x + bounds.width - 11, y: bounds.y + 11 });
+  }
+  if (available) {
+    positions.push(getSessionDagGoToControlLocalPosition(bounds, direction));
+  }
+  for (let index = 0; index < positions.length; index += 1) {
+    for (let other = index + 1; other < positions.length; other += 1) {
+      if (Math.hypot(
+        positions[index].x - positions[other].x,
+        positions[index].y - positions[other].y,
+      ) < 20) {
+        throw new SessionDagSvgError("controls", "Active node controls would overlap");
+      }
+    }
+  }
+}
+
 export function getSessionDagEdgeMidpoint(
   edgePath: SVGPathElement,
   graphSvg: SVGSVGElement,
@@ -864,6 +918,37 @@ export function createSessionDagNodeAddControl(
   plus.setAttribute("stroke-width", "2");
   plus.setAttribute("stroke-linecap", "round");
   control.appendChild(plus);
+
+  return control;
+}
+
+export function createSessionDagGoToControl(
+  ownerDocument: Document,
+  label: string,
+): SVGGElement {
+  const control = ownerDocument.createElementNS(SVG_NAMESPACE, "g");
+  control.setAttribute("class", "session-dag-go-to-control");
+  control.setAttribute("role", "button");
+  control.setAttribute("tabindex", "0");
+  control.setAttribute("aria-label", `Go to session ${label}`);
+  control.setAttribute("pointer-events", "all");
+
+  const circle = ownerDocument.createElementNS(SVG_NAMESPACE, "circle");
+  circle.setAttribute("r", "9");
+  circle.setAttribute("cx", "0");
+  circle.setAttribute("cy", "0");
+  circle.setAttribute("class", "session-dag-go-to-control-background");
+  control.appendChild(circle);
+
+  const glyph = ownerDocument.createElementNS(SVG_NAMESPACE, "path");
+  glyph.setAttribute("d", "M -5 0 H 2 M -1 -3 L 2 0 L -1 3 M 5 -5 V 5");
+  glyph.setAttribute("class", "session-dag-go-to-control-glyph");
+  glyph.setAttribute("fill", "none");
+  glyph.setAttribute("stroke", "currentColor");
+  glyph.setAttribute("stroke-width", "1.8");
+  glyph.setAttribute("stroke-linecap", "round");
+  glyph.setAttribute("stroke-linejoin", "round");
+  control.appendChild(glyph);
 
   return control;
 }

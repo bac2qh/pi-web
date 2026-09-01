@@ -5,7 +5,9 @@ import {
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import { closeSync, openSync, readSync } from "fs";
-import { normalize as normalizePath } from "path";
+import { readdir } from "fs/promises";
+import { join, normalize as normalizePath } from "path";
+import { StringDecoder } from "string_decoder";
 import type { AgentMessage, SessionEntry, SessionHeader, SessionInfo, SessionContext } from "./types";
 import type { SessionEntry as PiSessionEntry, SessionInfo as PiSessionInfo } from "@earendil-works/pi-coding-agent";
 import { normalizeToolCalls } from "./normalize";
@@ -48,6 +50,11 @@ async function loadAllSessions(): Promise<SessionInfo[]> {
 
 export interface CompleteSessionListing {
   sessions: SessionInfo[];
+  generation: number;
+}
+
+export interface CompleteSessionIdListing {
+  sessionIds: ReadonlySet<string>;
   generation: number;
 }
 
@@ -101,6 +108,62 @@ export async function listAllSessionsWithGeneration(maxAttempts = 4): Promise<Co
     const generation = getSessionListGeneration();
     const sessions = await listAllSessions();
     if (getSessionListGeneration() === generation) return { sessions, generation };
+  }
+  throw new Error("Session listing changed repeatedly while it was being read");
+}
+
+/**
+ * Discover exact session IDs without parsing transcript bodies or resolving
+ * project metadata. This mirrors SessionManager.listAll()'s standard
+ * non-recursive directory and symlink shape.
+ */
+export async function listSessionIdsFromRoot(sessionsDir: string): Promise<ReadonlySet<string>> {
+  const sessionIds = new Set<string>();
+  let entries;
+  try {
+    entries = await readdir(sessionsDir, { withFileTypes: true });
+  } catch {
+    return sessionIds;
+  }
+
+  const directories = entries
+    .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+    .map((entry) => join(sessionsDir, entry.name));
+  for (const directory of directories) {
+    let files: string[];
+    try {
+      files = (await readdir(directory))
+        .filter((fileName) => fileName.endsWith(".jsonl"))
+        .map((fileName) => join(directory, fileName));
+    } catch {
+      continue;
+    }
+    for (const filePath of files) {
+      try {
+        const header = readSessionHeader(filePath);
+        if (header && typeof header.id === "string") sessionIds.add(header.id);
+      } catch {
+        // Discovery is best-effort: one unreadable or raced-away file must not
+        // prevent other standard sessions from authorizing a DAG mutation.
+      }
+    }
+  }
+  return sessionIds;
+}
+
+/**
+ * Return a fresh exact-ID listing whose cache generation remained current for
+ * the complete bounded-header scan. Unlike the metadata listing, this path is
+ * deliberately uncached so every DAG authority attempt gets a fresh set.
+ */
+export async function listAllSessionIdsWithGeneration(
+  maxAttempts = 4,
+  sessionsDir = join(getAgentDir(), "sessions"),
+): Promise<CompleteSessionIdListing> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const generation = getSessionListGeneration();
+    const sessionIds = await listSessionIdsFromRoot(sessionsDir);
+    if (getSessionListGeneration() === generation) return { sessionIds, generation };
   }
   throw new Error("Session listing changed repeatedly while it was being read");
 }
@@ -178,34 +241,60 @@ export function invalidateSessionPathCache(sessionId: string): void {
   }
 }
 
+const SESSION_HEADER_READ_BUFFER_SIZE = 4 * 1024;
+const MAX_SESSION_HEADER_SCAN_BYTES = 1024 * 1024;
+
+function parseSessionHeaderCandidate(line: string): SessionHeader | null | undefined {
+  if (!line.trim()) return undefined;
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (!value || typeof value !== "object") return null;
+  const header = value as Partial<SessionHeader>;
+  return header.type === "session" && typeof header.id === "string"
+    ? header as SessionHeader
+    : null;
+}
+
 export function readSessionHeader(filePath: string): SessionHeader | null {
   const fd = openSync(filePath, "r");
   try {
-    const chunks: Buffer[] = [];
-    const maxHeaderBytes = 64 * 1024;
-    let position = 0;
-    let foundNewline = false;
+    const decoder = new StringDecoder("utf8");
+    const buffer = Buffer.allocUnsafe(SESSION_HEADER_READ_BUFFER_SIZE);
+    const lineChunks: string[] = [];
+    let scannedBytes = 0;
 
-    while (position < maxHeaderBytes && !foundNewline) {
-      const buffer = Buffer.allocUnsafe(Math.min(4096, maxHeaderBytes - position));
-      const bytesRead = readSync(fd, buffer, 0, buffer.length, position);
-      if (bytesRead === 0) break;
-      const data = buffer.subarray(0, bytesRead);
-      const newlineIndex = data.indexOf(0x0a);
-      chunks.push(newlineIndex === -1 ? data : data.subarray(0, newlineIndex));
-      position += bytesRead;
-      foundNewline = newlineIndex !== -1;
+    while (scannedBytes < MAX_SESSION_HEADER_SCAN_BYTES) {
+      const readLength = Math.min(buffer.length, MAX_SESSION_HEADER_SCAN_BYTES - scannedBytes);
+      const bytesRead = readSync(fd, buffer, 0, readLength, null);
+      if (bytesRead === 0) {
+        lineChunks.push(decoder.end());
+        return parseSessionHeaderCandidate(lineChunks.join("")) ?? null;
+      }
+      scannedBytes += bytesRead;
+      const chunk = decoder.write(buffer.subarray(0, bytesRead));
+      let lineStart = 0;
+      let newlineIndex = chunk.indexOf("\n", lineStart);
+      while (newlineIndex !== -1) {
+        lineChunks.push(chunk.slice(lineStart, newlineIndex));
+        const header = parseSessionHeaderCandidate(lineChunks.join(""));
+        if (header !== undefined) return header;
+        lineChunks.length = 0;
+        lineStart = newlineIndex + 1;
+        newlineIndex = chunk.indexOf("\n", lineStart);
+      }
+      lineChunks.push(chunk.slice(lineStart));
     }
 
-    if (!foundNewline && position >= maxHeaderBytes) return null;
-    const firstLine = Buffer.concat(chunks).toString("utf8").trimEnd();
-    if (!firstLine) return null;
-    try {
-      const header = JSON.parse(firstLine) as SessionHeader;
-      return header.type === "session" ? header : null;
-    } catch {
-      return null;
+    const probe = Buffer.allocUnsafe(1);
+    if (readSync(fd, probe, 0, probe.length, null) === 0) {
+      lineChunks.push(decoder.end());
+      return parseSessionHeaderCandidate(lineChunks.join("")) ?? null;
     }
+    return null;
   } finally {
     closeSync(fd);
   }

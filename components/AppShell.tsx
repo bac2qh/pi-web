@@ -4,7 +4,10 @@ import { scaledMenuFontSize } from "@/lib/display-preferences";
 import { useState, useCallback, useRef, useEffect, useLayoutEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
-import { SessionSidebar } from "./SessionSidebar";
+import {
+  SessionSidebar,
+  type SidebarExplicitSessionOpenRequest,
+} from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
 import { FileViewer } from "./FileViewer";
 import {
@@ -89,6 +92,11 @@ export function AppShell() {
   const isNarrowFileViewerViewport = useIsNarrowFileViewerViewport();
   const sessionViews = useSessionViewTransport();
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
+  const [
+    sidebarExplicitSessionOpenRequest,
+    setSidebarExplicitSessionOpenRequest,
+  ] = useState<SidebarExplicitSessionOpenRequest | null>(null);
+  const sidebarExplicitSessionOpenGenerationRef = useRef(0);
   const selectedSessionIdRef = useRef<string | null>(null);
   selectedSessionIdRef.current = selectedSession?.id ?? null;
   const [selectedSessionBinding, setSelectedSessionBinding] = useState<SessionViewBinding | null>(null);
@@ -492,6 +500,20 @@ export function AppShell() {
     }
   }, [router, isMobile, sessionViews]);
 
+  const handleDagSelectSession = useCallback((session: SessionInfo) => {
+    sidebarExplicitSessionOpenGenerationRef.current += 1;
+    setSidebarExplicitSessionOpenRequest({
+      generation: sidebarExplicitSessionOpenGenerationRef.current,
+      sessionId: session.id,
+      ...(session.cwd ? { cwd: session.cwd } : {}),
+    });
+    handleSelectSession(session);
+  }, [handleSelectSession]);
+
+  const handleSidebarExplicitSessionOpenApplied = useCallback((generation: number) => {
+    setSidebarExplicitSessionOpenRequest((current) => current?.generation === generation ? null : current);
+  }, []);
+
   const handleNewSession = useCallback((_sessionId: string, cwd: string) => {
     sessionViews.select(null);
     newScreenGenerationRef.current += 1;
@@ -732,6 +754,8 @@ export function AppShell() {
       <SessionSidebar
         selectedSessionId={selectedSession?.id ?? null}
         onSelectSession={handleSelectSession}
+        explicitSessionOpenRequest={sidebarExplicitSessionOpenRequest}
+        onExplicitSessionOpenApplied={handleSidebarExplicitSessionOpenApplied}
         onNewSession={handleNewSession}
         initialSessionId={initialSessionId}
         onInitialRestoreDone={handleInitialRestoreDone}
@@ -1569,6 +1593,7 @@ export function AppShell() {
               <SessionDagPanel
                 active={dagPanelActive}
                 selectedSessionId={selectedSession?.id ?? null}
+                onSelectSession={handleDagSelectSession}
               />
             )}
           </div>

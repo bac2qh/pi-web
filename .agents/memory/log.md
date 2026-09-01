@@ -83,3 +83,5 @@
 ## 2026-08-31
 
 - Updated session-dependency-graph memory after adding persistent trusted node quick-add controls with explicit Incoming/Outgoing `add_edge` authoring, one unified recoverable node/edge interaction lifecycle, and larger midpoint edge controls without changing graph authority or persistence.
+- Updated session-dependency-graph memory after replacing metadata-rich endpoint authorization with fresh bounded-header exact-ID scans and adding trusted available-node navigation through the existing application selection owner without DAG or right-panel side effects.
+- Hardened DAG navigation after independent review by failing closed on overlapping node-control geometry and retaining sidebar-owned unread/worktree effects for repeated explicit opens through a generation-safe handoff.
