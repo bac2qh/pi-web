@@ -85,7 +85,9 @@
 - Updated session-dependency-graph memory after adding persistent trusted node quick-add controls with explicit Incoming/Outgoing `add_edge` authoring, one unified recoverable node/edge interaction lifecycle, and larger midpoint edge controls without changing graph authority or persistence.
 - Updated session-dependency-graph memory after replacing metadata-rich endpoint authorization with fresh bounded-header exact-ID scans and adding trusted available-node navigation through the existing application selection owner without DAG or right-panel side effects.
 - Hardened DAG navigation after independent review by failing closed on overlapping node-control geometry and retaining sidebar-owned unread/worktree effects for repeated explicit opens through a generation-safe handoff.
+- Updated custom-server lifecycle memory after adding literal loopback defaults and opt-in same-port foreground Tailscale Serve ownership with bounded readiness, exact-child signal-and-await cleanup, imported fatal shutdown, and explicit no-global-state/hard-kill boundaries.
 
 ## 2026-09-01
 
 - Added sidebar-session-lineage memory after deriving the selected session's complete available native family, applying global hidden projection, sharing ordered connector rows, and separating Lineage reveal/scroll/collapse ownership from Project without new persisted state.
+- Updated custom-server lifecycle memory after extending Unix Serve ownership to a private launcher process group, bounding normal/forced cleanup by direct-child `close`, and changing unexpected ready-command exit to warning-only local fallback without automatic retry.
