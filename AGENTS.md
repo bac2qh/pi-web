@@ -3,12 +3,14 @@
 ## Quick Start
 
 ```bash
-npm run build:local-pi-fork    # retained main only; requires clean sibling ../pi at 734502cb8
-npm run install:local-pi-fork  # verifies on-disk identity/integrity, then npm ci --ignore-scripts
+mise install node@22.23.2
+npm ci --ignore-scripts --include=dev
 npm run dev   # port 30141
 ```
 
-The local fork helper requires Node `24.19.0`/npm `11.17.0` and the retained `pi-web`/`pi` sibling layout. Nested `.agents/worktrees/` checkouts must validate through a disposable sibling-layout copy; do not change the committed `file:../pi/...` dependency to fit a nested worktree.
+Ordinary development, production builds, and direct `bin/pi-web.js` runtime require exact Node `22.23.2`; npm lifecycle entrypoints require bundled npm `10.9.8`. The root `mise.toml` is repository-scoped. From another directory use `mise exec -C <pi-web-root> node@22.23.2 -- ...`.
+
+The local fork reconstruction helpers remain separate: `build:local-pi-fork` and `install:local-pi-fork` require Node `24.19.0`/npm `11.17.0`, retained main only, and the clean sibling `../pi` at `734502cb8`. They are exempt from the ordinary hooks. Nested `.agents/worktrees/` checkouts must validate through a disposable sibling-layout copy; do not change the committed `file:../pi/...` dependency to fit a nested worktree.
 
 Typecheck: `node_modules/.bin/tsc --noEmit`  
 Lint: `npm run lint`  

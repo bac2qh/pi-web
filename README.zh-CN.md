@@ -57,23 +57,50 @@ PI_WEB_NO_OPEN=1 pi-web         # 适用于后台服务或开机自启
 
 ## 开发
 
+### Pi Web 普通工具链
+
+普通开发、生产构建和直接生产启动必须使用精确的 Node `22.23.2`；npm 生命周期命令还必须使用该版本附带的 npm `10.9.8`。根目录的 `mise.toml` 只在本仓库内选择 Node。首次安装精确运行时后，即可正常使用仓库：
+
+```bash
+mise install node@22.23.2
+npm ci --ignore-scripts --include=dev
+npm run dev
+```
+
+从其他目录执行时，请使用与位置无关的显式形式：
+
+```bash
+mise exec -C <pi-web-root> node@22.23.2 -- npm run dev
+mise exec -C <pi-web-root> node@22.23.2 -- npm run build
+mise exec -C <pi-web-root> node@22.23.2 -- npm start
+mise exec -C <pi-web-root> node@22.23.2 -- node ./bin/pi-web.js --tailscale-serve
+```
+
+普通入口会在启动应用资源之前拒绝错误的 Node 或 npm；应用启动时不会自行下载或切换运行时。
+
 ### 本地 Pi Fork 前置条件
 
 此 checkout 有意使用由 `bac2qh/pi` 提交 `734502cb86eaf631e1ceeb403dbd717e3b78404f` 构建的本地、未跟踪 coding-agent tarball。它不会使用全局 Pi 安装，而且当前形态不可发布。
 
-请使用 Node `24.19.0` 和 npm `11.17.0`，并让保留的 main checkout 互为同级目录：
+Fork 重建使用一套独立且保持不变的工具链：构建和验证 helper 必须使用 Node `24.19.0` 与 npm `11.17.0`，不受普通 Node 22 生命周期钩子影响。请让保留的 main checkout 互为同级目录：
 
 ```text
 <repos>/pi-web/
 <repos>/pi/
 ```
 
-同级 `pi` checkout 必须保持干净，`origin` 必须指向 `bac2qh/pi`，并且 `HEAD` 必须是上面的精确提交。在保留的 `pi-web` main 中运行：
+同级 `pi` checkout 必须保持干净，`origin` 必须指向 `bac2qh/pi`，并且 `HEAD` 必须是上面的精确提交。在保留的 `pi-web` main 中，以重建工具链运行：
 
 ```bash
-npm run build:local-pi-fork
-npm run install:local-pi-fork
-npm run dev
+mise exec -C <pi-web-root> node@24.19.0 -- npm run build:local-pi-fork
+mise exec -C <pi-web-root> node@24.19.0 -- npm run install:local-pi-fork
+```
+
+随后切回普通 Node 22 工具链安装依赖并运行 Pi Web：
+
+```bash
+mise exec -C <pi-web-root> node@22.23.2 -- npm ci --ignore-scripts --include=dev
+mise exec -C <pi-web-root> node@22.23.2 -- npm run dev
 ```
 
 该 helper 会从精确提交创建两套全新构建，运行 Fork 的检查、测试、构建、local-release 流程和聚焦的 faux-provider 压缩回归；只有两个归档逐字节一致时，才会原子发布到：

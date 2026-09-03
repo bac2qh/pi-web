@@ -72,23 +72,50 @@ Serve mode requires loopback hostname `127.0.0.1` and rejects ports `0` and `443
 
 ## Development
 
+### Ordinary Pi Web toolchain
+
+Ordinary development, production builds, and direct production launch require exact Node `22.23.2`; npm lifecycle commands also require the bundled npm `10.9.8`. The root `mise.toml` selects Node only inside this repository. Install that exact runtime once, then use the repository normally:
+
+```bash
+mise install node@22.23.2
+npm ci --ignore-scripts --include=dev
+npm run dev
+```
+
+From another directory, use the explicit location-independent form:
+
+```bash
+mise exec -C <pi-web-root> node@22.23.2 -- npm run dev
+mise exec -C <pi-web-root> node@22.23.2 -- npm run build
+mise exec -C <pi-web-root> node@22.23.2 -- npm start
+mise exec -C <pi-web-root> node@22.23.2 -- node ./bin/pi-web.js --tailscale-serve
+```
+
+The ordinary entrypoints reject a different Node or npm before starting application resources. They never download or switch runtimes themselves.
+
 ### Local Pi fork prerequisite
 
 This checkout intentionally uses a local, untracked coding-agent tarball built from `bac2qh/pi` commit `734502cb86eaf631e1ceeb403dbd717e3b78404f`. It does not use the global Pi installation and is not publishable in this form.
 
-Use Node `24.19.0` and npm `11.17.0`, and keep the retained main checkouts as siblings:
+Fork reconstruction is a separate, intentionally unchanged toolchain: its build and verification helpers require Node `24.19.0` and npm `11.17.0`. They are not covered by the ordinary Node 22 lifecycle hooks. Keep the retained main checkouts as siblings:
 
 ```text
 <repos>/pi-web/
 <repos>/pi/
 ```
 
-The sibling `pi` checkout must be clean, its `origin` must identify `bac2qh/pi`, and `HEAD` must be the exact commit above. From retained `pi-web` main, run:
+The sibling `pi` checkout must be clean, its `origin` must identify `bac2qh/pi`, and `HEAD` must be the exact commit above. From retained `pi-web` main, run the reconstruction helpers under their exact toolchain:
 
 ```bash
-npm run build:local-pi-fork
-npm run install:local-pi-fork
-npm run dev
+mise exec -C <pi-web-root> node@24.19.0 -- npm run build:local-pi-fork
+mise exec -C <pi-web-root> node@24.19.0 -- npm run install:local-pi-fork
+```
+
+Then return to the ordinary Node 22 toolchain for dependency installation and Pi Web itself:
+
+```bash
+mise exec -C <pi-web-root> node@22.23.2 -- npm ci --ignore-scripts --include=dev
+mise exec -C <pi-web-root> node@22.23.2 -- npm run dev
 ```
 
 The helper creates two fresh exact-commit builds, runs the fork checks, tests, build, local-release path, and focused faux-provider compaction regression, then requires byte-identical archives before atomically publishing:

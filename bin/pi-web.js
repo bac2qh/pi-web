@@ -9,6 +9,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { parseLaunchOptions } = require("./pi-web-options");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { assertNodeToolchain } = require("./pi-web-toolchain");
 
 const SIGNAL_EXIT_CODES = Object.freeze({
   SIGINT: 130,
@@ -103,6 +105,7 @@ async function closeOwnedResources(stages, aggregateMessage) {
 }
 
 async function runPiWebCli(options = {}) {
+  assertNodeToolchain(process.version);
   const processRef = options.process ?? process;
   const logger = options.logger ?? console;
   const args = options.args ?? processRef.argv.slice(2);
@@ -331,10 +334,20 @@ async function runTerminalEntry(options = {}) {
 }
 
 if (require.main === module) {
-  void runTerminalEntry().catch((error) => {
-    console.error("[pi-web] terminal_failed", { errorName: publicErrorClass(error) });
+  try {
+    assertNodeToolchain(process.version);
+    void runTerminalEntry().catch((error) => {
+      console.error("[pi-web] terminal_failed", { errorName: publicErrorClass(error) });
+      process.exitCode = 1;
+    });
+  } catch (error) {
+    if (error?.code === "pi_web_toolchain_mismatch") {
+      process.stderr.write(`${error.message}\n`);
+    } else {
+      process.stderr.write("[pi-web] Toolchain preflight failed.\n");
+    }
     process.exitCode = 1;
-  });
+  }
 }
 
 module.exports = {
