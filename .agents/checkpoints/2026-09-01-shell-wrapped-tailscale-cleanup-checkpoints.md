@@ -41,3 +41,15 @@ Plan: `.agents/plans/2026-09-01-shell-wrapped-tailscale-cleanup.md`
 **Departures from approved obligations:** None. The live smoke ran on host Node `24.20.0` rather than the repository's pinned local-fork build toolchain `24.19.0`; no dependency build/install was performed, and all required runtime/static checks passed against the retained validated dependencies and production artifact. Windows behavior remains simulated, as permitted by the approved strategy.
 
 **Implementation commit:** Pending.
+
+## Implementation Summary
+
+**Plan section:** Final completion of the Objective, Design / Implementation Strategy sections 1–6, Test Strategy, and Validation Contract VC-001 through VC-006.
+
+**Work and outcome:** The approved cleanup follow-up is complete. Unix-like launch owns the ordinary `tailscale` command and inherited shell descendants in one private attached process group; Windows retains direct-child behavior. One memoized close operation uses the requested normal signal, two fixed ten-second waits, one still-safe force signal, and direct-child `close` confirmation without stale-identifier signaling. Startup cleanup is bounded, unexpected ready-command exit warns once while local Pi Web remains available, imported callers receive lifecycle/close results without forced process exit, and terminal cleanup failure exits `1`. Documentation and durable memory match the shipped behavior.
+
+**Validation / evidence:** Final focused tests pass 35/35; the exact four-file disposable-layout suite passes 40/40; TypeScript, full lint, syntax checks, and whitespace checks pass. The isolated live smoke passed local HTTP, private HTTPS/WSS, programmatic close, terminal `SIGINT`/`SIGTERM`, safe unexpected-exit local fallback and recovery, route removal, and unchanged WhisCode `30142`. Independent reviewer workflow `2df104f5-ed19-4257-8421-89c795c6cc8f` / child `26d69f5e` returned PASS with no required finding. No Next build, installed-launcher/dotfiles edit, live force-kill, shared-config inspection by Pi Web, or private-data logging occurred.
+
+**Departures from approved obligations:** None. Accepted residual limitations are Windows simulation rather than a Windows host run, hard-kill/power-loss cleanup impossibility, and unsupported descendants that deliberately escape the inherited process group. Validation used host Node `24.20.0` without rebuilding dependencies; the pinned `24.19.0` requirement applies to the uninvoked local-fork build/install workflow.
+
+**Implementation commit:** `e4e7e5b` (`feat: add native foreground Tailscale Serve`).

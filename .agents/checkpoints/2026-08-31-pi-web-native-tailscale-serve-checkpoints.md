@@ -81,3 +81,15 @@ Plan: `.agents/plans/2026-08-31-pi-web-native-tailscale-serve.md`
 **Departures from approved obligations:** VC-003 and VC-006 remain blocked on the installed executable boundary. Changing Pi Web to parse/resolve wrapper scripts, spawn a platform-specific underlying binary, signal a process group, or manage descendants would violate the approved exact-`tailscale` child and no-process-discovery/group-supervision strategy. Signal-mode live smoke and final review/validation/commit/closeout are paused pending user direction; no such scope expansion has been made.
 
 **Implementation commit:** Pending.
+
+## Implementation Summary
+
+**Plan section:** Final completion of the native Serve Objective, Required Behavior, Design / Implementation Strategy sections 1–5, Focused Test Strategy, and Validation Contract VC-001 through VC-006, as modified only by the separately approved cleanup follow-up `.agents/plans/2026-09-01-shell-wrapped-tailscale-cleanup.md`.
+
+**Work and outcome:** Native launch now defaults to literal loopback and supports explicit same-port foreground Tailscale HTTPS/WSS. Backend-first startup, bounded marker readiness, private-output suppression, startup rollback, idempotent backend/Serve cleanup, terminal signal ownership, imported non-exit behavior, focused tests, documentation, and durable memory are complete. The cleanup follow-up resolved the installed non-`exec` shell boundary by placing the direct launcher and descendants in a private Unix process group with bounded `close`-confirmed cleanup while preserving Windows direct-child behavior.
+
+**Validation / evidence:** Final focused tests pass 35/35; the exact four-file suite passes 40/40 in the required disposable sibling-layout copy; TypeScript, full lint, syntax, and whitespace checks pass. The isolated live smoke passed loopback HTTP, same-port private HTTPS/WSS, route removal after programmatic close/`SIGINT`/`SIGTERM`, safe unexpected-exit local fallback and recovery, and unchanged WhisCode `30142`. Final independent reviewer `26d69f5e` returned PASS with no required finding. No Next build, dotfiles/installed-launcher edit, shared-state mutation by Pi Web, live force-kill, or private-data logging occurred.
+
+**Departures from approved obligations:** The original exact-child/no-process-group strategy and fatal shutdown after unexpected ready-child exit were explicitly superseded by the separately approved 2026-09-01 follow-up: Unix cleanup now targets only the launch-owned private process group, and unexpected exit warns while loopback service remains available without retry. All obligations retained by that follow-up passed; none are incomplete, blocked, or waived.
+
+**Implementation commit:** `e4e7e5b` (`feat: add native foreground Tailscale Serve`).
