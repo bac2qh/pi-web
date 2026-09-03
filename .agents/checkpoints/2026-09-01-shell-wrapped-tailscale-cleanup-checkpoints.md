@@ -53,3 +53,13 @@ Plan: `.agents/plans/2026-09-01-shell-wrapped-tailscale-cleanup.md`
 **Departures from approved obligations:** None. Accepted residual limitations are Windows simulation rather than a Windows host run, hard-kill/power-loss cleanup impossibility, and unsupported descendants that deliberately escape the inherited process group. Validation used host Node `24.20.0` without rebuilding dependencies; the pinned `24.19.0` requirement applies to the uninvoked local-fork build/install workflow.
 
 **Implementation commit:** `e4e7e5b` (`feat: add native foreground Tailscale Serve`).
+
+## Closeout Recovery
+
+**Completed transitions:** Captured task branch `2026-08-31-pi-web-native-tailscale-serve` at `098075a077c60624d0372a2489f392c5debbc848` and local `main` at `2b86ff2030e0934a0b4542ee2967c31c450ee8e8`; verified main had no staged changes or active Git operation and that its unrelated local-only plan files did not overlap incoming task paths; attempted the required normal `--no-ff` merge under `.agents/scripts/main-branch-lock.sh`; stopped on the conflict; verified `ORIG_HEAD` matched the captured main head; aborted under the mutex; and reverified exact main head plus its pre-attempt dirty-path status.
+
+**Blocker:** The guarded merge produced one content conflict in `.agents/memory/log.md`, which both main and the task branch appended after their shared base. No conflict side was selected and no task commit reached local `main`.
+
+**Preserved state:** Local `main` is restored at `2b86ff2030e0934a0b4542ee2967c31c450ee8e8` with its original unstaged `.agents/plans/2026-07-21-clone-session.md` change and five original untracked plan files intact. The complete validated task remains committed on the registered task branch/worktree at `098075a077c60624d0372a2489f392c5debbc848`; its `.pi-subagents/` evidence remains present because integration did not succeed.
+
+**Safe retry point:** Begin from a main-cwd coordinator, recapture both heads and statuses, obtain explicit direction for the `.agents/memory/log.md` reconciliation rather than choosing a side implicitly, then repeat guarded normal-merge preflight under the local-main mutex. Do not remove the retained task worktree, branch, or `.pi-subagents/` state before successful integration.
