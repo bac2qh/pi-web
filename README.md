@@ -23,19 +23,30 @@ npm install -g @agegr/pi-web
 pi-web
 ```
 
-Then open [http://localhost:30141](http://localhost:30141). The CLI will try to open the browser automatically after the server is ready.
+By default Pi Web listens only on [http://127.0.0.1:30141](http://127.0.0.1:30141). The CLI tries to open that local URL after the server is ready.
+
+To expose the same instance privately through an installed, logged-in Tailscale client, opt in explicitly:
+
+```bash
+pi-web --tailscale-serve
+```
+
+This starts the ordinary foreground `tailscale serve` command. On macOS and other Unix-like systems, Pi Web places the command and anything its launcher starts in one private process group; on Windows it retains direct-child signaling. Tailnet HTTPS and WSS share port `30141` and forward to the local `127.0.0.1:30141` backend. Pi Web keeps the command and its output streams attached and opens only the local browser URL.
 
 **Options:**
 
 ```bash
-pi-web --port 8080              # custom port
-pi-web --hostname 127.0.0.1     # local access only
-pi-web -p 8080 -H 127.0.0.1     # combine options
-pi-web --no-open                # do not open the browser automatically
+pi-web --port 8080                  # custom local port
+pi-web --tailscale-serve -p 31000   # same custom backend/HTTPS/WSS port
+pi-web --hostname 127.0.0.1         # explicit non-Serve hostname compatibility
+pi-web -p 8080 -H 127.0.0.1         # combine non-Serve options
+pi-web --no-open                    # do not open the browser automatically
 
-PORT=8080 pi-web                # environment variable is also supported
-PI_WEB_NO_OPEN=1 pi-web         # useful when running as a background service
+PORT=8080 pi-web                    # environment variable is also supported
+PI_WEB_NO_OPEN=1 pi-web             # useful when running as a background service
 ```
+
+Serve mode requires loopback hostname `127.0.0.1` and rejects ports `0` and `443`. Startup fails safely if Tailscale is unavailable, the selected Serve port is occupied, the launched command exits early, or readiness times out. Normal close, `SIGINT`, and `SIGTERM` signal only the process group or direct child Pi Web started. Cleanup waits 10 seconds, force-stops that still-owned target if needed, and waits up to 10 more seconds; an unconfirmed close rejects for embedded callers and makes the terminal CLI exit `1`. If the launched command exits unexpectedly after readiness, Pi Web warns once and keeps serving locally without retrying Tailscale. Hard-killing Pi Web or losing power cannot run cleanup. A later launch may report the port occupied; Pi Web never inspects or deletes unrelated Tailscale Serve configuration.
 
 ## Features
 
@@ -90,7 +101,7 @@ That artifact is ignored by the fork and must be rebuilt locally; it is never in
 
 The committed `file:../pi/...` path is relative to retained `pi-web` main. A nested managed checkout under `.agents/worktrees/` does not have that sibling layout; validate it in a disposable `pi-web`/`pi` sibling copy rather than creating a fake worktree or changing the manifest path.
 
-The local dev server runs at [http://localhost:30141](http://localhost:30141).
+The local dev server runs at [http://127.0.0.1:30141](http://127.0.0.1:30141).
 
 Common checks:
 
@@ -143,5 +154,6 @@ hooks/
   useDragDrop.ts      # image drag/drop
   useTheme.ts         # theme switching
 bin/
-  pi-web.js           # npm CLI entrypoint
+  pi-web.js                    # npm CLI entrypoint and lifecycle composition
+  pi-web-tailscale-serve.js    # foreground Tailscale Serve process-group owner
 ```

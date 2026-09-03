@@ -26,3 +26,16 @@
 ## 2026-08-18
 
 - The fixed semantic wrapper idle window is now 12 hours, superseding the earlier 30-minute default. Existing semantic touches, passive-activity exclusions, active-work deferral, and authoritative explicit/server shutdown remain unchanged; this longer window reduces but does not eliminate interruption risk for async subagent work.
+
+## 2026-08-31
+
+- Native launch now defaults to literal `127.0.0.1:30141` without consulting generic `HOSTNAME`. Ordinary Pi Web remains local-only; explicit non-Serve `--hostname` compatibility remains while the external wrapper is active.
+- Opt-in `--tailscale-serve` starts the loopback backend first, then one directly spawned attached foreground `tailscale serve` child whose selected HTTPS port equals the backend port. HTTPS and WebSocket upgrades share that listener. Serve rejects port `0`, port `443`, and non-loopback hostname overrides before resources start.
+- The launcher recognizes only the bounded post-configuration marker, discards all child stdout/stderr, and owns exact-child cleanup. Programmatic close uses `SIGINT`; terminal `SIGINT`/`SIGTERM` is preserved. Startup failure rolls back all started owners, and unexpected ready-child exit closes the runtime; only the executed terminal entry exits nonzero, while imported callers receive a non-rejecting `failure` lifecycle promise.
+- Pi Web performs no Tailscale status/config inspection, broad cleanup, recovery, or unrelated-owner signaling. `SIGKILL`, power loss, and a surviving orphan cannot run cleanup; a later collision fails safely and requires external operator action rather than inferred ownership.
+
+## 2026-09-01
+
+- Unix-like Tailscale launch now uses Node's `detached` spawn mode solely to put the directly invoked `tailscale` launcher and its inherited descendants in one private process group. The command remains foreground and attached; Windows preserves direct-child signaling, and no path parses the launcher or discovers processes.
+- Intentional cleanup sends one normal signal to the still-owned group or child, waits ten seconds for the direct child's `close`, optionally sends one `SIGKILL` to that same still-owned target with one warning, and waits ten more seconds. The direct child's `exit` first clears signaling ownership; only `close` confirms cleanup. An unconfirmed result rejects an embedded close and makes the terminal launcher exit `1` after other owned resources settle.
+- A launched Tailscale command that exits after readiness now produces one private-access warning while the loopback Pi Web backend remains available. Pi Web does not restart Tailscale; the existing non-rejecting `failure` promise reports the lifecycle result without exiting an embedding process.

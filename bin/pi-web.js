@@ -51,6 +51,57 @@ function openBrowser(url, options = {}) {
   return opener;
 }
 
+function codedError(code, name = "Error") {
+  const error = new Error(code);
+  error.code = code;
+  error.name = name;
+  return error;
+}
+
+function childCleanupSignal(signal) {
+  return signal === "SIGTERM" ? "SIGTERM" : "SIGINT";
+}
+
+function isStartupAbort(error) {
+  if (error?.code === "pi_web_startup_aborted" || error?.code === "tailscale_serve_startup_aborted") {
+    return true;
+  }
+  return error instanceof AggregateError && error.errors.some((nested) => isStartupAbort(nested));
+}
+
+function hasErrorCode(error, code, seen = new Set()) {
+  if (!error || (typeof error !== "object" && typeof error !== "function") || seen.has(error)) {
+    return false;
+  }
+  seen.add(error);
+  try {
+    if (error.code === code) return true;
+    return error instanceof AggregateError &&
+      error.errors.some((nested) => hasErrorCode(nested, code, seen));
+  } catch {
+    return false;
+  }
+}
+
+function reportCloseFailure(logger, error) {
+  if (hasErrorCode(error, "tailscale_serve_cleanup_unconfirmed")) {
+    logger.error("[pi-web] Tailscale cleanup could not be confirmed.");
+    return;
+  }
+  logger.error("[pi-web] close_failed", { errorName: publicErrorClass(error) });
+}
+
+async function closeOwnedResources(stages, aggregateMessage) {
+  const pending = stages.map((stage) => {
+    try { return Promise.resolve(stage()); }
+    catch (error) { return Promise.reject(error); }
+  });
+  const results = await Promise.allSettled(pending);
+  const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, aggregateMessage);
+}
+
 async function runPiWebCli(options = {}) {
   const processRef = options.process ?? process;
   const logger = options.logger ?? console;
@@ -58,6 +109,7 @@ async function runPiWebCli(options = {}) {
   const env = options.env ?? processRef.env;
   const launchOptions = parseLaunchOptions(args, env);
   const mode = launchOptions.dev ? "development" : "production";
+  const startupSignal = options.startupSignal;
 
   // The server module lazy-loads Next, so set the selected mode first.
   processRef.env.NODE_ENV = mode;
@@ -83,6 +135,76 @@ async function runPiWebCli(options = {}) {
     lifecycleOwner: options.lifecycleOwner ?? "programmatic",
   });
 
+  let serveOwner = null;
+  try {
+    if (startupSignal?.aborted) throw codedError("pi_web_startup_aborted", "AbortError");
+    if (launchOptions.tailscaleServe) {
+      const startTailscaleServe = options.startTailscaleServe ?? (() => {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        return require("./pi-web-tailscale-serve").startTailscaleServe;
+      })();
+      serveOwner = await startTailscaleServe({
+        port: startedServer.address.port,
+        signal: startupSignal,
+        spawn: options.tailscaleSpawn,
+        platform: options.platform,
+        processKill: options.tailscaleProcessKill,
+        warn: (message) => logger.warn(message),
+      });
+    }
+    if (startupSignal?.aborted) throw codedError("pi_web_startup_aborted", "AbortError");
+  } catch (error) {
+    let rollbackError = null;
+    try {
+      await closeOwnedResources([
+        ...(serveOwner ? [() => serveOwner.close(childCleanupSignal(startupSignal?.reason))] : []),
+        () => startedServer.close(),
+      ], "pi_web_startup_rollback_failed");
+    } catch (caught) {
+      rollbackError = caught;
+    }
+
+    if (isStartupAbort(error)) {
+      if (rollbackError || error?.code === "tailscale_serve_startup_cleanup_failed") {
+        const aggregate = new AggregateError(
+          [error, ...(rollbackError ? [rollbackError] : [])],
+          "pi_web_startup_abort_cleanup_failed",
+        );
+        aggregate.code = "pi_web_startup_abort_cleanup_failed";
+        throw aggregate;
+      }
+      throw codedError("pi_web_startup_aborted", "AbortError");
+    }
+    if (rollbackError) {
+      const aggregate = new AggregateError([error, rollbackError], "pi_web_startup_rollback_failed");
+      aggregate.code = "pi_web_startup_rollback_failed";
+      throw aggregate;
+    }
+    throw error;
+  }
+
+  let closePromise = null;
+  const close = (signal = "SIGINT") => {
+    if (closePromise) return closePromise;
+    closePromise = closeOwnedResources([
+      () => startedServer.close(),
+      ...(serveOwner ? [() => serveOwner.close(childCleanupSignal(signal))] : []),
+    ], "pi_web_runtime_close_failed");
+    return closePromise;
+  };
+
+  let failure = null;
+  if (serveOwner) {
+    failure = serveOwner.unexpectedExit.then(() => {
+      try {
+        logger.warn("[pi-web] Tailscale command exited; private access may be unavailable.");
+      } catch {
+        // Diagnostics are isolated from the still-running local backend.
+      }
+      return codedError("tailscale_serve_child_exited");
+    });
+  }
+
   const url = browserUrl(launchOptions.hostname, startedServer.address.port);
   logger.log(`[pi-web] Ready on ${url}`);
   if (launchOptions.openBrowser) {
@@ -93,16 +215,10 @@ async function runPiWebCli(options = {}) {
     });
   }
 
-  let closePromise = null;
-  const close = () => {
-    if (closePromise) return closePromise;
-    closePromise = Promise.resolve().then(() => startedServer.close());
-    return closePromise;
-  };
-
   return {
     ...startedServer,
     close,
+    failure,
   };
 }
 
@@ -110,7 +226,8 @@ async function runTerminalEntry(options = {}) {
   const processRef = options.process ?? process;
   const logger = options.logger ?? console;
   const terminate = options.terminate ?? ((exitCode) => processRef.exit(exitCode));
-  let firstSignal = null;
+  const startupController = new AbortController();
+  let shutdownKind = null;
   let shutdownPromise = null;
   let runningPromise;
 
@@ -120,13 +237,14 @@ async function runTerminalEntry(options = {}) {
   };
 
   const beginSignalShutdown = (signal) => {
-    if (firstSignal) return shutdownPromise;
-    firstSignal = signal;
+    if (shutdownKind) return shutdownPromise;
+    shutdownKind = "signal";
     const signalExitCode = SIGNAL_EXIT_CODES[signal];
     logger.log("[pi-web] terminal_shutdown_started", {
       signal,
       exitCode: signalExitCode,
     });
+    startupController.abort(signal);
 
     shutdownPromise = (async () => {
       let running;
@@ -134,16 +252,27 @@ async function runTerminalEntry(options = {}) {
         running = await runningPromise;
       } catch (error) {
         removeSignalHandlers();
-        logger.error("[pi-web] startup_failed", { errorName: publicErrorClass(error) });
-        terminate(1);
+        if (error?.code === "pi_web_startup_aborted") {
+          logger.log("[pi-web] terminal_shutdown_complete", {
+            signal,
+            exitCode: signalExitCode,
+          });
+          terminate(signalExitCode);
+        } else if (error?.code === "pi_web_startup_abort_cleanup_failed") {
+          reportCloseFailure(logger, error);
+          terminate(1);
+        } else {
+          logger.error("[pi-web] startup_failed", { errorName: publicErrorClass(error) });
+          terminate(1);
+        }
         return;
       }
 
       try {
-        await running.close();
+        await running.close(signal);
       } catch (error) {
         removeSignalHandlers();
-        logger.error("[pi-web] close_failed", { errorName: publicErrorClass(error) });
+        reportCloseFailure(logger, error);
         terminate(1);
         return;
       }
@@ -177,6 +306,7 @@ async function runTerminalEntry(options = {}) {
     process: processRef,
     logger,
     lifecycleOwner: "terminal",
+    startupSignal: startupController.signal,
   });
 
   try {

@@ -8,7 +8,7 @@
 - [Hosted implementation sessions](hosted-implementation-sessions.md) — same-process Start/Orchestrate ownership transfer, capability/fallback boundary, cleanup, discovery, and source isolation.
 - [Running session status projection](running-session-status.md) — stable fanout publication, receipt-aware finality, delayed release, and same-ID publisher authority ordering.
 - [Dependency security and local production runtime](dependency-security.md) — durable npm exceptions, override boundaries, and rebuild requirements.
-- [Custom server and process-scoped development](custom-server-lifecycle.md) — one-port server/gateway security, owned cleanup, terminal signal ownership, and strict production reuse.
+- [Custom server and process-scoped development](custom-server-lifecycle.md) — one-port server/gateway security, loopback and opt-in foreground Tailscale Serve ownership, terminal signal boundaries, owned cleanup, and strict production reuse.
 - [Session removal policy](session-removal.md) — permanent web deletion removal, reversible Hide/Restore boundary, stale-context rationale, and explicit teardown non-goals.
 - [Session dependency graph](session-dependency-graph.md) — machine-wide exact-ID dependencies, header-only mutation authorization, reversible completion history, strict persistence, trusted Preview authoring/navigation controls, permanent DAG-tab ownership, and local selected-session marking.
 - [Sidebar unread state](sidebar-unread.md) — one browser-local manual/automatic dot, explicit-open and running transitions, duplicate presentation synchronization, and strict shared-state separation.
